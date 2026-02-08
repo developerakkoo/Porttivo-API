@@ -109,7 +109,7 @@ const startServer = async () => {
       const localIP = getLocalIPAddress();
       console.log(`🚀 Server is running on port ${port}`);
       console.log(`📡 API endpoints available at:`);
-      console.log(`   - Local:   http://localhost:${port}/api`);
+      console.log(`   - Local:   http://localhost:${port}/health`);
       console.log(`   - Network: http://${localIP}:${port}/api`);
       console.log(`🔌 Socket.IO server initialized`);
       console.log(`\n💡 To access from your device, use: http://${localIP}:${port}/api`);
