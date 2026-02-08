@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trip Tracking - Porttivo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 20px;
+        }
+        
+        .status-planned {
+            background: #e3e3e3;
+            color: #666;
+        }
+        
+        .status-active {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+        
+        .status-completed {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+        
+        .status-pod_pending {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+        
+        .status-cancelled {
+            background: #ffebee;
+            color: #d32f2f;
+        }
+        
+        .section {
+            margin-bottom: 30px;
+        }
+        
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+        }
+        
+        .info-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        
+        .info-icon {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+        
+        .info-content {
+            flex: 1;
+        }
+        
+        .info-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        
+        .info-value {
+            font-size: 16px;
+            color: #333;
+            font-weight: 500;
+        }
+        
+        .location-card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+        
+        .location-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+            font-weight: 600;
+            color: #667eea;
+        }
+        
+        .location-address {
+            color: #555;
+            line-height: 1.6;
+        }
+        
+        .arrow {
+            text-align: center;
+            color: #667eea;
+            font-size: 24px;
+            margin: 8px 0;
+        }
+        
+        .trip-id {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        
+        .trip-id-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        
+        .trip-id-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #667eea;
+            word-break: break-all;
+        }
+        
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+        }
+        
+        .error-container {
+            text-align: center;
+            padding: 60px 30px;
+        }
+        
+        .error-icon {
+            font-size: 64px;
+            color: #d32f2f;
+            margin-bottom: 20px;
+        }
+        
+        .error-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 12px;
+        }
+        
+        .error-message {
+            color: #666;
+            font-size: 16px;
+        }
+        
+        @media (max-width: 600px) {
+            .header h1 {
+                font-size: 24px;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+            
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    {{#if error}}
+    <div class="container">
+        <div class="error-container">
+            <div class="error-icon">⚠️</div>
+            <div class="error-title">{{error.title}}</div>
+            <div class="error-message">{{error.message}}</div>
+        </div>
+    </div>
+    {{else}}
+    <div class="container">
+        <div class="header">
+            <h1>🚛 Trip Tracking</h1>
+            <p>Real-time trip information</p>
+        </div>
+        
+        <div class="content">
+            {{#if trip.containerNumber}}
+            <div class="trip-id">
+                <div class="trip-id-label">Container Number</div>
+                <div class="trip-id-value">{{trip.containerNumber}}</div>
+            </div>
+            {{/if}}
+            
+            <div class="status-badge status-{{trip.status}}">
+                {{trip.statusLabel}}
+            </div>
+            
+            <div class="section">
+                <div class="section-title">Trip Information</div>
+                <div class="info-grid">
+                    {{#if trip.tripId}}
+                    <div class="info-item">
+                        <div class="info-icon">🆔</div>
+                        <div class="info-content">
+                            <div class="info-label">Trip ID</div>
+                            <div class="info-value">{{trip.tripId}}</div>
+                        </div>
+                    </div>
+                    {{/if}}
+                    
+                    {{#if trip.reference}}
+                    <div class="info-item">
+                        <div class="info-icon">🏷️</div>
+                        <div class="info-content">
+                            <div class="info-label">Reference</div>
+                            <div class="info-value">{{trip.reference}}</div>
+                        </div>
+                    </div>
+                    {{/if}}
+                    
+                    <div class="info-item">
+                        <div class="info-icon">📦</div>
+                        <div class="info-content">
+                            <div class="info-label">Trip Type</div>
+                            <div class="info-value">{{trip.tripType}}</div>
+                        </div>
+                    </div>
+                    
+                    {{#if trip.createdAt}}
+                    <div class="info-item">
+                        <div class="info-icon">📅</div>
+                        <div class="info-content">
+                            <div class="info-label">Created</div>
+                            <div class="info-value">{{trip.createdAt}}</div>
+                        </div>
+                    </div>
+                    {{/if}}
+                </div>
+            </div>
+            
+            {{#if trip.vehicleId}}
+            <div class="section">
+                <div class="section-title">Vehicle & Driver</div>
+                <div class="info-grid">
+                    {{#if trip.vehicleId.vehicleNumber}}
+                    <div class="info-item">
+                        <div class="info-icon">🚚</div>
+                        <div class="info-content">
+                            <div class="info-label">Vehicle</div>
+                            <div class="info-value">{{trip.vehicleId.vehicleNumber}}{{#if trip.vehicleId.trailerType}} ({{trip.vehicleId.trailerType}}){{/if}}</div>
+                        </div>
+                    </div>
+                    {{/if}}
+                    
+                    {{#if trip.driverId}}
+                    <div class="info-item">
+                        <div class="info-icon">👤</div>
+                        <div class="info-content">
+                            <div class="info-label">Driver</div>
+                            <div class="info-value">{{#if trip.driverId.name}}{{trip.driverId.name}}{{#if trip.driverId.mobile}} - {{trip.driverId.mobile}}{{/if}}{{else}}{{trip.driverId.mobile}}{{/if}}</div>
+                        </div>
+                    </div>
+                    {{/if}}
+                </div>
+            </div>
+            {{/if}}
+            
+            {{#if trip.pickupLocation}}
+            <div class="section">
+                <div class="section-title">Locations</div>
+                {{#if trip.pickupLocation}}
+                <div class="location-card">
+                    <div class="location-header">
+                        📍 Pickup Location
+                    </div>
+                    <div class="location-address">
+                        {{trip.pickupLocation.address}}
+                        {{#if trip.pickupLocation.city}}{{trip.pickupLocation.city}}{{/if}}{{#if trip.pickupLocation.state}}, {{trip.pickupLocation.state}}{{/if}}
+                    </div>
+                </div>
+                {{/if}}
+                
+                {{#if trip.dropLocation}}
+                <div class="arrow">↓</div>
+                
+                <div class="location-card">
+                    <div class="location-header">
+                        📍 Drop Location
+                    </div>
+                    <div class="location-address">
+                        {{trip.dropLocation.address}}
+                        {{#if trip.dropLocation.city}}{{trip.dropLocation.city}}{{/if}}{{#if trip.dropLocation.state}}, {{trip.dropLocation.state}}{{/if}}
+                    </div>
+                </div>
+                {{/if}}
+            </div>
+            {{/if}}
+            
+            {{#if trip.transporterId}}
+            <div class="section">
+                <div class="section-title">Transporter</div>
+                <div class="info-item">
+                    <div class="info-icon">🏢</div>
+                    <div class="info-content">
+                        <div class="info-label">Company</div>
+                        <div class="info-value">{{#if trip.transporterId.company}}{{trip.transporterId.company}}{{else}}{{trip.transporterId.name}}{{/if}}</div>
+                    </div>
+                </div>
+            </div>
+            {{/if}}
+        </div>
+        
+        <div class="footer">
+            Powered by Porttivo • Trip Tracking System
+        </div>
+    </div>
+    {{/if}}
+</body>
+</html>
