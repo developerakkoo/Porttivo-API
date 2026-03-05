@@ -1,7 +1,11 @@
-const Trip = require('../models/Trip');
-const { getBackendMeaning, getDriverLabel, getMilestoneTypeByNumber } = require('../utils/milestoneMapping');
-const { getIO } = require('../services/socket.service');
-const path = require('path');
+const Trip = require('../models/Trip')
+const {
+  getBackendMeaning,
+  getDriverLabel,
+  getMilestoneTypeByNumber
+} = require('../utils/milestoneMapping')
+const { getIO } = require('../services/socket.service')
+const path = require('path')
 
 /**
  * Update milestone
@@ -9,54 +13,54 @@ const path = require('path');
  */
 const updateMilestone = async (req, res, next) => {
   try {
-    const { id, milestoneNumber } = req.params;
-    const userId = req.user.id;
-    const userType = req.user.userType;
+    const { id, milestoneNumber } = req.params
+    const userId = req.user.id
+    const userType = req.user.userType
 
     // Only drivers can update milestones
     if (userType !== 'driver') {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Only drivers can update milestones.',
-      });
+        message: 'Access denied. Only drivers can update milestones.'
+      })
     }
 
-    const milestoneNum = parseInt(milestoneNumber);
+    const milestoneNum = parseInt(milestoneNumber)
     if (milestoneNum < 1 || milestoneNum > 5) {
       return res.status(400).json({
         success: false,
-        message: 'Milestone number must be between 1 and 5',
-      });
+        message: 'Milestone number must be between 1 and 5'
+      })
     }
 
     // Find trip
-    const trip = await Trip.findById(id);
+    const trip = await Trip.findById(id)
     if (!trip) {
       return res.status(404).json({
         success: false,
-        message: 'Trip not found',
-      });
+        message: 'Trip not found'
+      })
     }
 
     // Check driver access
     if (!trip.driverId || trip.driverId.toString() !== userId) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. This trip is not assigned to you.',
-      });
+        message: 'Access denied. This trip is not assigned to you.'
+      })
     }
 
     // Validate trip is ACTIVE
     if (trip.status !== 'ACTIVE') {
       return res.status(400).json({
         success: false,
-        message: `Milestones can only be updated for ACTIVE trips. Current status: ${trip.status}`,
-      });
+        message: `Milestones can only be updated for ACTIVE trips. Current status: ${trip.status}`
+      })
     }
 
     // Validate milestone sequence (cannot skip)
-    const completedMilestones = trip.milestones.length;
-    const expectedNext = completedMilestones + 1;
+    const completedMilestones = trip.milestones.length
+    const expectedNext = completedMilestones + 1
 
     if (milestoneNum !== expectedNext) {
       return res.status(400).json({
@@ -65,53 +69,56 @@ const updateMilestone = async (req, res, next) => {
         data: {
           completedMilestones: completedMilestones,
           expectedNext: expectedNext,
-          received: milestoneNum,
-        },
-      });
+          received: milestoneNum
+        }
+      })
     }
 
     // Get GPS location from request body (required)
-    const { latitude, longitude } = req.body;
+    let { latitude, longitude } = req.body
     if (!latitude || !longitude) {
       return res.status(400).json({
         success: false,
-        message: 'GPS location is required (latitude and longitude)',
-      });
+        message: 'GPS location is required (latitude and longitude)'
+      })
     }
 
     // Validate coordinates
-    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    latitude = parseFloat(latitude)
+    longitude = parseFloat(longitude)
+
+    if (isNaN(latitude) || isNaN(longitude)) {
       return res.status(400).json({
         success: false,
-        message: 'Latitude and longitude must be numbers',
-      });
+        message: 'Latitude and longitude must be numbers'
+      })
     }
 
     if (latitude < -90 || latitude > 90) {
       return res.status(400).json({
         success: false,
-        message: 'Latitude must be between -90 and 90',
-      });
+        message: 'Latitude must be between -90 and 90'
+      })
     }
 
     if (longitude < -180 || longitude > 180) {
       return res.status(400).json({
         success: false,
-        message: 'Longitude must be between -180 and 180',
-      });
+        message: 'Longitude must be between -180 and 180'
+      })
     }
 
     // Get milestone type
-    const milestoneType = getMilestoneTypeByNumber(milestoneNum);
+    const milestoneType = getMilestoneTypeByNumber(milestoneNum)
 
     // Get backend meaning based on trip type
-    const backendMeaning = getBackendMeaning(milestoneType, trip.tripType);
+    const backendMeaning = getBackendMeaning(milestoneType, trip.tripType)
 
     // Get photo URL if file was uploaded
-    let photoUrl = null;
+    let photoUrl = null
     if (req.file) {
       // File path relative to uploads directory
-      photoUrl = `/uploads/milestones/${req.file.filename}`;
+      photoUrl = `/uploads/milestones/${req.file.filename}`
     }
 
     // Create milestone object
@@ -121,29 +128,31 @@ const updateMilestone = async (req, res, next) => {
       timestamp: new Date(),
       location: {
         latitude,
-        longitude,
+        longitude
       },
       photo: photoUrl,
       driverId: userId,
-      backendMeaning,
-    };
+      backendMeaning
+    }
 
     // Add milestone to trip
-    trip.milestones.push(milestone);
-    await trip.save();
+    trip.milestones.push(milestone)
+    await trip.save()
 
     // Get current milestone info for next milestone
-    const currentMilestone = trip.getCurrentMilestone();
-    const milestoneLabel = currentMilestone ? getDriverLabel(currentMilestone.milestoneType) : null;
+    const currentMilestone = trip.getCurrentMilestone()
+    const milestoneLabel = currentMilestone
+      ? getDriverLabel(currentMilestone.milestoneType)
+      : null
 
     // Populate references
-    await trip.populate('vehicleId', 'vehicleNumber trailerType');
-    await trip.populate('driverId', 'name mobile');
-    await trip.populate('transporterId', 'name company');
+    await trip.populate('vehicleId', 'vehicleNumber trailerType')
+    await trip.populate('driverId', 'name mobile')
+    await trip.populate('transporterId', 'name company')
 
     // Emit Socket.IO event
     try {
-      const io = getIO();
+      const io = getIO()
       const milestoneData = {
         trip: trip.toObject(),
         milestone,
@@ -151,17 +160,23 @@ const updateMilestone = async (req, res, next) => {
           ? {
               milestoneNumber: currentMilestone.milestoneNumber,
               milestoneType: currentMilestone.milestoneType,
-              label: milestoneLabel,
+              label: milestoneLabel
             }
-          : null,
-      };
+          : null
+      }
 
-      io.to(`transporter:${trip.transporterId}`).emit('trip:milestone:updated', milestoneData);
-      io.to(`driver:${userId}`).emit('trip:milestone:updated', milestoneData);
-      io.to(`vehicle:${trip.vehicleId}`).emit('trip:milestone:updated', milestoneData);
-      io.to(`trip:${trip._id}`).emit('trip:milestone:updated', milestoneData);
+      io.to(`transporter:${trip.transporterId}`).emit(
+        'trip:milestone:updated',
+        milestoneData
+      )
+      io.to(`driver:${userId}`).emit('trip:milestone:updated', milestoneData)
+      io.to(`vehicle:${trip.vehicleId}`).emit(
+        'trip:milestone:updated',
+        milestoneData
+      )
+      io.to(`trip:${trip._id}`).emit('trip:milestone:updated', milestoneData)
     } catch (socketError) {
-      console.error('Error emitting trip:milestone:updated event:', socketError);
+      console.error('Error emitting trip:milestone:updated event:', socketError)
       // Don't fail the request if socket emit fails
     }
 
@@ -175,15 +190,15 @@ const updateMilestone = async (req, res, next) => {
           ? {
               milestoneNumber: currentMilestone.milestoneNumber,
               milestoneType: currentMilestone.milestoneType,
-              label: milestoneLabel,
+              label: milestoneLabel
             }
-          : null,
-      },
-    });
+          : null
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Get current milestone
@@ -191,17 +206,17 @@ const updateMilestone = async (req, res, next) => {
  */
 const getCurrentMilestone = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const userId = req.user?.id;
-    const userType = req.user?.userType;
+    const { id } = req.params
+    const userId = req.user?.id
+    const userType = req.user?.userType
 
     // Find trip
-    const trip = await Trip.findById(id);
+    const trip = await Trip.findById(id)
     if (!trip) {
       return res.status(404).json({
         success: false,
-        message: 'Trip not found',
-      });
+        message: 'Trip not found'
+      })
     }
 
     // Check access for drivers
@@ -209,20 +224,21 @@ const getCurrentMilestone = async (req, res, next) => {
       if (!trip.driverId || trip.driverId.toString() !== userId) {
         return res.status(403).json({
           success: false,
-          message: 'Access denied. This trip is not assigned to you.',
-        });
+          message: 'Access denied. This trip is not assigned to you.'
+        })
       }
     } else if (userType === 'transporter') {
       if (trip.transporterId.toString() !== userId) {
         return res.status(403).json({
           success: false,
-          message: 'Access denied. You do not have permission to view this trip.',
-        });
+          message:
+            'Access denied. You do not have permission to view this trip.'
+        })
       }
     }
 
     // Get current milestone
-    const currentMilestone = trip.getCurrentMilestone();
+    const currentMilestone = trip.getCurrentMilestone()
 
     if (!currentMilestone) {
       return res.json({
@@ -232,12 +248,12 @@ const getCurrentMilestone = async (req, res, next) => {
           completed: true,
           milestoneNumber: null,
           milestoneType: null,
-          label: null,
-        },
-      });
+          label: null
+        }
+      })
     }
 
-    const milestoneLabel = getDriverLabel(currentMilestone.milestoneType);
+    const milestoneLabel = getDriverLabel(currentMilestone.milestoneType)
 
     res.json({
       success: true,
@@ -245,13 +261,13 @@ const getCurrentMilestone = async (req, res, next) => {
         completed: false,
         milestoneNumber: currentMilestone.milestoneNumber,
         milestoneType: currentMilestone.milestoneType,
-        label: milestoneLabel,
-      },
-    });
+        label: milestoneLabel
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Get trip timeline
@@ -263,31 +279,31 @@ const getTripTimeline = async (req, res, next) => {
     if (req.user.userType !== 'transporter') {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Only transporters can view trip timeline.',
-      });
+        message: 'Access denied. Only transporters can view trip timeline.'
+      })
     }
 
-    const { id } = req.params;
-    const transporterId = req.user.id;
+    const { id } = req.params
+    const transporterId = req.user.id
 
     // Find trip
     const trip = await Trip.findById(id)
       .populate('driverId', 'name mobile')
-      .populate('vehicleId', 'vehicleNumber');
+      .populate('vehicleId', 'vehicleNumber')
 
     if (!trip) {
       return res.status(404).json({
         success: false,
-        message: 'Trip not found',
-      });
+        message: 'Trip not found'
+      })
     }
 
     // Check access
     if (trip.transporterId.toString() !== transporterId) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You do not have permission to view this trip.',
-      });
+        message: 'Access denied. You do not have permission to view this trip.'
+      })
     }
 
     // Build timeline with all 5 milestones
@@ -296,25 +312,29 @@ const getTripTimeline = async (req, res, next) => {
       'REACHED_LOCATION',
       'LOADING_UNLOADING',
       'REACHED_DESTINATION',
-      'TRIP_COMPLETED',
-    ];
+      'TRIP_COMPLETED'
+    ]
 
     const timeline = allMilestones.map((milestoneType, index) => {
-      const milestoneNumber = index + 1;
-      const completedMilestone = trip.milestones.find((m) => m.milestoneNumber === milestoneNumber);
+      const milestoneNumber = index + 1
+      const completedMilestone = trip.milestones.find(
+        m => m.milestoneNumber === milestoneNumber
+      )
 
       return {
         milestoneNumber,
         milestoneType,
         driverLabel: getDriverLabel(milestoneType),
-        backendMeaning: completedMilestone ? completedMilestone.backendMeaning : null,
+        backendMeaning: completedMilestone
+          ? completedMilestone.backendMeaning
+          : null,
         completed: !!completedMilestone,
         timestamp: completedMilestone ? completedMilestone.timestamp : null,
         location: completedMilestone ? completedMilestone.location : null,
         photo: completedMilestone ? completedMilestone.photo : null,
-        driverId: completedMilestone ? completedMilestone.driverId : null,
-      };
-    });
+        driverId: completedMilestone ? completedMilestone.driverId : null
+      }
+    })
 
     res.json({
       success: true,
@@ -324,18 +344,18 @@ const getTripTimeline = async (req, res, next) => {
           status: trip.status,
           tripType: trip.tripType,
           containerNumber: trip.containerNumber,
-          reference: trip.reference,
+          reference: trip.reference
         },
-        timeline,
-      },
-    });
+        timeline
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 module.exports = {
   updateMilestone,
   getCurrentMilestone,
-  getTripTimeline,
-};
+  getTripTimeline
+}
