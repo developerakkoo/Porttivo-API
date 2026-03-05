@@ -59,7 +59,25 @@ const updateMilestone = async (req, res, next) => {
     }
 
     // Validate milestone sequence (cannot skip)
-    const completedMilestones = trip.milestones.length
+
+    const existingMilestone = trip.milestones.find(
+      m => m.milestoneNumber === milestoneNum
+    )
+
+    if (existingMilestone) {
+      return res.json({
+        success: true,
+        message: `Milestone ${milestoneNum} already recorded`,
+        data: {
+          trip,
+          milestone: existingMilestone
+        }
+      })
+    }
+    // const completedMilestones = trip.milestones.length
+    const completedMilestones = trip.milestones.filter(
+      m => m.milestoneNumber
+    ).length
     const expectedNext = completedMilestones + 1
 
     if (milestoneNum !== expectedNext) {
