@@ -25,7 +25,7 @@ const cleanMobile = (mobile) => {
  * @returns {Boolean} True if valid
  */
 const validateUserType = (userType) => {
-  return ['transporter', 'driver', 'pump_owner'].includes(userType?.toLowerCase());
+  return ['transporter', 'driver', 'pump_owner', 'customer'].includes(userType?.toLowerCase());
 };
 
 /**

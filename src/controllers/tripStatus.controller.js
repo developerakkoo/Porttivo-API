@@ -86,6 +86,7 @@ const startTrip = async (req, res, next) => {
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
     await trip.populate('transporterId', 'name company');
+    await trip.populate('customerId', 'name mobile');
 
     // Emit Socket.IO event
     try {
@@ -104,6 +105,9 @@ const startTrip = async (req, res, next) => {
       io.to(`transporter:${trip.transporterId}`).emit('trip:started', tripData);
       if (trip.driverId) {
         io.to(`driver:${trip.driverId}`).emit('trip:started', tripData);
+      }
+      if (trip.customerId) {
+        io.to(`customer:${trip.customerId._id || trip.customerId}`).emit('trip:started', tripData);
       }
       io.to(`vehicle:${trip.vehicleId}`).emit('trip:started', tripData);
       io.to(`trip:${trip._id}`).emit('trip:started', tripData);
@@ -202,6 +206,7 @@ const completeTrip = async (req, res, next) => {
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
     await trip.populate('transporterId', 'name company');
+    await trip.populate('customerId', 'name mobile');
 
     // Emit Socket.IO event
     try {
@@ -209,6 +214,9 @@ const completeTrip = async (req, res, next) => {
       const tripData = { trip: trip.toObject() };
 
       io.to(`transporter:${trip.transporterId}`).emit('trip:completed', tripData);
+      if (trip.customerId) {
+        io.to(`customer:${trip.customerId._id || trip.customerId}`).emit('trip:completed', tripData);
+      }
       io.to(`vehicle:${trip.vehicleId}`).emit('trip:completed', tripData);
       io.to(`trip:${trip._id}`).emit('trip:completed', tripData);
 

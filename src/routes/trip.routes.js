@@ -14,6 +14,11 @@ const {
   shareTrip,
   getSharedTrip,
   renderSharedTrip,
+  bookCustomerTrip,
+  getCustomerTrips,
+  getAvailableCustomerTrips,
+  acceptCustomerTrip,
+  assignCustomerTrip,
 } = require('../controllers/trip.controller');
 const { startTrip, completeTrip } = require('../controllers/tripStatus.controller');
 const {
@@ -34,6 +39,11 @@ router.get('/shared/:token', optionalAuth, getSharedTrip); // JSON API route
 router.use(authenticate);
 
 // Trip CRUD routes
+router.post('/customer/book', bookCustomerTrip);
+router.get('/customer/my-trips', getCustomerTrips);
+router.get('/customer/available', getAvailableCustomerTrips);
+router.put('/:id/accept', acceptCustomerTrip);
+router.put('/:id/assign', assignCustomerTrip);
 router.post('/', createTrip);
 router.get('/', getTrips);
 router.get('/search', searchTrips);

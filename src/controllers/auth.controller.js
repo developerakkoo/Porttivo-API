@@ -2,6 +2,7 @@ const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
 const CompanyUser = require('../models/CompanyUser');
 const PumpOwner = require('../models/PumpOwner');
+const Customer = require('../models/Customer');
 const { generateTokens } = require('../services/jwt.service');
 const { validateMobile, cleanMobile, validateUserType, validatePin } = require('../utils/validation');
 
@@ -31,7 +32,7 @@ const sendOTP = async (req, res, next) => {
     if (!validateUserType(userType)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid user type. Must be "transporter", "driver", or "pump_owner"',
+        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", or "customer"',
       });
     }
 
@@ -199,6 +200,46 @@ const sendOTP = async (req, res, next) => {
             },
           },
         });
+      } else if (normalizedUserType === 'customer') {
+        const customer = await Customer.findOne({ mobile: cleanedMobile });
+
+        if (!customer) {
+          return res.status(404).json({
+            success: false,
+            message: 'Customer not registered. Please use customer mobile auth to continue.',
+          });
+        }
+
+        if (customer.status === 'blocked') {
+          return res.status(403).json({
+            success: false,
+            message: 'Your account has been blocked. Please contact support.',
+          });
+        }
+
+        const tokens = generateTokens({
+          id: customer._id,
+          mobile: customer.mobile,
+          userType: 'customer',
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: 'Login successful',
+          data: {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            user: {
+              id: customer._id,
+              mobile: customer.mobile,
+              name: customer.name,
+              email: customer.email,
+              userType: 'customer',
+              status: customer.status,
+              isRegistered: customer.isRegistered,
+            },
+          },
+        });
       }
     } catch (dbError) {
       console.error('Database error:', dbError);
@@ -209,6 +250,104 @@ const sendOTP = async (req, res, next) => {
       });
     }
   } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Customer mobile auth endpoint
+ * POST /api/auth/customer/mobile
+ */
+const customerMobileAuth = async (req, res, next) => {
+  try {
+    const { mobile, name, email } = req.body;
+
+    if (!mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Mobile number is required',
+      });
+    }
+
+    const cleanedMobile = cleanMobile(mobile);
+    if (!validateMobile(cleanedMobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid mobile number format. Must be 10 digits',
+      });
+    }
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format',
+      });
+    }
+
+    let customer = await Customer.findOne({ mobile: cleanedMobile });
+    let isRegistered = true;
+
+    if (!customer) {
+      customer = await Customer.create({
+        mobile: cleanedMobile,
+        name: name?.trim() || '',
+        email: email ? email.trim().toLowerCase() : null,
+        isRegistered: !!name,
+      });
+      isRegistered = false;
+    } else {
+      if (customer.status === 'blocked') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account has been blocked. Please contact support.',
+        });
+      }
+
+      if (name && !customer.name) {
+        customer.name = name.trim();
+      }
+      if (email && !customer.email) {
+        customer.email = email.trim().toLowerCase();
+      }
+      if (name && !customer.isRegistered) {
+        customer.isRegistered = true;
+      }
+      if (customer.isModified()) {
+        await customer.save();
+      }
+    }
+
+    const tokens = generateTokens({
+      id: customer._id,
+      mobile: customer.mobile,
+      userType: 'customer',
+    });
+
+    return res.status(isRegistered ? 200 : 201).json({
+      success: true,
+      message: isRegistered ? 'Login successful' : 'Registration successful',
+      data: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        user: {
+          id: customer._id,
+          mobile: customer.mobile,
+          name: customer.name,
+          email: customer.email,
+          userType: 'customer',
+          status: customer.status,
+          isRegistered: customer.isRegistered,
+          existed: isRegistered,
+        },
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Customer with this mobile number already exists',
+      });
+    }
     next(error);
   }
 };
@@ -715,6 +854,7 @@ module.exports = {
   sendOTP,
   register,
   registerPumpOwner,
+  customerMobileAuth,
   pinLogin,
   companyUserLogin,
   refreshToken,

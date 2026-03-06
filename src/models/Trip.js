@@ -91,6 +91,21 @@ const locationSchema = new mongoose.Schema(
         required: true,
       },
     },
+    city: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    state: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    pincode: {
+      type: String,
+      trim: true,
+      default: null,
+    },
   },
   { _id: false }
 );
@@ -108,7 +123,16 @@ const tripSchema = new mongoose.Schema(
     transporterId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',
-      required: [true, 'Transporter ID is required'],
+      required: function () {
+        return this.bookedBy !== 'CUSTOMER';
+      },
+      default: null,
+      index: true,
+    },
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Customer',
+      default: null,
       index: true,
     },
     vehicleId: {
@@ -146,9 +170,59 @@ const tripSchema = new mongoose.Schema(
       required: [true, 'Trip type is required'],
       index: true,
     },
+    bookedBy: {
+      type: String,
+      enum: ['TRANSPORTER', 'CUSTOMER'],
+      default: 'TRANSPORTER',
+      index: true,
+    },
+    bookingStatus: {
+      type: String,
+      enum: ['OPEN', 'ACCEPTED', 'ASSIGNED'],
+      default: null,
+      index: true,
+    },
+    acceptedTransporterId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Transporter',
+      default: null,
+      index: true,
+    },
+    acceptedAt: {
+      type: Date,
+      default: null,
+    },
+    assignedAt: {
+      type: Date,
+      default: null,
+    },
+    customerName: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    customerMobile: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    scheduledAt: {
+      type: Date,
+      default: null,
+    },
+    loadType: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    notes: {
+      type: String,
+      trim: true,
+      default: null,
+    },
     status: {
       type: String,
-      enum: ['PLANNED', 'ACTIVE', 'COMPLETED', 'POD_PENDING', 'CANCELLED'],
+      enum: ['BOOKED', 'ACCEPTED', 'PLANNED', 'ACTIVE', 'COMPLETED', 'POD_PENDING', 'CANCELLED'],
       default: 'PLANNED',
       index: true,
     },
@@ -180,6 +254,9 @@ tripSchema.index({ vehicleId: 1, status: 1 });
 tripSchema.index({ transporterId: 1, vehicleId: 1 });
 tripSchema.index({ transporterId: 1, status: 1 });
 tripSchema.index({ driverId: 1, status: 1 });
+tripSchema.index({ customerId: 1, createdAt: -1 });
+tripSchema.index({ bookedBy: 1, bookingStatus: 1, status: 1 });
+tripSchema.index({ acceptedTransporterId: 1, status: 1 });
 tripSchema.index({ containerNumber: 1 });
 tripSchema.index({ reference: 1 });
 tripSchema.index({ tripId: 1 });

@@ -5,6 +5,7 @@ const CompanyUser = require('../models/CompanyUser');
 const PumpOwner = require('../models/PumpOwner');
 const PumpStaff = require('../models/PumpStaff');
 const Admin = require('../models/Admin');
+const Customer = require('../models/Customer');
 
 /**
  * Authentication middleware to verify JWT token
@@ -41,6 +42,8 @@ const authenticate = async (req, res, next) => {
         user = await PumpStaff.findById(decoded.userId);
       } else if (decoded.userType === 'admin') {
         user = await Admin.findById(decoded.userId);
+      } else if (decoded.userType === 'customer') {
+        user = await Customer.findById(decoded.userId);
       }
 
       if (!user) {
@@ -124,6 +127,8 @@ const optionalAuth = async (req, res, next) => {
           user = await PumpStaff.findById(decoded.userId);
         } else if (decoded.userType === 'admin') {
           user = await Admin.findById(decoded.userId);
+        } else if (decoded.userType === 'customer') {
+          user = await Customer.findById(decoded.userId);
         }
 
         if (user && user.status !== 'blocked' && user.status !== 'disabled') {

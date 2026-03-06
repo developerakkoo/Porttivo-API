@@ -3,6 +3,7 @@ const { verifyToken } = require('./jwt.service');
 const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
 const Trip = require('../models/Trip');
+const Customer = require('../models/Customer');
 const { activateNextTrip } = require('./tripQueue.service');
 const { getMilestoneTypeByNumber, getBackendMeaning, getDriverLabel } = require('../utils/milestoneMapping');
 
@@ -40,6 +41,8 @@ const initializeSocketIO = (httpServer) => {
           user = await Transporter.findById(decoded.userId);
         } else if (decoded.userType === 'driver') {
           user = await Driver.findById(decoded.userId);
+        } else if (decoded.userType === 'customer') {
+          user = await Customer.findById(decoded.userId);
         }
 
         if (!user) {
@@ -76,6 +79,8 @@ const initializeSocketIO = (httpServer) => {
       socket.join(`transporter:${socket.user.id}`);
     } else if (socket.user.userType === 'driver') {
       socket.join(`driver:${socket.user.id}`);
+    } else if (socket.user.userType === 'customer') {
+      socket.join(`customer:${socket.user.id}`);
     }
 
     // Handle room joins
@@ -90,6 +95,13 @@ const initializeSocketIO = (httpServer) => {
       if (socket.user.userType === 'driver' && socket.user.id === driverId) {
         socket.join(`driver:${driverId}`);
         console.log(`Socket ${socket.id} joined driver:${driverId}`);
+      }
+    });
+
+    socket.on('join:customer', (customerId) => {
+      if (socket.user.userType === 'customer' && socket.user.id === customerId) {
+        socket.join(`customer:${customerId}`);
+        console.log(`Socket ${socket.id} joined customer:${customerId}`);
       }
     });
 

@@ -9,7 +9,7 @@ const notificationSchema = new mongoose.Schema(
     },
     userType: {
       type: String,
-      enum: ['TRANSPORTER', 'DRIVER', 'PUMP_OWNER', 'PUMP_STAFF', 'ADMIN'],
+      enum: ['TRANSPORTER', 'DRIVER', 'PUMP_OWNER', 'PUMP_STAFF', 'ADMIN', 'CUSTOMER'],
       required: [true, 'User type is required'],
       index: true,
     },
@@ -19,6 +19,9 @@ const notificationSchema = new mongoose.Schema(
         'TRIP_STARTED',
         'TRIP_COMPLETED',
         'TRIP_ASSIGNED',
+        'TRIP_BOOKED',
+        'TRIP_ACCEPTED',
+        'TRIP_DRIVER_ASSIGNED',
         'MILESTONE_COMPLETED',
         'POD_UPLOADED',
         'FUEL_TRANSACTION',

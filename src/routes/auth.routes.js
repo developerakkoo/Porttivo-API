@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { sendOTP, register, registerPumpOwner, pinLogin, companyUserLogin, refreshToken } = require('../controllers/auth.controller');
+const { sendOTP, register, registerPumpOwner, customerMobileAuth, pinLogin, companyUserLogin, refreshToken } = require('../controllers/auth.controller');
 const { adminLogin } = require('../controllers/admin.controller');
 
 /**
@@ -16,6 +16,13 @@ router.post('/register', register);
  * @access  Public
  */
 router.post('/register-pump-owner', registerPumpOwner);
+
+/**
+ * @route   POST /api/auth/customer/mobile
+ * @desc    Customer login/registration with mobile number
+ * @access  Public
+ */
+router.post('/customer/mobile', customerMobileAuth);
 
 /**
  * @route   POST /api/auth/send-otp
