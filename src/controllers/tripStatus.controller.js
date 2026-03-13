@@ -5,6 +5,15 @@ const { checkVehicleHasActiveTrip } = require('../utils/vehicleValidation');
 const { getMilestoneTypeByNumber, getDriverLabel } = require('../utils/milestoneMapping');
 const { getIO } = require('../services/socket.service');
 const { activateNextTrip } = require('../services/tripQueue.service');
+const { sendTripCompletedTemplate } = require('../services/wati.service');
+
+const triggerWatiTemplate = async (handler, contextLabel) => {
+  try {
+    await handler();
+  } catch (error) {
+    console.error(`WATI ${contextLabel} failed:`, error.message);
+  }
+};
 
 /**
  * Start trip
@@ -85,7 +94,7 @@ const startTrip = async (req, res, next) => {
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
-    await trip.populate('transporterId', 'name company');
+    await trip.populate('transporterId', 'name company mobile');
     await trip.populate('customerId', 'name mobile');
 
     // Emit Socket.IO event
@@ -205,7 +214,7 @@ const completeTrip = async (req, res, next) => {
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
-    await trip.populate('transporterId', 'name company');
+    await trip.populate('transporterId', 'name company mobile');
     await trip.populate('customerId', 'name mobile');
 
     // Emit Socket.IO event
@@ -244,6 +253,30 @@ const completeTrip = async (req, res, next) => {
     } catch (socketError) {
       console.error('Error emitting trip:completed event:', socketError);
       // Don't fail the request if socket emit fails
+    }
+
+    if (trip.customerId) {
+      await triggerWatiTemplate(
+        () =>
+          sendTripCompletedTemplate({
+            recipient: trip.customerId,
+            trip,
+            recipientKey: 'customer',
+          }),
+        'trip completed template for customer'
+      );
+    }
+
+    if (trip.transporterId) {
+      await triggerWatiTemplate(
+        () =>
+          sendTripCompletedTemplate({
+            recipient: trip.transporterId,
+            trip,
+            recipientKey: 'transporter',
+          }),
+        'trip completed template for transporter'
+      );
     }
 
     res.json({

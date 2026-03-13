@@ -188,6 +188,12 @@ const tripSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    rejectedTransporterIds: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Transporter',
+      },
+    ],
     acceptedAt: {
       type: Date,
       default: null,

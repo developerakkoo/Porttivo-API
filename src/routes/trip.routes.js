@@ -18,6 +18,7 @@ const {
   getCustomerTrips,
   getAvailableCustomerTrips,
   acceptCustomerTrip,
+  rejectCustomerTrip,
   assignCustomerTrip,
 } = require('../controllers/trip.controller');
 const { startTrip, completeTrip } = require('../controllers/tripStatus.controller');
@@ -43,6 +44,7 @@ router.post('/customer/book', bookCustomerTrip);
 router.get('/customer/my-trips', getCustomerTrips);
 router.get('/customer/available', getAvailableCustomerTrips);
 router.put('/:id/accept', acceptCustomerTrip);
+router.put('/:id/reject', rejectCustomerTrip);
 router.put('/:id/assign', assignCustomerTrip);
 router.post('/', createTrip);
 router.get('/', getTrips);

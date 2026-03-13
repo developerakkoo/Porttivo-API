@@ -5,7 +5,19 @@ const {
   getMilestoneTypeByNumber
 } = require('../utils/milestoneMapping')
 const { getIO } = require('../services/socket.service')
+const {
+  sendVehicleReachedPickupTemplate,
+  sendContainerPickedTemplate
+} = require('../services/wati.service')
 const path = require('path')
+
+const triggerWatiTemplate = async (handler, contextLabel) => {
+  try {
+    await handler()
+  } catch (error) {
+    console.error(`WATI ${contextLabel} failed:`, error.message)
+  }
+}
 
 /**
  * Update milestone
@@ -166,7 +178,8 @@ const updateMilestone = async (req, res, next) => {
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType')
     await trip.populate('driverId', 'name mobile')
-    await trip.populate('transporterId', 'name company')
+    await trip.populate('transporterId', 'name company mobile')
+    await trip.populate('customerId', 'name mobile email isRegistered')
 
     // Emit Socket.IO event
     try {
@@ -196,6 +209,30 @@ const updateMilestone = async (req, res, next) => {
     } catch (socketError) {
       console.error('Error emitting trip:milestone:updated event:', socketError)
       // Don't fail the request if socket emit fails
+    }
+
+    if (trip.customerId) {
+      if (milestoneType === 'REACHED_LOCATION') {
+        await triggerWatiTemplate(
+          () =>
+            sendVehicleReachedPickupTemplate({
+              customer: trip.customerId,
+              trip
+            }),
+          'vehicle reached pickup template'
+        )
+      }
+
+      if (milestoneType === 'CONTAINER_PICKED') {
+        await triggerWatiTemplate(
+          () =>
+            sendContainerPickedTemplate({
+              customer: trip.customerId,
+              trip
+            }),
+          'container picked template'
+        )
+      }
     }
 
     res.json({

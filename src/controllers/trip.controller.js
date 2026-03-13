@@ -7,6 +7,13 @@ const Notification = require('../models/Notification');
 const { checkVehicleHasActiveTrip } = require('../utils/vehicleValidation');
 const { emitTripCreated, getIO } = require('../services/socket.service');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
+const {
+  sendTripCreatedConfirmation,
+  sendBookingAcceptedTemplate,
+  sendDriverVehicleAssignedTemplate,
+  sendBookingRejectedTemplate,
+  sendBookingRequestReceivedTemplate,
+} = require('../services/wati.service');
 
 const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
   bookedBy: 'CUSTOMER',
@@ -67,6 +74,14 @@ const emitSocketEvent = (room, event, payload) => {
 };
 
 const serializeTripForRealtime = (trip) => (trip.toObject ? trip.toObject() : trip);
+
+const triggerWatiTemplate = async (handler, contextLabel) => {
+  try {
+    await handler();
+  } catch (error) {
+    console.error(`WATI ${contextLabel} failed:`, error.message);
+  }
+};
 
 /**
  * Create a new trip
@@ -1128,7 +1143,7 @@ const bookCustomerTrip = async (req, res, next) => {
       notes: notes?.trim() || null,
     });
 
-    const activeTransporters = await Transporter.find({ status: 'active', hasAccess: true }).select('_id name company');
+    const activeTransporters = await Transporter.find({ status: 'active', hasAccess: true }).select('_id name company mobile');
     const customerTripData = serializeTripForRealtime(trip);
 
     await Promise.all(
@@ -1151,6 +1166,19 @@ const bookCustomerTrip = async (req, res, next) => {
       )
     );
 
+    await Promise.all(
+      activeTransporters.map((transporter) =>
+        triggerWatiTemplate(
+          () =>
+            sendBookingRequestReceivedTemplate({
+              transporter,
+              trip,
+            }),
+          `booking request received template for transporter ${transporter._id}`
+        )
+      )
+    );
+
     activeTransporters.forEach((transporter) => {
       emitSocketEvent(`transporter:${transporter._id}`, 'trip:customer:booked', {
         trip: customerTripData,
@@ -1162,6 +1190,14 @@ const bookCustomerTrip = async (req, res, next) => {
     });
 
     await trip.populate('customerId', 'name mobile email isRegistered');
+    await triggerWatiTemplate(
+      () =>
+        sendTripCreatedConfirmation({
+          customer,
+          trip,
+        }),
+      'trip created confirmation'
+    );
 
     return res.status(201).json({
       success: true,
@@ -1246,6 +1282,7 @@ const getAvailableCustomerTrips = async (req, res, next) => {
 
     const { page = 1, limit = 20, tripType } = req.query;
     const query = { ...TRANSPORTER_VISIBLE_BOOKING_QUERY };
+    query.rejectedTransporterIds = { $ne: transporterId };
     if (tripType) {
       query.tripType = tripType;
     }
@@ -1302,6 +1339,7 @@ const acceptCustomerTrip = async (req, res, next) => {
       {
         _id: req.params.id,
         ...TRANSPORTER_VISIBLE_BOOKING_QUERY,
+        rejectedTransporterIds: { $ne: transporterId },
       },
       {
         $set: {
@@ -1349,9 +1387,92 @@ const acceptCustomerTrip = async (req, res, next) => {
       });
     });
 
+    await triggerWatiTemplate(
+      () =>
+        sendBookingAcceptedTemplate({
+          customer: trip.customerId,
+          trip,
+        }),
+      'booking accepted template'
+    );
+
     return res.status(200).json({
       success: true,
       message: 'Customer trip accepted successfully',
+      data: trip,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Transporter rejects a customer trip
+ * PUT /api/trips/:id/reject
+ */
+const rejectCustomerTrip = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user);
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters and authorized company users can reject customer trips.',
+      });
+    }
+
+    if (req.user.userType === 'company-user' && !hasPermission(req.user, 'createTrips')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to reject trips.',
+      });
+    }
+
+    const trip = await Trip.findOne({
+      _id: req.params.id,
+      ...TRANSPORTER_VISIBLE_BOOKING_QUERY,
+      rejectedTransporterIds: { $ne: transporterId },
+    }).populate('customerId', 'name mobile email isRegistered');
+
+    if (!trip) {
+      return res.status(409).json({
+        success: false,
+        message: 'Trip is no longer available for rejection or was already rejected by you.',
+      });
+    }
+
+    trip.rejectedTransporterIds.push(transporterId);
+    await trip.save();
+
+    await createNotification({
+      userId: trip.customerId._id,
+      userType: 'CUSTOMER',
+      type: 'TRIP_REJECTED',
+      title: 'Booking rejected by transporter',
+      message: `Your trip ${trip.tripId} was not accepted by a transporter.`,
+      data: {
+        tripId: trip._id,
+        publicTripId: trip.tripId,
+        transporterId,
+      },
+      priority: 'high',
+    });
+
+    const tripData = serializeTripForRealtime(trip);
+    emitSocketEvent(`customer:${trip.customerId._id}`, 'trip:customer:rejected', { trip: tripData, transporterId });
+    emitSocketEvent(`transporter:${transporterId}`, 'trip:customer:rejected', { tripId: trip._id });
+
+    await triggerWatiTemplate(
+      () =>
+        sendBookingRejectedTemplate({
+          customer: trip.customerId,
+          trip,
+        }),
+      'booking rejected template'
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Customer trip rejected successfully',
       data: trip,
     });
   } catch (error) {
@@ -1491,6 +1612,15 @@ const assignCustomerTrip = async (req, res, next) => {
     emitSocketEvent(`customer:${trip.customerId._id}`, 'trip:customer:assigned', { trip: tripData });
     emitSocketEvent(`transporter:${transporterId}`, 'trip:customer:assigned', { trip: tripData });
 
+    await triggerWatiTemplate(
+      () =>
+        sendDriverVehicleAssignedTemplate({
+          customer: trip.customerId,
+          trip,
+        }),
+      'driver and vehicle assigned template'
+    );
+
     return res.status(200).json({
       success: true,
       message: 'Vehicle and driver assigned successfully',
@@ -1506,6 +1636,7 @@ module.exports = {
   getCustomerTrips,
   getAvailableCustomerTrips,
   acceptCustomerTrip,
+  rejectCustomerTrip,
   assignCustomerTrip,
   createTrip,
   getTrips,
