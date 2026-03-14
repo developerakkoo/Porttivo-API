@@ -3,6 +3,7 @@ const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
 const Driver = require('../models/Driver');
 const { validateMobile, cleanMobile, validatePin } = require('../utils/validation');
+const { TRIP_STATUS } = require('../utils/tripState');
 
 /**
  * Get transporter profile
@@ -180,23 +181,20 @@ const getDashboard = async (req, res, next) => {
       totalDrivers,
     ] = await Promise.all([
       Vehicle.countDocuments({
-        $or: [
-          { transporterId },
-          { hiredBy: transporterId },
-        ],
+        transporterId,
         status: 'active',
       }),
       Trip.countDocuments({
         transporterId,
-        status: 'ACTIVE',
+        status: TRIP_STATUS.ACTIVE,
       }),
       Trip.countDocuments({
         transporterId,
-        status: 'PLANNED',
+        status: TRIP_STATUS.PLANNED,
       }),
       Trip.countDocuments({
         transporterId,
-        status: 'POD_PENDING',
+        status: TRIP_STATUS.POD_PENDING,
       }),
       Trip.countDocuments({
         transporterId,

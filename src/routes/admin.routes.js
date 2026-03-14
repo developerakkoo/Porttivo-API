@@ -21,6 +21,14 @@ const {
   getPumpStaffDetails,
   listAllCompanyUsers,
   getCompanyUserDetails,
+  getDuplicateCustomers,
+  mergeCustomers,
+  getMilestoneRules,
+  updateMilestoneRules,
+  setWithdrawalPause,
+  getFraudReviewQueue,
+  getSettlementOversight,
+  getAuditLogs,
 } = require('../controllers/admin.controller');
 
 // All routes require authentication
@@ -64,6 +72,14 @@ router.get('/dashboard/stats', getDashboardStats);
  * @access  Private (Admin only)
  */
 router.get('/analytics', getSystemAnalytics);
+router.get('/customers/duplicates', getDuplicateCustomers);
+router.post('/customers/merge', mergeCustomers);
+router.get('/settings/milestone-rules', getMilestoneRules);
+router.put('/settings/milestone-rules', updateMilestoneRules);
+router.put('/wallets/:userType/:userId/withdrawal', setWithdrawalPause);
+router.get('/fraud/review-queue', getFraudReviewQueue);
+router.get('/settlements/oversight', getSettlementOversight);
+router.get('/audit-logs', getAuditLogs);
 
 // User Management Routes
 

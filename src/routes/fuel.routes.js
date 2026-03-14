@@ -12,6 +12,9 @@ const {
   getTransactionById,
   uploadReceipt,
   getReceipt,
+  submitCashReceipt,
+  listCashReceipts,
+  reviewCashReceipt,
 } = require('../controllers/fuelTransaction.controller');
 const {
   getFraudAlerts,
@@ -38,6 +41,9 @@ router.get('/transactions', getTransactions);
 router.get('/transactions/:id', getTransactionById);
 router.post('/transactions/:id/receipt', uploadReceiptMiddleware, handleMulterError, uploadReceipt); // Driver only
 router.get('/receipt/:id', getReceipt);
+router.post('/cash-receipts', uploadReceiptMiddleware, handleMulterError, submitCashReceipt);
+router.get('/cash-receipts', listCashReceipts);
+router.put('/cash-receipts/:id/review', reviewCashReceipt);
 
 // Fraud routes (Admin only)
 router.get('/fraud-alerts', getFraudAlerts);

@@ -4,11 +4,26 @@ const Driver = require('../models/Driver');
 const PumpOwner = require('../models/PumpOwner');
 const PumpStaff = require('../models/PumpStaff');
 const CompanyUser = require('../models/CompanyUser');
+const Customer = require('../models/Customer');
 const Trip = require('../models/Trip');
 const Vehicle = require('../models/Vehicle');
 const FuelTransaction = require('../models/FuelTransaction');
 const Settlement = require('../models/Settlement');
+const Wallet = require('../models/Wallet');
+const SystemConfig = require('../models/SystemConfig');
+const AdminAuditLog = require('../models/AdminAuditLog');
 const { generateTokens } = require('../services/jwt.service');
+const { TRIP_STATUS, CLOSED_TRIP_STATUSES } = require('../utils/tripState');
+const { logAdminAction } = require('../services/adminAudit.service');
+
+const getTripRulesConfig = async () => {
+  let config = await SystemConfig.findOne({ key: 'TRIP_RULES' });
+  if (!config) {
+    config = await SystemConfig.create({ key: 'TRIP_RULES' });
+  }
+
+  return config;
+};
 
 /**
  * Admin login
@@ -198,9 +213,9 @@ const getDashboardStats = async (req, res, next) => {
     // Get trip stats
     const tripDateFilter = startDate || endDate ? { createdAt: dateFilter.createdAt } : {};
     const totalTrips = await Trip.countDocuments(tripDateFilter);
-    const activeTrips = await Trip.countDocuments({ ...tripDateFilter, status: 'ACTIVE' });
-    const completedTrips = await Trip.countDocuments({ ...tripDateFilter, status: 'COMPLETED' });
-    const pendingPODTrips = await Trip.countDocuments({ ...tripDateFilter, status: 'POD_PENDING' });
+    const activeTrips = await Trip.countDocuments({ ...tripDateFilter, status: TRIP_STATUS.ACTIVE });
+    const completedTrips = await Trip.countDocuments({ ...tripDateFilter, status: { $in: CLOSED_TRIP_STATUSES } });
+    const pendingPODTrips = await Trip.countDocuments({ ...tripDateFilter, status: TRIP_STATUS.POD_PENDING });
 
     // Get fuel transaction stats
     const fuelDateFilter = startDate || endDate ? { createdAt: dateFilter.createdAt } : {};
@@ -328,9 +343,9 @@ const getSystemAnalytics = async (req, res, next) => {
         }
         
         grouped[key].count++;
-        if (trip.status === 'COMPLETED') grouped[key].completed++;
-        if (trip.status === 'ACTIVE') grouped[key].active++;
-        if (trip.status === 'CANCELLED') grouped[key].cancelled++;
+        if (CLOSED_TRIP_STATUSES.includes(trip.status)) grouped[key].completed++;
+        if (trip.status === TRIP_STATUS.ACTIVE) grouped[key].active++;
+        if (trip.status === TRIP_STATUS.CANCELLED) grouped[key].cancelled++;
       });
 
       analytics.data = Object.keys(grouped).sort().map(key => ({
@@ -695,7 +710,7 @@ const getDriverDetails = async (req, res, next) => {
     // Get additional stats
     const [totalTrips, activeTrips] = await Promise.all([
       Trip.countDocuments({ driverId: driver._id }),
-      Trip.countDocuments({ driverId: driver._id, status: 'ACTIVE' }),
+      Trip.countDocuments({ driverId: driver._id, status: TRIP_STATUS.ACTIVE }),
     ]);
 
     return res.status(200).json({
@@ -744,7 +759,7 @@ const getDriverTimeline = async (req, res, next) => {
     }
 
     const trips = await Trip.find(dateFilter)
-      .select('tripId status createdAt milestones vehicleId')
+      .select('tripId status createdAt updatedAt completedAt milestones vehicleId')
       .populate('vehicleId', 'vehicleNumber')
       .sort({ createdAt: -1 })
       .limit(50);
@@ -752,7 +767,7 @@ const getDriverTimeline = async (req, res, next) => {
     const timeline = [];
     trips.forEach(trip => {
       // Trip started
-      if (trip.status === 'ACTIVE' || trip.status === 'COMPLETED') {
+      if (trip.status === TRIP_STATUS.ACTIVE || trip.completedAt) {
         timeline.push({
           date: trip.createdAt,
           event: 'Trip Started',
@@ -774,10 +789,10 @@ const getDriverTimeline = async (req, res, next) => {
       }
 
       // Trip completed
-      if (trip.status === 'COMPLETED') {
+      if (CLOSED_TRIP_STATUSES.includes(trip.status) || trip.status === TRIP_STATUS.POD_PENDING) {
         timeline.push({
-          date: trip.updatedAt,
-          event: 'Trip Completed',
+          date: trip.completedAt || trip.updatedAt,
+          event: trip.status === TRIP_STATUS.POD_PENDING ? 'Trip Completed, POD Pending' : 'Trip Closed',
           tripId: trip.tripId,
           vehicleNumber: trip.vehicleId?.vehicleNumber || null,
         });
@@ -1193,6 +1208,387 @@ const getCompanyUserDetails = async (req, res, next) => {
   }
 };
 
+/**
+ * Get customer duplicate candidates
+ * GET /api/admin/customers/duplicates
+ */
+const getDuplicateCustomers = async (req, res, next) => {
+  try {
+    const duplicates = await Customer.aggregate([
+      {
+        $addFields: {
+          normalizedName: {
+            $trim: {
+              input: { $toLower: { $ifNull: ['$name', ''] } },
+            },
+          },
+        },
+      },
+      {
+        $match: {
+          normalizedName: { $ne: '' },
+        },
+      },
+      {
+        $group: {
+          _id: '$normalizedName',
+          count: { $sum: 1 },
+          customers: {
+            $push: {
+              id: '$_id',
+              name: '$name',
+              mobile: '$mobile',
+              email: '$email',
+              status: '$status',
+              createdAt: '$createdAt',
+            },
+          },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+      {
+        $sort: {
+          count: -1,
+          _id: 1,
+        },
+      },
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        duplicates,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Merge duplicate customers
+ * POST /api/admin/customers/merge
+ */
+const mergeCustomers = async (req, res, next) => {
+  try {
+    const { sourceCustomerId, targetCustomerId } = req.body;
+
+    if (!sourceCustomerId || !targetCustomerId || sourceCustomerId === targetCustomerId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid sourceCustomerId and targetCustomerId are required',
+      });
+    }
+
+    const [sourceCustomer, targetCustomer] = await Promise.all([
+      Customer.findById(sourceCustomerId),
+      Customer.findById(targetCustomerId),
+    ]);
+
+    if (!sourceCustomer || !targetCustomer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Source or target customer not found',
+      });
+    }
+
+    const tripsUpdated = await Trip.updateMany(
+      { customerId: sourceCustomer._id },
+      {
+        $set: {
+          customerId: targetCustomer._id,
+        },
+      }
+    );
+
+    if (!targetCustomer.email && sourceCustomer.email) {
+      targetCustomer.email = sourceCustomer.email;
+    }
+    if (!targetCustomer.name && sourceCustomer.name) {
+      targetCustomer.name = sourceCustomer.name;
+    }
+    if (!targetCustomer.isRegistered && sourceCustomer.isRegistered) {
+      targetCustomer.isRegistered = true;
+    }
+
+    await targetCustomer.save();
+    await Customer.findByIdAndDelete(sourceCustomer._id);
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'CUSTOMER_MERGED',
+      entityType: 'CUSTOMER',
+      entityId: targetCustomer._id,
+      metadata: {
+        sourceCustomerId,
+        targetCustomerId,
+        tripsUpdated: tripsUpdated.modifiedCount || 0,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Customers merged successfully',
+      data: {
+        targetCustomerId: targetCustomer._id,
+        sourceCustomerId,
+        tripsUpdated: tripsUpdated.modifiedCount || 0,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get trip milestone rule settings
+ * GET /api/admin/settings/milestone-rules
+ */
+const getMilestoneRules = async (req, res, next) => {
+  try {
+    const config = await getTripRulesConfig();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        milestoneRules: config.milestoneRules,
+        updatedAt: config.updatedAt,
+        updatedBy: config.updatedBy,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update trip milestone rule settings
+ * PUT /api/admin/settings/milestone-rules
+ */
+const updateMilestoneRules = async (req, res, next) => {
+  try {
+    const config = await getTripRulesConfig();
+    config.milestoneRules = {
+      ...config.milestoneRules?.toObject?.(),
+      ...req.body,
+    };
+    config.updatedBy = req.user.id;
+    await config.save();
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'MILESTONE_RULES_UPDATED',
+      entityType: 'SYSTEM_CONFIG',
+      entityId: config._id,
+      metadata: {
+        milestoneRules: config.milestoneRules,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Milestone rules updated successfully',
+      data: {
+        milestoneRules: config.milestoneRules,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Pause or resume wallet withdrawals
+ * PUT /api/admin/wallets/:userType/:userId/withdrawal
+ */
+const setWithdrawalPause = async (req, res, next) => {
+  try {
+    const { userId, userType } = req.params;
+    const { paused, reason } = req.body;
+    const normalizedUserType = userType.toUpperCase();
+
+    if (!['DRIVER', 'TRANSPORTER', 'PUMP_OWNER'].includes(normalizedUserType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid userType',
+      });
+    }
+
+    let wallet = await Wallet.findOne({ userId, userType: normalizedUserType });
+    if (!wallet) {
+      wallet = await Wallet.create({
+        userId,
+        userType: normalizedUserType,
+        balance: 0,
+        currency: 'INR',
+      });
+    }
+
+    wallet.withdrawalPaused = Boolean(paused);
+    wallet.withdrawalPauseReason = paused ? reason?.trim() || 'Paused by admin' : null;
+    wallet.withdrawalPausedAt = paused ? new Date() : null;
+    await wallet.save();
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: paused ? 'WITHDRAWAL_PAUSED' : 'WITHDRAWAL_RESUMED',
+      entityType: 'WALLET',
+      entityId: wallet._id,
+      metadata: {
+        userId,
+        userType: normalizedUserType,
+        reason: wallet.withdrawalPauseReason,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: paused ? 'Withdrawal paused successfully' : 'Withdrawal resumed successfully',
+      data: {
+        wallet: {
+          id: wallet._id,
+          userId: wallet.userId,
+          userType: wallet.userType,
+          withdrawalPaused: wallet.withdrawalPaused,
+          withdrawalPauseReason: wallet.withdrawalPauseReason,
+          withdrawalPausedAt: wallet.withdrawalPausedAt,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get fraud review queue
+ * GET /api/admin/fraud/review-queue
+ */
+const getFraudReviewQueue = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const query = {
+      $or: [
+        { status: 'flagged' },
+        { 'fraudFlags.resolved': false, 'fraudFlags.duplicateReceipt': true },
+        { 'fraudFlags.resolved': false, 'fraudFlags.gpsMismatch': true },
+        { 'fraudFlags.resolved': false, 'fraudFlags.expressUploads': true },
+        { 'fraudFlags.resolved': false, 'fraudFlags.unusualPattern': true },
+      ],
+    };
+
+    const [transactions, total] = await Promise.all([
+      FuelTransaction.find(query)
+        .populate('driverId', 'name mobile')
+        .populate('transporterId', 'name company mobile')
+        .populate('pumpOwnerId', 'name pumpName')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      FuelTransaction.countDocuments(query),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        transactions,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get settlement oversight summary
+ * GET /api/admin/settlements/oversight
+ */
+const getSettlementOversight = async (req, res, next) => {
+  try {
+    const [pending, processing, completed, failed] = await Promise.all([
+      Settlement.countDocuments({ status: 'PENDING' }),
+      Settlement.countDocuments({ status: 'PROCESSING' }),
+      Settlement.countDocuments({ status: 'COMPLETED' }),
+      Settlement.countDocuments({ status: 'FAILED' }),
+    ]);
+
+    const recentSettlements = await Settlement.find({})
+      .populate('pumpOwnerId', 'name pumpName mobile')
+      .sort({ createdAt: -1 })
+      .limit(20);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        summary: {
+          pending,
+          processing,
+          completed,
+          failed,
+        },
+        settlements: recentSettlements,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get admin audit logs
+ * GET /api/admin/audit-logs
+ */
+const getAuditLogs = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 50, action, entityType } = req.query;
+    const query = {};
+    if (action) query.action = action;
+    if (entityType) query.entityType = entityType;
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [logs, total] = await Promise.all([
+      AdminAuditLog.find(query)
+        .populate('adminId', 'username email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      AdminAuditLog.countDocuments(query),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        logs,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   adminLogin,
   getProfile,
@@ -1214,4 +1610,12 @@ module.exports = {
   getPumpStaffDetails,
   listAllCompanyUsers,
   getCompanyUserDetails,
+  getDuplicateCustomers,
+  mergeCustomers,
+  getMilestoneRules,
+  updateMilestoneRules,
+  setWithdrawalPause,
+  getFraudReviewQueue,
+  getSettlementOversight,
+  getAuditLogs,
 };

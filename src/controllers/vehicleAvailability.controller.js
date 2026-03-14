@@ -20,11 +20,7 @@ const getAvailability = async (req, res, next) => {
 
     // Check access (for transporters)
     if (req.user.userType === 'transporter') {
-      const hasAccess =
-        vehicle.transporterId.toString() === req.user.id ||
-        (vehicle.hiredBy && vehicle.hiredBy.some((transporterId) => transporterId.toString() === req.user.id));
-
-      if (!hasAccess) {
+      if (vehicle.transporterId.toString() !== req.user.id) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You do not have access to this vehicle.',

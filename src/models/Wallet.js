@@ -27,6 +27,20 @@ const walletSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    withdrawalPaused: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    withdrawalPauseReason: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    withdrawalPausedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

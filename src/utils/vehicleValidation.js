@@ -1,17 +1,25 @@
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
+const { TRIP_STATUS } = require('./tripState');
 
 /**
  * Check if vehicle has active trip
- * @param {String} vehicleId - Vehicle ID
+ * @param {String|Object} vehicleSelector - Vehicle ID or query selector
+ * @param {String|null} excludeTripId - Trip ID to exclude from the check
  * @returns {Promise<Boolean>} True if vehicle has active trip
  */
-const checkVehicleHasActiveTrip = async (vehicleId) => {
+const checkVehicleHasActiveTrip = async (vehicleSelector, excludeTripId = null) => {
   try {
-    const activeTrip = await Trip.findOne({
-      vehicleId,
-      status: 'ACTIVE',
-    });
+    const query =
+      vehicleSelector && typeof vehicleSelector === 'object' && !Array.isArray(vehicleSelector)
+        ? { ...vehicleSelector, status: TRIP_STATUS.ACTIVE }
+        : { vehicleId: vehicleSelector, status: TRIP_STATUS.ACTIVE };
+
+    if (excludeTripId) {
+      query._id = { $ne: excludeTripId };
+    }
+
+    const activeTrip = await Trip.findOne(query);
     return !!activeTrip;
   } catch (error) {
     console.error('Error checking active trip:', error);
@@ -36,15 +44,17 @@ const checkVehicleHasTripHistory = async (vehicleId) => {
 
 /**
  * Check if vehicle has queued trips
- * @param {String} vehicleId - Vehicle ID
+ * @param {String|Object} vehicleSelector - Vehicle ID or query selector
  * @returns {Promise<Number>} Number of queued trips
  */
-const getQueuedTripsCount = async (vehicleId) => {
+const getQueuedTripsCount = async (vehicleSelector) => {
   try {
-    const queuedTripsCount = await Trip.countDocuments({
-      vehicleId,
-      status: 'PLANNED',
-    });
+    const query =
+      vehicleSelector && typeof vehicleSelector === 'object' && !Array.isArray(vehicleSelector)
+        ? { ...vehicleSelector, status: TRIP_STATUS.PLANNED }
+        : { vehicleId: vehicleSelector, status: TRIP_STATUS.PLANNED };
+
+    const queuedTripsCount = await Trip.countDocuments(query);
     return queuedTripsCount;
   } catch (error) {
     console.error('Error checking queued trips:', error);
@@ -144,7 +154,7 @@ const canCreateAsOwn = async (vehicleNumber) => {
     if (existingOwn) {
       return {
         canCreate: false,
-        message: 'Vehicle already exists as OWN. You can add it as HIRED instead.',
+        message: 'Vehicle already exists as OWN.',
         existingVehicle: existingOwn,
       };
     }
@@ -162,46 +172,16 @@ const canCreateAsOwn = async (vehicleNumber) => {
 };
 
 /**
- * Check if vehicle number can be created as HIRED
+ * Hired vehicles are trip-scoped and should not be created in fleet
  * @param {String} vehicleNumber - Vehicle number
  * @param {String} transporterId - Transporter ID
  * @returns {Promise<Object>} Validation result
  */
 const canCreateAsHired = async (vehicleNumber, transporterId) => {
   try {
-    const cleanedNumber = vehicleNumber.trim().toUpperCase();
-
-    // Check if OWN vehicle exists
-    const ownVehicle = await Vehicle.findOne({
-      vehicleNumber: cleanedNumber,
-      ownerType: 'OWN',
-    });
-
-    if (!ownVehicle) {
-      return {
-        canCreate: false,
-        message: 'Cannot add as HIRED. Vehicle must first be registered as OWN by another transporter.',
-      };
-    }
-
-    // Check if transporter already has this as HIRED
-    const existingHired = await Vehicle.findOne({
-      vehicleNumber: cleanedNumber,
-      transporterId: transporterId,
-      ownerType: 'HIRED',
-    });
-
-    if (existingHired) {
-      return {
-        canCreate: false,
-        message: 'You have already added this vehicle as HIRED',
-        existingVehicle: existingHired,
-      };
-    }
-
     return {
-      canCreate: true,
-      originalOwnerId: ownVehicle.transporterId,
+      canCreate: false,
+      message: 'Hired vehicles are one-time only. Assign them directly on the trip instead of creating them in fleet.',
     };
   } catch (error) {
     console.error('Error checking HIRED vehicle:', error);

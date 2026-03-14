@@ -1,5 +1,6 @@
 const Wallet = require('../models/Wallet');
 const WalletTransaction = require('../models/WalletTransaction');
+const { getOrCreateWallet, creditWallet, debitWallet } = require('../services/walletLedger.service');
 
 /**
  * Get wallet balance
@@ -10,18 +11,7 @@ const getBalance = async (req, res, next) => {
     const userType = req.user.userType.toUpperCase();
     const userId = req.user.id;
 
-    let wallet = await Wallet.findOne({ userId, userType });
-
-    // Create wallet if it doesn't exist
-    if (!wallet) {
-      wallet = new Wallet({
-        userId,
-        userType,
-        balance: 0,
-        currency: 'INR',
-      });
-      await wallet.save();
-    }
+    const wallet = await getOrCreateWallet({ userId, userType });
 
     return res.status(200).json({
       success: true,
@@ -58,35 +48,17 @@ const addMoney = async (req, res, next) => {
     const userType = req.user.userType.toUpperCase();
     const userId = req.user.id;
 
-    let wallet = await Wallet.findOne({ userId, userType });
-
-    if (!wallet) {
-      wallet = new Wallet({
-        userId,
-        userType,
-        balance: 0,
-        currency: 'INR',
-      });
-    }
-
-    const balanceBefore = wallet.balance;
-    await wallet.addBalance(amount);
-    const balanceAfter = wallet.balance;
-
-    // Create transaction record
-    const transaction = new WalletTransaction({
-      walletId: wallet._id,
-      type: 'CREDIT',
+    const { wallet, transaction } = await creditWallet({
+      userId,
+      userType,
       amount,
-      balanceBefore,
-      balanceAfter,
       reference: `MANUAL_${Date.now()}`,
       referenceType: 'MANUAL',
-      status: 'COMPLETED',
       description: 'Manual wallet top-up',
+      metadata: {
+        initiatedBy: req.user.id,
+      },
     });
-
-    await transaction.save();
 
     return res.status(200).json({
       success: true,
@@ -222,33 +194,27 @@ const transferToBank = async (req, res, next) => {
       });
     }
 
-    if (!wallet.hasSufficientBalance(amount)) {
-      return res.status(400).json({
+    if (wallet.withdrawalPaused) {
+      return res.status(403).json({
         success: false,
-        message: 'Insufficient balance',
+        message: wallet.withdrawalPauseReason || 'Withdrawals are paused for this wallet',
       });
     }
 
-    const balanceBefore = wallet.balance;
-    await wallet.deductBalance(amount);
-    const balanceAfter = wallet.balance;
-
-    // Create transaction record
-    const transaction = new WalletTransaction({
-      walletId: wallet._id,
-      type: 'TRANSFER',
+    const { wallet: updatedWallet, transaction } = await debitWallet({
+      userId,
+      userType,
       amount,
-      balanceBefore,
-      balanceAfter,
       reference: `BANK_TRANSFER_${Date.now()}`,
       referenceType: 'BANK_TRANSFER',
-      status: 'PENDING', // Will be updated when bank transfer is confirmed
       description: `Transfer to bank account ${bankAccountId}`,
       metadata: {
         bankAccountId,
       },
     });
 
+    transaction.type = 'TRANSFER';
+    transaction.status = 'PENDING';
     await transaction.save();
 
     return res.status(200).json({
@@ -256,8 +222,8 @@ const transferToBank = async (req, res, next) => {
       message: 'Transfer initiated successfully',
       data: {
         wallet: {
-          id: wallet._id,
-          balance: wallet.balance,
+          id: updatedWallet._id,
+          balance: updatedWallet.balance,
         },
         transaction: {
           id: transaction._id,

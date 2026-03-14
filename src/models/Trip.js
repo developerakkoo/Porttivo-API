@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { TRIP_STATUS, TRIP_STATUS_VALUES, BOOKING_STATUS_VALUES } = require('../utils/tripState');
 
 // Milestone Schema
 const milestoneSchema = new mongoose.Schema(
@@ -110,6 +111,129 @@ const locationSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const hiredVehicleSchema = new mongoose.Schema(
+  {
+    vehicleNumber: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+    },
+    trailerType: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+  },
+  { _id: false }
+);
+
+const actorSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    userType: {
+      type: String,
+      enum: ['TRANSPORTER', 'CUSTOMER', 'DRIVER', 'COMPANY_USER', 'ADMIN', 'SYSTEM'],
+      default: null,
+    },
+  },
+  { _id: false }
+);
+
+const shareConfigSchema = new mongoose.Schema(
+  {
+    enabled: {
+      type: Boolean,
+      default: false,
+    },
+    linkType: {
+      type: String,
+      enum: ['TRIP_VISIBILITY', 'ORIGIN_PICKUP'],
+      default: 'TRIP_VISIBILITY',
+    },
+    visibilityMode: {
+      type: String,
+      enum: ['STATUS_ONLY', 'FULL_EXECUTION'],
+      default: 'STATUS_ONLY',
+    },
+    token: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    sharedAt: {
+      type: Date,
+      default: null,
+    },
+    sharedBy: {
+      type: actorSchema,
+      default: () => ({}),
+    },
+  },
+  { _id: false }
+);
+
+const photoRulesSchema = new mongoose.Schema(
+  {
+    containerPickedRequired: {
+      type: Boolean,
+      default: false,
+    },
+    reachedLocationRequired: {
+      type: Boolean,
+      default: false,
+    },
+    loadingUnloadingRequired: {
+      type: Boolean,
+      default: false,
+    },
+    reachedDestinationRequired: {
+      type: Boolean,
+      default: false,
+    },
+    tripCompletedRequired: {
+      type: Boolean,
+      default: false,
+    },
+    podRequiredForBillable: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { _id: false }
+);
+
+const statusHistorySchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: TRIP_STATUS_VALUES,
+      required: true,
+    },
+    changedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    changedBy: {
+      type: actorSchema,
+      default: () => ({}),
+    },
+    note: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+  },
+  { _id: false }
+);
+
 // Trip Schema
 const tripSchema = new mongoose.Schema(
   {
@@ -140,6 +264,10 @@ const tripSchema = new mongoose.Schema(
       ref: 'Vehicle',
       default: null,
       index: true,
+    },
+    hiredVehicle: {
+      type: hiredVehicleSchema,
+      default: null,
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -178,7 +306,7 @@ const tripSchema = new mongoose.Schema(
     },
     bookingStatus: {
       type: String,
-      enum: ['OPEN', 'ACCEPTED', 'ASSIGNED'],
+      enum: BOOKING_STATUS_VALUES,
       default: null,
       index: true,
     },
@@ -212,6 +340,18 @@ const tripSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    customerOwnership: {
+      ownerType: {
+        type: String,
+        enum: ['CUSTOMER_MANAGED', 'TRANSPORTER_MANAGED'],
+        default: 'TRANSPORTER_MANAGED',
+      },
+      payerType: {
+        type: String,
+        enum: ['CUSTOMER', 'TRANSPORTER', 'THIRD_PARTY', 'UNKNOWN'],
+        default: 'UNKNOWN',
+      },
+    },
     scheduledAt: {
       type: Date,
       default: null,
@@ -228,17 +368,77 @@ const tripSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['BOOKED', 'ACCEPTED', 'PLANNED', 'ACTIVE', 'COMPLETED', 'POD_PENDING', 'CANCELLED'],
-      default: 'PLANNED',
+      enum: TRIP_STATUS_VALUES,
+      default: TRIP_STATUS.PLANNED,
       index: true,
+    },
+    closureStatus: {
+      type: String,
+      enum: ['OPEN', 'POD_PENDING', 'CLOSED_WITH_POD', 'CLOSED_WITHOUT_POD', 'CANCELLED'],
+      default: 'OPEN',
+      index: true,
+    },
+    visibilityMode: {
+      type: String,
+      enum: ['FULL_EXECUTION', 'STATUS_ONLY'],
+      default: 'FULL_EXECUTION',
+      index: true,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+    podTimerStartedAt: {
+      type: Date,
+      default: null,
+    },
+    podDueAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    podWindowHours: {
+      type: Number,
+      default: 72,
+      min: 1,
+    },
+    closedAt: {
+      type: Date,
+      default: null,
+    },
+    closedReason: {
+      type: String,
+      trim: true,
+      default: null,
     },
     milestones: {
       type: [milestoneSchema],
       default: [],
     },
+    queueSequence: {
+      type: Number,
+      default: null,
+      min: 1,
+    },
+    queuedAt: {
+      type: Date,
+      default: null,
+    },
+    activatedAt: {
+      type: Date,
+      default: null,
+    },
+    photoRules: {
+      type: photoRulesSchema,
+      default: () => ({}),
+    },
     POD: {
       type: podSchema,
       default: {},
+    },
+    shareConfig: {
+      type: shareConfigSchema,
+      default: () => ({}),
     },
     shareToken: {
       type: String,
@@ -248,6 +448,28 @@ const tripSchema = new mongoose.Schema(
     shareTokenExpiry: {
       type: Date,
       default: null,
+    },
+    audit: {
+      createdBy: {
+        type: actorSchema,
+        default: () => ({}),
+      },
+      updatedBy: {
+        type: actorSchema,
+        default: () => ({}),
+      },
+      acceptedBy: {
+        type: actorSchema,
+        default: () => ({}),
+      },
+      lastStatusChangedAt: {
+        type: Date,
+        default: Date.now,
+      },
+      statusHistory: {
+        type: [statusHistorySchema],
+        default: [],
+      },
     },
   },
   {
@@ -263,9 +485,15 @@ tripSchema.index({ driverId: 1, status: 1 });
 tripSchema.index({ customerId: 1, createdAt: -1 });
 tripSchema.index({ bookedBy: 1, bookingStatus: 1, status: 1 });
 tripSchema.index({ acceptedTransporterId: 1, status: 1 });
+tripSchema.index({ 'hiredVehicle.vehicleNumber': 1, status: 1 });
+tripSchema.index({ visibilityMode: 1, status: 1 });
+tripSchema.index({ closureStatus: 1, status: 1 });
+tripSchema.index({ queueSequence: 1, queuedAt: 1 });
 tripSchema.index({ containerNumber: 1 });
 tripSchema.index({ reference: 1 });
 tripSchema.index({ tripId: 1 });
+tripSchema.index({ 'shareConfig.token': 1 });
+tripSchema.index({ 'audit.lastStatusChangedAt': -1 });
 
 // Virtual for next milestone number
 tripSchema.virtual('nextMilestoneNumber').get(function () {
@@ -294,5 +522,59 @@ tripSchema.methods.getMilestoneTypeByNumber = function (number) {
   const types = ['CONTAINER_PICKED', 'REACHED_LOCATION', 'LOADING_UNLOADING', 'REACHED_DESTINATION', 'TRIP_COMPLETED'];
   return types[number - 1];
 };
+
+tripSchema.pre('save', function () {
+  const now = new Date();
+
+  if (!this.audit?.statusHistory?.length) {
+    this.audit.statusHistory = [
+      {
+        status: this.status,
+        changedAt: now,
+        changedBy: this.audit?.createdBy || {},
+        note: 'Trip created',
+      },
+    ];
+    this.audit.lastStatusChangedAt = now;
+  }
+
+  if (!this.isNew && this.isModified('status')) {
+    this.audit.lastStatusChangedAt = now;
+    this.audit.statusHistory.push({
+      status: this.status,
+      changedAt: now,
+      changedBy: this.audit?.updatedBy || {},
+      note: null,
+    });
+  }
+
+  if (this.status === TRIP_STATUS.PLANNED && !this.queuedAt) {
+    this.queuedAt = now;
+  }
+
+  if (this.status === TRIP_STATUS.ACTIVE && !this.activatedAt) {
+    this.activatedAt = now;
+  }
+
+  if (this.status === TRIP_STATUS.POD_PENDING) {
+    this.closureStatus = 'POD_PENDING';
+    if (!this.podTimerStartedAt) {
+      this.podTimerStartedAt = now;
+    }
+  } else if (this.status === TRIP_STATUS.CLOSED_WITH_POD) {
+    this.closureStatus = 'CLOSED_WITH_POD';
+  } else if (this.status === TRIP_STATUS.CLOSED_WITHOUT_POD) {
+    this.closureStatus = 'CLOSED_WITHOUT_POD';
+  } else if (this.status === TRIP_STATUS.CANCELLED) {
+    this.closureStatus = 'CANCELLED';
+  } else {
+    this.closureStatus = 'OPEN';
+  }
+
+  if (this.shareConfig?.token) {
+    this.shareToken = this.shareConfig.token;
+    this.shareTokenExpiry = this.shareConfig.expiresAt;
+  }
+});
 
 module.exports = mongoose.model('Trip', tripSchema);

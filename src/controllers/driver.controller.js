@@ -1,6 +1,7 @@
 const Driver = require('../models/Driver');
 const Transporter = require('../models/Transporter');
 const Trip = require('../models/Trip');
+const { TRIP_STATUS, DRIVER_HISTORY_STATUSES } = require('../utils/tripState');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 
 /**
@@ -441,7 +442,7 @@ const getActiveTrip = async (req, res, next) => {
     // Find active trip assigned to driver
     const activeTrip = await Trip.findOne({
       driverId,
-      status: 'ACTIVE',
+      status: TRIP_STATUS.ACTIVE,
     })
       .populate('vehicleId', 'vehicleNumber trailerType')
       .populate('transporterId', 'name company')
@@ -494,7 +495,7 @@ const getQueuedTrips = async (req, res, next) => {
     // Find queued trips assigned to driver
     const queuedTrips = await Trip.find({
       driverId,
-      status: 'PLANNED',
+      status: TRIP_STATUS.PLANNED,
     })
       .populate('vehicleId', 'vehicleNumber trailerType')
       .populate('transporterId', 'name company')
@@ -533,7 +534,7 @@ const getTripHistory = async (req, res, next) => {
     // Build query - exclude PLANNED and ACTIVE trips (those are current/queued)
     const query = {
       driverId,
-      status: { $in: ['COMPLETED', 'POD_PENDING', 'CANCELLED'] },
+      status: { $in: DRIVER_HISTORY_STATUSES },
     };
 
     if (status) {

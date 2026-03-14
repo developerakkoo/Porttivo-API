@@ -1,6 +1,7 @@
 const Settlement = require('../models/Settlement');
 const FuelTransaction = require('../models/FuelTransaction');
 const PumpOwner = require('../models/PumpOwner');
+const { logAdminAction } = require('../services/adminAudit.service');
 
 /**
  * List settlements
@@ -147,7 +148,7 @@ const calculateSettlement = async (req, res, next) => {
       });
     }
 
-    const { pumpOwnerId, startDate, endDate, period } = req.body;
+    const { pumpOwnerId, startDate, endDate, period, createSettlement = false } = req.body;
 
     if (!pumpOwnerId || !startDate || !endDate) {
       return res.status(400).json({
@@ -167,7 +168,9 @@ const calculateSettlement = async (req, res, next) => {
     // Get fuel transactions for the period
     const transactions = await FuelTransaction.find({
       pumpOwnerId,
-      status: 'COMPLETED',
+      transactionType: 'PORTTIVO_CARD',
+      status: 'completed',
+      settlementStatus: 'UNSETTLED',
       createdAt: {
         $gte: new Date(startDate),
         $lte: new Date(endDate),
@@ -178,6 +181,40 @@ const calculateSettlement = async (req, res, next) => {
     const commissionRate = pumpOwner.commissionRate || 0;
     const commission = (fuelValue * commissionRate) / 100;
     const netPayable = fuelValue - commission;
+
+    let settlement = null;
+
+    if (createSettlement) {
+      settlement = await Settlement.findOne({
+        pumpOwnerId,
+        startDate: new Date(startDate),
+        endDate: new Date(endDate),
+      });
+
+      if (!settlement) {
+        settlement = await Settlement.create({
+          pumpOwnerId,
+          period: period || `${startDate} to ${endDate}`,
+          startDate: new Date(startDate),
+          endDate: new Date(endDate),
+          fuelValue,
+          commission,
+          commissionRate,
+          netPayable,
+          transactions: transactions.map((transaction) => transaction._id),
+        });
+
+        await FuelTransaction.updateMany(
+          { _id: { $in: transactions.map((transaction) => transaction._id) } },
+          {
+            $set: {
+              settlementStatus: 'INCLUDED',
+              settlementId: settlement._id,
+            },
+          }
+        );
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -194,6 +231,7 @@ const calculateSettlement = async (req, res, next) => {
           commission,
           netPayable,
         },
+        settlement,
       },
     });
   } catch (error) {
@@ -237,6 +275,15 @@ const processSettlement = async (req, res, next) => {
     settlement.processedBy = req.user.id;
 
     await settlement.save();
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'SETTLEMENT_PROCESSING_STARTED',
+      entityType: 'SETTLEMENT',
+      entityId: settlement._id,
+      metadata: {
+        status: settlement.status,
+      },
+    });
 
     return res.status(200).json({
       success: true,
@@ -299,6 +346,25 @@ const completeSettlement = async (req, res, next) => {
     if (notes) settlement.notes = notes;
 
     await settlement.save();
+    await FuelTransaction.updateMany(
+      { _id: { $in: settlement.transactions || [] } },
+      {
+        $set: {
+          settlementStatus: 'SETTLED',
+          settlementId: settlement._id,
+        },
+      }
+    );
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'SETTLEMENT_COMPLETED',
+      entityType: 'SETTLEMENT',
+      entityId: settlement._id,
+      metadata: {
+        utr: settlement.utr,
+        transactionCount: settlement.transactions?.length || 0,
+      },
+    });
 
     return res.status(200).json({
       success: true,

@@ -4,12 +4,26 @@ const {
   getDriverLabel,
   getMilestoneTypeByNumber
 } = require('../utils/milestoneMapping')
-const { getIO } = require('../services/socket.service')
+const { emitTripMilestoneUpdated } = require('../services/socket.service')
 const {
   sendVehicleReachedPickupTemplate,
   sendContainerPickedTemplate
 } = require('../services/wati.service')
 const path = require('path')
+const { TRIP_STATUS } = require('../utils/tripState')
+const { ensureMilestonePhoto, toAuditUserType } = require('../services/tripLifecycle.service')
+
+const getVehicleRoom = trip => {
+  if (trip.vehicleId) {
+    return `vehicle:${trip.vehicleId}`
+  }
+
+  if (trip.hiredVehicle?.vehicleNumber) {
+    return `vehicle:hired:${trip.hiredVehicle.vehicleNumber}`
+  }
+
+  return null
+}
 
 const triggerWatiTemplate = async (handler, contextLabel) => {
   try {
@@ -63,7 +77,7 @@ const updateMilestone = async (req, res, next) => {
     }
 
     // Validate trip is ACTIVE
-    if (trip.status !== 'ACTIVE') {
+    if (trip.status !== TRIP_STATUS.ACTIVE) {
       return res.status(400).json({
         success: false,
         message: `Milestones can only be updated for ACTIVE trips. Current status: ${trip.status}`
@@ -151,6 +165,14 @@ const updateMilestone = async (req, res, next) => {
       photoUrl = `/uploads/milestones/${req.file.filename}`
     }
 
+    const photoValidationError = ensureMilestonePhoto(trip, milestoneType, photoUrl)
+    if (photoValidationError) {
+      return res.status(400).json({
+        success: false,
+        message: photoValidationError
+      })
+    }
+
     // Create milestone object
     const milestone = {
       milestoneType,
@@ -167,6 +189,10 @@ const updateMilestone = async (req, res, next) => {
 
     // Add milestone to trip
     trip.milestones.push(milestone)
+    trip.audit.updatedBy = {
+      userId,
+      userType: toAuditUserType(userType)
+    }
     await trip.save()
 
     // Get current milestone info for next milestone
@@ -181,35 +207,17 @@ const updateMilestone = async (req, res, next) => {
     await trip.populate('transporterId', 'name company mobile')
     await trip.populate('customerId', 'name mobile email isRegistered')
 
-    // Emit Socket.IO event
-    try {
-      const io = getIO()
-      const milestoneData = {
-        trip: trip.toObject(),
-        milestone,
-        currentMilestone: currentMilestone
-          ? {
-              milestoneNumber: currentMilestone.milestoneNumber,
-              milestoneType: currentMilestone.milestoneType,
-              label: milestoneLabel
-            }
-          : null
-      }
-
-      io.to(`transporter:${trip.transporterId}`).emit(
-        'trip:milestone:updated',
-        milestoneData
-      )
-      io.to(`driver:${userId}`).emit('trip:milestone:updated', milestoneData)
-      io.to(`vehicle:${trip.vehicleId}`).emit(
-        'trip:milestone:updated',
-        milestoneData
-      )
-      io.to(`trip:${trip._id}`).emit('trip:milestone:updated', milestoneData)
-    } catch (socketError) {
-      console.error('Error emitting trip:milestone:updated event:', socketError)
-      // Don't fail the request if socket emit fails
-    }
+    emitTripMilestoneUpdated(
+      trip,
+      milestone,
+      currentMilestone
+        ? {
+            milestoneNumber: currentMilestone.milestoneNumber,
+            milestoneType: currentMilestone.milestoneType,
+            label: milestoneLabel
+          }
+        : null
+    )
 
     if (trip.customerId) {
       if (milestoneType === 'REACHED_LOCATION') {
@@ -399,7 +407,18 @@ const getTripTimeline = async (req, res, next) => {
           status: trip.status,
           tripType: trip.tripType,
           containerNumber: trip.containerNumber,
-          reference: trip.reference
+          reference: trip.reference,
+          pod: trip.POD
+            ? {
+                photo: trip.POD.photo,
+                uploadedAt: trip.POD.uploadedAt,
+                approvedAt: trip.POD.approvedAt
+              }
+            : null,
+          completedAt: trip.completedAt || null,
+          podDueAt: trip.podDueAt || null,
+          closedAt: trip.closedAt || null,
+          closedReason: trip.closedReason || null
         },
         timeline
       }

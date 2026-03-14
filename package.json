@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node scripts/test-runner.js",
     "create-pump-owner": "node scripts/create-pump-owner.js"
   },
   "dependencies": {

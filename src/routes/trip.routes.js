@@ -19,9 +19,11 @@ const {
   getAvailableCustomerTrips,
   acceptCustomerTrip,
   rejectCustomerTrip,
+  assignTripVehicle,
+  assignTripDriver,
   assignCustomerTrip,
 } = require('../controllers/trip.controller');
-const { startTrip, completeTrip } = require('../controllers/tripStatus.controller');
+const { startTrip, completeTrip, closeTripWithoutPOD } = require('../controllers/tripStatus.controller');
 const {
   updateMilestone,
   getCurrentMilestone,
@@ -45,6 +47,8 @@ router.get('/customer/my-trips', getCustomerTrips);
 router.get('/customer/available', getAvailableCustomerTrips);
 router.put('/:id/accept', acceptCustomerTrip);
 router.put('/:id/reject', rejectCustomerTrip);
+router.put('/:id/assign-vehicle', assignTripVehicle);
+router.put('/:id/assign-driver', assignTripDriver);
 router.put('/:id/assign', assignCustomerTrip);
 router.post('/', createTrip);
 router.get('/', getTrips);
@@ -59,6 +63,7 @@ router.put('/:id/cancel', cancelTrip);
 // Trip status routes
 router.put('/:id/start', startTrip);
 router.put('/:id/complete', completeTrip);
+router.put('/:id/close-without-pod', closeTripWithoutPOD);
 
 // Milestone routes
 router.post('/:id/milestones/:milestoneNumber', uploadMilestonePhoto, handleMulterError, updateMilestone);

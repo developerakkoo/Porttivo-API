@@ -1,5 +1,6 @@
 const FuelTransaction = require('../models/FuelTransaction');
 const { getFraudStatistics } = require('../services/fraudDetection.service');
+const { logAdminAction } = require('../services/adminAudit.service');
 
 /**
  * Get fraud alerts
@@ -169,6 +170,16 @@ const flagTransaction = async (req, res, next) => {
     }
 
     await transaction.save();
+    await logAdminAction({
+      adminId: adminId,
+      action: 'FRAUD_FLAGGED',
+      entityType: 'FUEL_TRANSACTION',
+      entityId: transaction._id,
+      metadata: {
+        fraudType: fraudType || 'ALL',
+        reason: reason || null,
+      },
+    });
 
     // Populate references
     await transaction.populate('driverId', 'name mobile');
@@ -237,6 +248,16 @@ const resolveFraudAlert = async (req, res, next) => {
     }
 
     await transaction.save();
+    await logAdminAction({
+      adminId: adminId,
+      action: 'FRAUD_RESOLVED',
+      entityType: 'FUEL_TRANSACTION',
+      entityId: transaction._id,
+      metadata: {
+        isFraud,
+        resolution: resolution || null,
+      },
+    });
 
     // Populate references
     await transaction.populate('driverId', 'name mobile');

@@ -104,7 +104,7 @@ const fuelTransactionSchema = new mongoose.Schema(
     pumpOwnerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'PumpOwner',
-      required: [true, 'Pump owner ID is required'],
+      default: null,
       index: true,
     },
     pumpStaffId: {
@@ -126,10 +126,28 @@ const fuelTransactionSchema = new mongoose.Schema(
       required: [true, 'Driver ID is required'],
       index: true,
     },
+    transporterId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Transporter',
+      default: null,
+      index: true,
+    },
+    tripId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Trip',
+      default: null,
+      index: true,
+    },
+    transactionType: {
+      type: String,
+      enum: ['PORTTIVO_CARD', 'CASH_RECEIPT'],
+      default: 'PORTTIVO_CARD',
+      index: true,
+    },
     fuelCardId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'FuelCard',
-      required: [true, 'Fuel card ID is required'],
+      default: null,
       index: true,
     },
     amount: {
@@ -139,13 +157,14 @@ const fuelTransactionSchema = new mongoose.Schema(
     },
     qrCode: {
       type: String,
-      required: true,
+      default: null,
       unique: true,
+      sparse: true,
       index: true,
     },
     qrCodeExpiry: {
       type: Date,
-      required: true,
+      default: null,
       index: true,
     },
     location: {
@@ -158,9 +177,87 @@ const fuelTransactionSchema = new mongoose.Schema(
       default: 'pending',
       index: true,
     },
+    settlementStatus: {
+      type: String,
+      enum: ['NOT_APPLICABLE', 'UNSETTLED', 'INCLUDED', 'SETTLED'],
+      default: 'UNSETTLED',
+      index: true,
+    },
+    settlementId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Settlement',
+      default: null,
+      index: true,
+    },
+    walletTransactionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'WalletTransaction',
+      default: null,
+    },
     receipt: {
       type: receiptSchema,
       default: {},
+    },
+    review: {
+      status: {
+        type: String,
+        enum: ['PENDING', 'APPROVED', 'REJECTED'],
+        default: 'PENDING',
+      },
+      reviewedAt: {
+        type: Date,
+        default: null,
+      },
+      reviewedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null,
+      },
+      notes: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+    },
+    cashback: {
+      eligible: {
+        type: Boolean,
+        default: false,
+      },
+      rate: {
+        type: Number,
+        default: 0,
+      },
+      amount: {
+        type: Number,
+        default: 0,
+      },
+      status: {
+        type: String,
+        enum: ['NOT_APPLICABLE', 'PENDING', 'APPROVED', 'REJECTED', 'CREDITED'],
+        default: 'NOT_APPLICABLE',
+      },
+      reviewedAt: {
+        type: Date,
+        default: null,
+      },
+      reviewedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        default: null,
+      },
+      creditedAt: {
+        type: Date,
+        default: null,
+      },
+      walletTransactionId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'WalletTransaction',
+        default: null,
+      },
+      notes: {
+        type: String,
+        trim: true,
+        default: null,
+      },
     },
     fraudFlags: {
       type: fraudFlagsSchema,
@@ -195,15 +292,22 @@ const fuelTransactionSchema = new mongoose.Schema(
 
 // Indexes
 fuelTransactionSchema.index({ driverId: 1, status: 1 });
+fuelTransactionSchema.index({ transporterId: 1, transactionType: 1, createdAt: -1 });
 fuelTransactionSchema.index({ pumpOwnerId: 1, status: 1 });
 fuelTransactionSchema.index({ fuelCardId: 1 });
 fuelTransactionSchema.index({ vehicleNumber: 1 });
 fuelTransactionSchema.index({ createdAt: -1 });
+fuelTransactionSchema.index({ transactionType: 1, 'review.status': 1 });
+fuelTransactionSchema.index({ settlementStatus: 1, settlementId: 1 });
 fuelTransactionSchema.index({ 'fraudFlags.resolved': 1, 'fraudFlags.duplicateReceipt': 1 });
 fuelTransactionSchema.index({ 'fraudFlags.resolved': 1, 'fraudFlags.gpsMismatch': 1 });
 
 // Method to check if QR code is expired
 fuelTransactionSchema.methods.isQRExpired = function () {
+  if (!this.qrCodeExpiry) {
+    return false;
+  }
+
   return this.qrCodeExpiry < new Date();
 };
 

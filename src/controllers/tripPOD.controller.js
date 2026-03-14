@@ -1,5 +1,25 @@
 const Trip = require('../models/Trip');
 const path = require('path');
+const { TRIP_STATUS } = require('../utils/tripState');
+const {
+  emitTripPodUploaded,
+  emitTripClosedWithPOD,
+  emitTripAutoActivated,
+} = require('../services/socket.service');
+const { activateNextTrip } = require('../services/tripQueue.service');
+const { autoCloseTripIfExpired, toAuditUserType } = require('../services/tripLifecycle.service');
+
+const getVehicleRoom = (trip) => {
+  if (trip.vehicleId) {
+    return `vehicle:${trip.vehicleId}`;
+  }
+
+  if (trip.hiredVehicle?.vehicleNumber) {
+    return `vehicle:hired:${trip.hiredVehicle.vehicleNumber}`;
+  }
+
+  return null;
+};
 
 /**
  * Upload POD
@@ -20,34 +40,38 @@ const uploadPOD = async (req, res, next) => {
       });
     }
 
-    // Check access - drivers can upload POD for their assigned trips
-    if (userType === 'driver') {
-      if (!trip.driverId || trip.driverId.toString() !== userId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. This trip is not assigned to you.',
-        });
-      }
-    } else if (userType === 'transporter') {
-      // Transporters can also upload POD for their trips
-      if (trip.transporterId.toString() !== userId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. You do not have permission to upload POD for this trip.',
-        });
-      }
-    } else {
+    // POD upload is driver-only.
+    if (userType !== 'driver') {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Only drivers and transporters can upload POD.',
+        message: 'Access denied. Only drivers can upload POD.',
       });
     }
 
-    // Validate trip status - POD can be uploaded for COMPLETED trips
-    if (trip.status !== 'COMPLETED') {
+    const { autoClosed } = await autoCloseTripIfExpired(trip, {
+      userId,
+      userType,
+    });
+    if (autoClosed) {
       return res.status(400).json({
         success: false,
-        message: `POD can only be uploaded for COMPLETED trips. Current status: ${trip.status}`,
+        message: 'POD upload window has expired. The trip was auto-closed without POD.',
+        data: trip,
+      });
+    }
+
+    if (!trip.driverId || trip.driverId.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. This trip is not assigned to you.',
+      });
+    }
+
+    // Validate trip status - POD can be uploaded only while POD is pending
+    if (trip.status !== TRIP_STATUS.POD_PENDING) {
+      return res.status(400).json({
+        success: false,
+        message: `POD can only be uploaded when status is POD_PENDING. Current status: ${trip.status}`,
       });
     }
 
@@ -66,19 +90,24 @@ const uploadPOD = async (req, res, next) => {
     trip.POD = {
       photo: photoUrl,
       uploadedAt: new Date(),
-      uploadedBy: userType === 'driver' ? userId : null,
+      uploadedBy: userId,
       approvedAt: null,
       approvedBy: null,
     };
+    trip.audit.updatedBy = {
+      userId,
+      userType: toAuditUserType(userType),
+    };
 
-    // Update trip status to POD_PENDING
-    trip.status = 'POD_PENDING';
     await trip.save();
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
     await trip.populate('transporterId', 'name company');
+    await trip.populate('customerId', 'name mobile');
+
+    emitTripPodUploaded(trip);
 
     res.json({
       success: true,
@@ -116,6 +145,18 @@ const approvePOD = async (req, res, next) => {
       });
     }
 
+    const { autoClosed } = await autoCloseTripIfExpired(trip, {
+      userId: transporterId,
+      userType: req.user.userType,
+    });
+    if (autoClosed) {
+      return res.status(400).json({
+        success: false,
+        message: 'POD approval window has expired. The trip was auto-closed without POD.',
+        data: trip,
+      });
+    }
+
     // Check access
     if (trip.transporterId.toString() !== transporterId) {
       return res.status(403).json({
@@ -125,7 +166,7 @@ const approvePOD = async (req, res, next) => {
     }
 
     // Validate trip status
-    if (trip.status !== 'POD_PENDING') {
+    if (trip.status !== TRIP_STATUS.POD_PENDING) {
       return res.status(400).json({
         success: false,
         message: `POD can only be approved when status is POD_PENDING. Current status: ${trip.status}`,
@@ -144,14 +185,32 @@ const approvePOD = async (req, res, next) => {
     trip.POD.approvedAt = new Date();
     trip.POD.approvedBy = transporterId;
 
-    // Update trip status to COMPLETED
-    trip.status = 'COMPLETED';
+    // Update trip status to final closed state
+    trip.status = TRIP_STATUS.CLOSED_WITH_POD;
+    trip.closedAt = new Date();
+    trip.closedReason = 'POD_APPROVED';
+    trip.audit.updatedBy = {
+      userId: transporterId,
+      userType: toAuditUserType(req.user.userType),
+    };
     await trip.save();
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
     await trip.populate('transporterId', 'name company');
+    await trip.populate('customerId', 'name mobile');
+
+    emitTripClosedWithPOD(trip);
+
+    try {
+      const nextTrip = await activateNextTrip(trip);
+      if (nextTrip) {
+        emitTripAutoActivated(nextTrip);
+      }
+    } catch (queueError) {
+      console.error('Error in auto-queue after POD approval:', queueError);
+    }
 
     res.json({
       success: true,

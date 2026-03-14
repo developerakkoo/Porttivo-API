@@ -5,6 +5,20 @@ const Vehicle = require('../models/Vehicle');
 const { generateQRCode, validateQRCode, generateTransactionId } = require('../services/qrCode.service');
 const { runFraudChecks } = require('../services/fraudDetection.service');
 const { upload } = require('../middleware/upload.middleware');
+const { getOrCreateWallet, debitWallet, creditWallet } = require('../services/walletLedger.service');
+
+const DEFAULT_CASHBACK_RATE = 2;
+
+const roundCurrency = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
+const ensureFuelAccessForTransporter = async (transaction, transporterId) => {
+  if (transaction.transporterId?.toString() === transporterId) {
+    return true;
+  }
+
+  const driver = await Driver.findById(transaction.driverId).select('transporterId');
+  return driver?.transporterId?.toString() === transporterId;
+};
 
 /**
  * Generate QR code for fuel transaction
@@ -51,13 +65,18 @@ const generateQR = async (req, res, next) => {
       });
     }
 
-    // Check card balance
-    if (fuelCard.balance < amount) {
+    const transporterWallet = await getOrCreateWallet({
+      userId: fuelCard.transporterId,
+      userType: 'TRANSPORTER',
+    });
+
+    // Check transporter wallet balance
+    if (transporterWallet.balance < amount) {
       return res.status(400).json({
         success: false,
-        message: 'Insufficient card balance',
+        message: 'Insufficient transporter wallet balance',
         data: {
-          balance: fuelCard.balance,
+          balance: transporterWallet.balance,
           required: amount,
         },
       });
@@ -75,6 +94,8 @@ const generateQR = async (req, res, next) => {
     const transaction = new FuelTransaction({
       transactionId,
       driverId,
+      transporterId: fuelCard.transporterId,
+      transactionType: 'PORTTIVO_CARD',
       fuelCardId: fuelCard._id,
       vehicleNumber: vehicleNumber.toUpperCase(),
       amount,
@@ -85,6 +106,7 @@ const generateQR = async (req, res, next) => {
         address: req.body.address || null,
       },
       status: 'pending',
+      settlementStatus: 'UNSETTLED',
       qrCodeExpiry: new Date(Date.now() + 60 * 60 * 1000), // 1 hour expiry
     });
 
@@ -261,14 +283,18 @@ const confirmTransaction = async (req, res, next) => {
 
     // Update amount if different
     if (amount !== transaction.amount) {
-      // Check card balance again
       const fuelCard = await FuelCard.findById(transaction.fuelCardId);
-      if (fuelCard.balance < amount) {
+      const transporterWallet = await getOrCreateWallet({
+        userId: fuelCard.transporterId,
+        userType: 'TRANSPORTER',
+      });
+
+      if (transporterWallet.balance < amount) {
         return res.status(400).json({
           success: false,
-          message: 'Insufficient card balance',
+          message: 'Insufficient transporter wallet balance',
           data: {
-            balance: fuelCard.balance,
+            balance: transporterWallet.balance,
             required: amount,
           },
         });
@@ -445,16 +471,35 @@ const submitTransaction = async (req, res, next) => {
     transaction.status = 'completed';
     transaction.completedAt = new Date();
 
-    // Deduct from fuel card balance
     const fuelCard = await FuelCard.findById(transaction.fuelCardId);
-    if (fuelCard.balance < amount) {
+    const transporterWallet = await getOrCreateWallet({
+      userId: fuelCard.transporterId,
+      userType: 'TRANSPORTER',
+    });
+
+    if (transporterWallet.balance < amount) {
       return res.status(400).json({
         success: false,
-        message: 'Insufficient card balance',
+        message: 'Insufficient transporter wallet balance',
       });
     }
 
-    fuelCard.balance -= amount;
+    const { wallet, transaction: walletTransaction } = await debitWallet({
+      userId: fuelCard.transporterId,
+      userType: 'TRANSPORTER',
+      amount,
+      reference: transaction.transactionId,
+      referenceType: 'FUEL',
+      description: `Fuel card purchase for ${transaction.vehicleNumber}`,
+      metadata: {
+        fuelTransactionId: transaction._id,
+        fuelCardId: fuelCard._id,
+        driverId: transaction.driverId,
+        pumpOwnerId,
+      },
+    });
+
+    fuelCard.balance = wallet.balance;
     fuelCard.lastUsedAt = new Date();
     await fuelCard.save();
 
@@ -462,10 +507,13 @@ const submitTransaction = async (req, res, next) => {
     const pumpLocation = { latitude, longitude };
     const fraudFlags = await runFraudChecks(transaction, pumpLocation);
     transaction.fraudFlags = fraudFlags;
+    transaction.transporterId = fuelCard.transporterId;
+    transaction.walletTransactionId = walletTransaction._id;
 
     // If fraud detected, set status to flagged
     if (transaction.hasFraudFlags()) {
       transaction.status = 'flagged';
+      transaction.settlementStatus = 'UNSETTLED';
     }
 
     await transaction.save();
@@ -501,7 +549,7 @@ const getTransactions = async (req, res, next) => {
   try {
     const userType = req.user.userType;
     const userId = req.user.id;
-    const { status, driverId, pumpOwnerId, vehicleNumber, startDate, endDate, page = 1, limit = 20 } = req.query;
+    const { status, driverId, pumpOwnerId, vehicleNumber, transactionType, reviewStatus, startDate, endDate, page = 1, limit = 20 } = req.query;
 
     // Build query based on user type
     let query = {};
@@ -509,10 +557,7 @@ const getTransactions = async (req, res, next) => {
     if (userType === 'driver') {
       query.driverId = userId;
     } else if (userType === 'transporter') {
-      // Get driver IDs for this transporter
-      const drivers = await Driver.find({ transporterId: userId }).select('_id');
-      const driverIds = drivers.map((d) => d._id);
-      query.driverId = { $in: driverIds };
+      query.transporterId = userId;
     } else if (userType === 'pump_owner') {
       query.pumpOwnerId = userId;
     } else if (userType === 'pump_staff') {
@@ -531,6 +576,12 @@ const getTransactions = async (req, res, next) => {
     }
     if (vehicleNumber) {
       query.vehicleNumber = vehicleNumber.toUpperCase();
+    }
+    if (transactionType) {
+      query.transactionType = transactionType;
+    }
+    if (reviewStatus) {
+      query['review.status'] = reviewStatus;
     }
     if (startDate || endDate) {
       query.createdAt = {};
@@ -605,8 +656,8 @@ const getTransactionById = async (req, res, next) => {
         });
       }
     } else if (userType === 'transporter') {
-      const driver = await Driver.findById(transaction.driverId);
-      if (driver.transporterId?.toString() !== userId) {
+      const hasAccess = await ensureFuelAccessForTransporter(transaction, userId);
+      if (!hasAccess) {
         return res.status(403).json({
           success: false,
           message: 'Access denied.',
@@ -782,6 +833,232 @@ const getReceipt = async (req, res, next) => {
   }
 };
 
+/**
+ * Submit cash fuel receipt
+ * POST /api/fuel/cash-receipts
+ */
+const submitCashReceipt = async (req, res, next) => {
+  try {
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only drivers can submit cash fuel receipts.',
+      });
+    }
+
+    const { amount, vehicleNumber, latitude, longitude, address, notes, pumpOwnerId, tripId } = req.body;
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Receipt photo is required',
+      });
+    }
+
+    if (!amount || amount <= 0 || !vehicleNumber || latitude === undefined || longitude === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount, vehicle number, and GPS location are required',
+      });
+    }
+
+    const driver = await Driver.findById(req.user.id).select('transporterId');
+    if (!driver) {
+      return res.status(404).json({
+        success: false,
+        message: 'Driver not found',
+      });
+    }
+
+    const cashbackAmount = roundCurrency((Number(amount) * DEFAULT_CASHBACK_RATE) / 100);
+    const receiptPhoto = `/uploads/receipts/${req.file.filename}`;
+
+    const transaction = await FuelTransaction.create({
+      transactionId: generateTransactionId(),
+      transactionType: 'CASH_RECEIPT',
+      status: 'completed',
+      settlementStatus: 'NOT_APPLICABLE',
+      driverId: req.user.id,
+      transporterId: driver.transporterId || null,
+      tripId: tripId || null,
+      pumpOwnerId: pumpOwnerId || null,
+      vehicleNumber: vehicleNumber.toUpperCase(),
+      amount,
+      qrCode: null,
+      qrCodeExpiry: null,
+      location: {
+        latitude,
+        longitude,
+        address: address || null,
+        accuracy: req.body.accuracy || null,
+      },
+      receipt: {
+        photo: receiptPhoto,
+        uploadedAt: new Date(),
+        uploadedBy: req.user.id,
+      },
+      notes: notes?.trim() || null,
+      review: {
+        status: 'PENDING',
+      },
+      cashback: {
+        eligible: true,
+        rate: DEFAULT_CASHBACK_RATE,
+        amount: cashbackAmount,
+        status: 'PENDING',
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Cash fuel receipt submitted for review',
+      data: transaction,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * List cash fuel receipts
+ * GET /api/fuel/cash-receipts
+ */
+const listCashReceipts = async (req, res, next) => {
+  try {
+    const { reviewStatus, page = 1, limit = 20 } = req.query;
+    const query = { transactionType: 'CASH_RECEIPT' };
+
+    if (req.user.userType === 'driver') {
+      query.driverId = req.user.id;
+    } else if (req.user.userType === 'transporter') {
+      query.transporterId = req.user.id;
+    } else if (req.user.userType !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied.',
+      });
+    }
+
+    if (reviewStatus) {
+      query['review.status'] = reviewStatus;
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const receipts = await FuelTransaction.find(query)
+      .populate('driverId', 'name mobile')
+      .populate('transporterId', 'name company mobile')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    const total = await FuelTransaction.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: receipts,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Review cash fuel receipt
+ * PUT /api/fuel/cash-receipts/:id/review
+ */
+const reviewCashReceipt = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { action, notes, creditCashback = true } = req.body;
+
+    if (!['admin', 'transporter'].includes(req.user.userType)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied.',
+      });
+    }
+
+    if (!['APPROVE', 'REJECT'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Action must be APPROVE or REJECT',
+      });
+    }
+
+    const transaction = await FuelTransaction.findById(id);
+    if (!transaction || transaction.transactionType !== 'CASH_RECEIPT') {
+      return res.status(404).json({
+        success: false,
+        message: 'Cash receipt not found',
+      });
+    }
+
+    if (req.user.userType === 'transporter') {
+      const hasAccess = await ensureFuelAccessForTransporter(transaction, req.user.id);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied.',
+        });
+      }
+    }
+
+    transaction.review.status = action === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+    transaction.review.reviewedAt = new Date();
+    transaction.review.reviewedBy = req.user.id;
+    transaction.review.notes = notes?.trim() || null;
+    transaction.cashback.reviewedAt = new Date();
+    transaction.cashback.reviewedBy = req.user.id;
+    transaction.cashback.notes = notes?.trim() || null;
+
+    if (action === 'REJECT') {
+      transaction.cashback.status = 'REJECTED';
+      await transaction.save();
+    } else {
+      transaction.cashback.status = creditCashback ? 'CREDITED' : 'APPROVED';
+
+      if (creditCashback) {
+        const { transaction: cashbackWalletTx } = await creditWallet({
+          userId: transaction.driverId,
+          userType: 'DRIVER',
+          amount: transaction.cashback.amount,
+          reference: transaction.transactionId,
+          referenceType: 'FUEL',
+          description: `Cash fuel receipt cashback for ${transaction.vehicleNumber}`,
+          metadata: {
+            fuelTransactionId: transaction._id,
+          },
+        });
+
+        transaction.cashback.walletTransactionId = cashbackWalletTx._id;
+        transaction.cashback.creditedAt = new Date();
+      }
+
+      await transaction.save();
+    }
+
+    await transaction.populate('driverId', 'name mobile');
+    await transaction.populate('transporterId', 'name company mobile');
+
+    res.json({
+      success: true,
+      message: `Cash fuel receipt ${action === 'APPROVE' ? 'approved' : 'rejected'} successfully`,
+      data: transaction,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   generateQR,
   validateQR,
@@ -793,4 +1070,7 @@ module.exports = {
   getTransactionById,
   uploadReceipt,
   getReceipt,
+  submitCashReceipt,
+  listCashReceipts,
+  reviewCashReceipt,
 };

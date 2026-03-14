@@ -1,12 +1,6 @@
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
-const {
-  checkVehicleHasActiveTrip,
-  checkVehicleHasTripHistory,
-  getVehicleAvailabilityState,
-  canCreateAsOwn,
-  canCreateAsHired,
-} = require('../utils/vehicleValidation');
+const { checkVehicleHasTripHistory } = require('../utils/vehicleValidation');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 
 /**
@@ -45,24 +39,19 @@ const getVehicles = async (req, res, next) => {
       }
       // Otherwise, no filter - show all vehicles
     } else {
-      // Show OWN vehicles owned by transporter OR HIRED vehicles where transporter is in hiredBy array
-      query.$or = [
-        { transporterId: transporterId }, // OWN vehicles or HIRED vehicles added by this transporter
-        { hiredBy: transporterId }, // HIRED vehicles where this transporter is in hiredBy array
-      ];
+      query.transporterId = transporterId;
     }
 
     if (status) query.status = status;
     if (ownerType) {
-      // If filtering by ownerType, need to adjust query
-      if (ownerType === 'OWN') {
-        query.$or = [{ transporterId: transporterId, ownerType: 'OWN' }];
-      } else if (ownerType === 'HIRED') {
-        query.$or = [
-          { transporterId: transporterId, ownerType: 'HIRED' },
-          { hiredBy: transporterId },
-        ];
+      if (!['OWN', 'HIRED'].includes(ownerType)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid owner type. Must be OWN or HIRED',
+        });
       }
+
+      query.ownerType = ownerType;
     }
     if (driverId) query.driverId = driverId;
 
@@ -102,11 +91,6 @@ const getVehicles = async (req, res, next) => {
           status: vehicle.status,
           trailerType: vehicle.trailerType,
           documents: vehicle.documents,
-          hiredBy: vehicle.hiredBy
-            ? vehicle.hiredBy.map((id) =>
-                typeof id === 'object' && id._id ? id._id.toString() : id.toString()
-              )
-            : [],
           createdAt: vehicle.createdAt,
           updatedAt: vehicle.updatedAt,
         })),
@@ -153,12 +137,17 @@ const createVehicle = async (req, res, next) => {
 
     const cleanedVehicleNumber = vehicleNumber.trim().toUpperCase();
     const finalOwnerType = ownerType || 'OWN';
-
-    // Validate ownerType
-    if (ownerType && !['OWN', 'HIRED'].includes(ownerType)) {
+    if (!['OWN', 'HIRED'].includes(finalOwnerType)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid owner type. Must be OWN or HIRED',
+      });
+    }
+
+    if (finalOwnerType === 'HIRED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Hired vehicles are one-time only. Do not create them in fleet; assign them directly on the trip.',
       });
     }
 
@@ -173,35 +162,6 @@ const createVehicle = async (req, res, next) => {
         return res.status(400).json({
           success: false,
           message: 'Vehicle with this number already exists as OWN. You can add it as HIRED instead.',
-        });
-      }
-    }
-
-    // For HIRED vehicles, check if transporter already has this vehicle
-    if (finalOwnerType === 'HIRED') {
-      const existingHiredVehicle = await Vehicle.findOne({
-        vehicleNumber: cleanedVehicleNumber,
-        transporterId: transporterId,
-        ownerType: 'HIRED',
-      });
-
-      if (existingHiredVehicle) {
-        return res.status(400).json({
-          success: false,
-          message: 'You have already added this vehicle as HIRED',
-        });
-      }
-
-      // Check if OWN vehicle exists (required for HIRED)
-      const ownVehicle = await Vehicle.findOne({
-        vehicleNumber: cleanedVehicleNumber,
-        ownerType: 'OWN',
-      });
-
-      if (!ownVehicle) {
-        return res.status(400).json({
-          success: false,
-          message: 'Cannot add vehicle as HIRED. Vehicle must first be registered as OWN by another transporter.',
         });
       }
     }
@@ -222,40 +182,16 @@ const createVehicle = async (req, res, next) => {
       }
     }
 
-    // Get original owner ID if HIRED
-    let originalOwnerId = null;
-    if (finalOwnerType === 'HIRED') {
-      const ownVehicle = await Vehicle.findOne({
-        vehicleNumber: cleanedVehicleNumber,
-        ownerType: 'OWN',
-      });
-      originalOwnerId = ownVehicle.transporterId;
-    }
-
     // Create vehicle
     const vehicle = await Vehicle.create({
       vehicleNumber: cleanedVehicleNumber,
       transporterId: transporterId,
       ownerType: finalOwnerType,
-      originalOwnerId: originalOwnerId || (finalOwnerType === 'OWN' ? req.user.id : null),
+      originalOwnerId: req.user.id,
       driverId: driverId || null,
       trailerType: trailerType?.trim() || null,
       status: 'active',
     });
-
-    // If HIRED, add transporter to original owner's hiredBy array (if original owner's vehicle exists)
-    if (finalOwnerType === 'HIRED' && originalOwnerId) {
-      await Vehicle.updateMany(
-        {
-          vehicleNumber: cleanedVehicleNumber,
-          ownerType: 'OWN',
-          transporterId: originalOwnerId,
-        },
-        {
-          $addToSet: { hiredBy: req.user.id },
-        }
-      );
-    }
 
     // Populate driver info
     await vehicle.populate('driverId', 'name mobile status');
@@ -290,11 +226,6 @@ const createVehicle = async (req, res, next) => {
           status: vehicle.status,
           trailerType: vehicle.trailerType,
           documents: vehicle.documents,
-          hiredBy: vehicle.hiredBy
-            ? vehicle.hiredBy.map((id) =>
-                typeof id === 'object' && id._id ? id._id.toString() : id.toString()
-              )
-            : [],
           createdAt: vehicle.createdAt,
           updatedAt: vehicle.updatedAt,
         },
@@ -325,11 +256,7 @@ const getVehicleById = async (req, res, next) => {
     // Admins can see all vehicles, transporters can see their own
     if (req.user.userType !== 'admin') {
       if (req.user.userType === 'transporter') {
-        const hasAccess =
-          vehicle.transporterId.toString() === req.user.id ||
-          (vehicle.hiredBy && vehicle.hiredBy.some((id) => id.toString() === req.user.id));
-
-        if (!hasAccess) {
+        if (vehicle.transporterId.toString() !== req.user.id) {
           return res.status(403).json({
             success: false,
             message: 'Access denied. You do not have access to this vehicle.',
@@ -368,11 +295,6 @@ const getVehicleById = async (req, res, next) => {
           status: vehicle.status,
           trailerType: vehicle.trailerType,
           documents: vehicle.documents,
-          hiredBy: vehicle.hiredBy
-            ? vehicle.hiredBy.map((id) =>
-                typeof id === 'object' && id._id ? id._id.toString() : id.toString()
-              )
-            : [],
           createdAt: vehicle.createdAt,
           updatedAt: vehicle.updatedAt,
         },
@@ -468,6 +390,13 @@ const updateVehicle = async (req, res, next) => {
         return res.status(400).json({
           success: false,
           message: 'Invalid owner type. Must be OWN or HIRED',
+        });
+      }
+
+      if (ownerType === 'HIRED') {
+        return res.status(400).json({
+          success: false,
+          message: 'Fleet vehicles cannot be changed to HIRED. Hired vehicles are trip-scoped only.',
         });
       }
 
@@ -570,33 +499,6 @@ const deleteVehicle = async (req, res, next) => {
       });
     }
 
-    // If deleting OWN vehicle, remove from hiredBy arrays of all HIRED entries
-    if (vehicle.ownerType === 'OWN') {
-      await Vehicle.updateMany(
-        {
-          vehicleNumber: vehicle.vehicleNumber,
-          ownerType: 'HIRED',
-        },
-        {
-          $pull: { hiredBy: vehicle.transporterId },
-        }
-      );
-    }
-
-    // If deleting HIRED vehicle, remove from original owner's hiredBy array
-    if (vehicle.ownerType === 'HIRED' && vehicle.originalOwnerId) {
-      await Vehicle.updateMany(
-        {
-          vehicleNumber: vehicle.vehicleNumber,
-          ownerType: 'OWN',
-          transporterId: vehicle.originalOwnerId,
-        },
-        {
-          $pull: { hiredBy: vehicle.transporterId },
-        }
-      );
-    }
-
     // Delete vehicle
     await Vehicle.findByIdAndDelete(id);
 
@@ -626,7 +528,7 @@ const getVehicleTrips = async (req, res, next) => {
       });
     }
 
-    // Check access (for transporters and company users) - OWN or in hiredBy array
+    // Check access (for transporters and company users)
     if (transporterId) {
       // Check permission for company users
       if (req.user.userType === 'company-user' && !hasPermission(req.user, 'viewTrips')) {
@@ -636,11 +538,7 @@ const getVehicleTrips = async (req, res, next) => {
         });
       }
 
-      const hasAccess =
-        vehicle.transporterId.toString() === transporterId ||
-        (vehicle.hiredBy && vehicle.hiredBy.some((tid) => tid.toString() === transporterId));
-
-      if (!hasAccess) {
+      if (vehicle.transporterId.toString() !== transporterId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You do not have access to this vehicle.',
