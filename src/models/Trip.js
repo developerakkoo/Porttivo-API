@@ -234,6 +234,28 @@ const statusHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const assignmentSchema = new mongoose.Schema(
+  {
+    containerNumber: {
+      type: String,
+      required: true,
+      trim: true,
+      uppercase: true,
+    },
+    vehicleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Vehicle',
+      required: true,
+    },
+    driverId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Driver',
+      required: true,
+    },
+  },
+  { _id: false }
+);
+
 // Trip Schema
 const tripSchema = new mongoose.Schema(
   {
@@ -274,6 +296,10 @@ const tripSchema = new mongoose.Schema(
       ref: 'Driver',
       default: null,
       index: true,
+    },
+    assignments: {
+      type: [assignmentSchema],
+      default: [],
     },
     containerNumber: {
       type: String,
@@ -425,6 +451,10 @@ const tripSchema = new mongoose.Schema(
       default: null,
     },
     activatedAt: {
+      type: Date,
+      default: null,
+    },
+    driverAcceptedAt: {
       type: Date,
       default: null,
     },

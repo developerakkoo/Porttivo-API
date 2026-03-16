@@ -42,6 +42,14 @@ const driverSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    appInstalled: {
+      type: Boolean,
+      default: false,
+    },
+    lastSeen: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

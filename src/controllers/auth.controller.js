@@ -94,18 +94,21 @@ const sendOTP = async (req, res, next) => {
           },
         });
       } else if (normalizedUserType === 'driver') {
-        // Find or create driver
-        let driver = await Driver.findOne({ mobile: cleanedMobile });
+        // Find driver - must be created by transporter (no auto-create)
+        const driver = await Driver.findOne({ mobile: cleanedMobile });
 
         if (!driver) {
-          // Auto-create driver with pending status
-          driver = await Driver.create({
-            mobile: cleanedMobile,
-            name: '', // Will be updated later
-            status: 'pending',
-            riskLevel: 'low',
-            language: 'en',
-            walletBalance: 0,
+          return res.status(404).json({
+            success: false,
+            message: 'You are not linked to any transporter yet.',
+          });
+        }
+
+        // Check if driver is linked to a transporter
+        if (!driver.transporterId) {
+          return res.status(404).json({
+            success: false,
+            message: 'You are not linked to any transporter yet.',
           });
         }
 
@@ -115,6 +118,17 @@ const sendOTP = async (req, res, next) => {
             success: false,
             message: 'Your account has been blocked. Please contact support.',
           });
+        }
+
+        // On first app install: update pending -> active
+        if (driver.status === 'pending') {
+          driver.status = 'active';
+          driver.appInstalled = true;
+          driver.lastSeen = new Date();
+          await driver.save();
+        } else {
+          driver.lastSeen = new Date();
+          await driver.save({ validateBeforeSave: false });
         }
 
         // Generate tokens

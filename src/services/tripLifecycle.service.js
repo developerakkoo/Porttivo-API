@@ -27,7 +27,10 @@ const toAuditUserType = (userType) => {
 
 const isMilestonePhotoRequired = (trip, milestoneType) => {
   const ruleKey = PHOTO_RULE_BY_MILESTONE[milestoneType];
-  return Boolean(ruleKey && trip?.photoRules?.[ruleKey]);
+  if (!ruleKey) return false;
+  // Per spec: require photo for all milestones; config can explicitly disable
+  if (trip?.photoRules?.[ruleKey] === false) return false;
+  return true;
 };
 
 const ensureMilestonePhoto = (trip, milestoneType, photo) => {

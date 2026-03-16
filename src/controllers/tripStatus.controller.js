@@ -64,6 +64,69 @@ const triggerWatiTemplate = async (handler, contextLabel) => {
 };
 
 /**
+ * Driver accepts trip (required before starting)
+ * PUT /api/trips/:id/accept-driver
+ */
+const acceptTripByDriver = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    if (req.user.userType !== 'driver') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only drivers can accept trips.',
+      });
+    }
+
+    const trip = await Trip.findById(id);
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found',
+      });
+    }
+
+    if (!trip.driverId || trip.driverId.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. This trip is not assigned to you.',
+      });
+    }
+
+    if (trip.status !== TRIP_STATUS.PLANNED) {
+      return res.status(400).json({
+        success: false,
+        message: `Trip cannot be accepted. Current status: ${trip.status}`,
+      });
+    }
+
+    if (trip.driverAcceptedAt) {
+      return res.status(200).json({
+        success: true,
+        message: 'Trip already accepted',
+        data: trip,
+      });
+    }
+
+    trip.driverAcceptedAt = new Date();
+    trip.audit.updatedBy = {
+      userId,
+      userType: toAuditUserType('driver'),
+    };
+    await trip.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Trip accepted successfully. You can now start the trip.',
+      data: trip,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Start trip
  * PUT /api/trips/:id/start
  */
@@ -97,6 +160,13 @@ const startTrip = async (req, res, next) => {
         return res.status(403).json({
           success: false,
           message: 'Access denied. This trip is not assigned to you.',
+        });
+      }
+      // Driver must accept trip before starting
+      if (!trip.driverAcceptedAt) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please accept the trip before starting.',
         });
       }
     } else {
@@ -414,6 +484,7 @@ const closeTripWithoutPOD = async (req, res, next) => {
 };
 
 module.exports = {
+  acceptTripByDriver,
   startTrip,
   completeTrip,
   closeTripWithoutPOD,

@@ -261,9 +261,15 @@ const createDriver = async (req, res, next) => {
       });
     }
 
-    // Check if driver already exists
+    // Check if driver already exists and is linked to another transporter
     const existingDriver = await Driver.findOne({ mobile: cleanedMobile });
     if (existingDriver) {
+      if (existingDriver.transporterId && existingDriver.transporterId.toString() !== transporterId) {
+        return res.status(409).json({
+          success: false,
+          message: 'This mobile number is already linked to another transporter.',
+        });
+      }
       return res.status(409).json({
         success: false,
         message: 'Driver with this mobile number already exists',

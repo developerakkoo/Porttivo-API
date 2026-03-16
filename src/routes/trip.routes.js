@@ -23,7 +23,7 @@ const {
   assignTripDriver,
   assignCustomerTrip,
 } = require('../controllers/trip.controller');
-const { startTrip, completeTrip, closeTripWithoutPOD } = require('../controllers/tripStatus.controller');
+const { acceptTripByDriver, startTrip, completeTrip, closeTripWithoutPOD } = require('../controllers/tripStatus.controller');
 const {
   updateMilestone,
   getCurrentMilestone,
@@ -61,6 +61,7 @@ router.put('/:id', updateTrip);
 router.put('/:id/cancel', cancelTrip);
 
 // Trip status routes
+router.put('/:id/accept-driver', acceptTripByDriver);
 router.put('/:id/start', startTrip);
 router.put('/:id/complete', completeTrip);
 router.put('/:id/close-without-pod', closeTripWithoutPOD);

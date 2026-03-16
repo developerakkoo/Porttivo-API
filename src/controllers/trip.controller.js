@@ -211,6 +211,10 @@ const populateTripReferences = async (trip) => {
   await trip.populate('transporterId', 'name company mobile');
   await trip.populate('customerId', 'name mobile email isRegistered');
   await trip.populate('acceptedTransporterId', 'name company mobile');
+  if (trip.assignments?.length) {
+    await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
+    await trip.populate('assignments.driverId', 'name mobile');
+  }
   return trip;
 };
 
@@ -322,7 +326,7 @@ const createTrip = async (req, res, next) => {
         message: 'Access denied. You do not have permission to create trips.',
       });
     }
-    const { vehicleId, hiredVehicle, driverId, containerNumber, reference, pickupLocation, dropLocation, tripType } = req.body;
+    const { vehicleId, hiredVehicle, driverId, containerNumber, reference, customerName, pickupLocation, dropLocation, tripType, assignments: assignmentsInput } = req.body;
 
     // Validate required fields
     if (!tripType || !['IMPORT', 'EXPORT'].includes(tripType)) {
@@ -332,44 +336,119 @@ const createTrip = async (req, res, next) => {
       });
     }
 
-    const vehicleAssignmentError = validateVehicleAssignmentInput({ vehicleId, hiredVehicle });
-    if (vehicleAssignmentError) {
-      return res.status(400).json({
-        success: false,
-        message: vehicleAssignmentError,
-      });
-    }
+    const hasAssignments = Array.isArray(assignmentsInput) && assignmentsInput.length > 0;
 
-    let normalizedHiredVehicle = null;
+    let tripPayload = {
+      transporterId,
+      containerNumber: null,
+      vehicleId: null,
+      hiredVehicle: null,
+      driverId: null,
+      reference: reference?.trim().toUpperCase() || null,
+      customerName: customerName?.trim().toUpperCase() || null,
+      pickupLocation: normalizeLocation(pickupLocation),
+      dropLocation: normalizeLocation(dropLocation),
+      tripType,
+      status: TRIP_STATUS.PLANNED,
+      customerOwnership: { ownerType: 'TRANSPORTER_MANAGED', payerType: 'TRANSPORTER' },
+      visibilityMode: 'FULL_EXECUTION',
+      photoRules: await getDefaultPhotoRules(),
+      audit: {
+        createdBy: { userId: req.user.id, userType: toAuditUserType(req.user.userType) },
+        updatedBy: { userId: req.user.id, userType: toAuditUserType(req.user.userType) },
+      },
+    };
 
-    // Validate vehicle if provided
-    if (vehicleId) {
-      const vehicleValidation = await validateOwnedVehicleAccess(vehicleId, transporterId);
-      if (vehicleValidation.error) {
-        return res.status(vehicleValidation.statusCode).json({
+    if (hasAssignments) {
+      // Multi-container mode: validate each assignment
+      const assignments = [];
+      for (let i = 0; i < assignmentsInput.length; i++) {
+        const a = assignmentsInput[i];
+        const cn = a?.containerNumber?.trim().toUpperCase();
+        const vid = a?.vehicleId;
+        const did = a?.driverId;
+        if (!cn) {
+          return res.status(400).json({
+            success: false,
+            message: `Assignment ${i + 1}: containerNumber is required`,
+          });
+        }
+        if (!vid || !did) {
+          return res.status(400).json({
+            success: false,
+            message: `Assignment ${i + 1}: vehicleId and driverId are required`,
+          });
+        }
+        const vehicleValidation = await validateOwnedVehicleAccess(vid, transporterId);
+        if (vehicleValidation.error) {
+          return res.status(vehicleValidation.statusCode).json({
+            success: false,
+            message: `Assignment ${i + 1}: ${vehicleValidation.error}`,
+          });
+        }
+        const driver = await Driver.findById(did);
+        if (!driver) {
+          return res.status(404).json({ success: false, message: `Assignment ${i + 1}: Driver not found` });
+        }
+        if (driver.transporterId?.toString() !== transporterId) {
+          return res.status(403).json({ success: false, message: `Assignment ${i + 1}: Driver does not belong to your transporter` });
+        }
+        if (driver.status !== 'active') {
+          return res.status(400).json({ success: false, message: `Assignment ${i + 1}: Driver must be active` });
+        }
+        assignments.push({ containerNumber: cn, vehicleId: vid, driverId: did });
+      }
+      tripPayload.assignments = assignments;
+      const first = assignments[0];
+      tripPayload.containerNumber = first.containerNumber;
+      tripPayload.vehicleId = first.vehicleId;
+      tripPayload.driverId = first.driverId;
+      tripPayload.assignedAt = new Date();
+    } else {
+      // Legacy mode: single container/vehicle/driver
+      const vehicleAssignmentError = validateVehicleAssignmentInput({ vehicleId, hiredVehicle });
+      if (vehicleAssignmentError) {
+        return res.status(400).json({
           success: false,
-          message: vehicleValidation.error,
+          message: vehicleAssignmentError,
         });
       }
-    } else if (hiredVehicle) {
-      normalizedHiredVehicle = normalizeHiredVehicle(hiredVehicle);
-    }
 
-    // Validate driver if provided
-    if (driverId) {
-      const driver = await Driver.findById(driverId);
-      if (!driver) {
-        return res.status(404).json({
-          success: false,
-          message: 'Driver not found',
-        });
+      let normalizedHiredVehicle = null;
+      if (vehicleId) {
+        const vehicleValidation = await validateOwnedVehicleAccess(vehicleId, transporterId);
+        if (vehicleValidation.error) {
+          return res.status(vehicleValidation.statusCode).json({
+            success: false,
+            message: vehicleValidation.error,
+          });
+        }
+        tripPayload.vehicleId = vehicleId;
+      } else if (hiredVehicle) {
+        normalizedHiredVehicle = normalizeHiredVehicle(hiredVehicle);
+        tripPayload.hiredVehicle = normalizedHiredVehicle;
       }
 
-      if (driver.transporterId?.toString() !== transporterId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Driver does not belong to your transporter account',
-        });
+      if (driverId) {
+        const driver = await Driver.findById(driverId);
+        if (!driver) {
+          return res.status(404).json({ success: false, message: 'Driver not found' });
+        }
+        if (driver.transporterId?.toString() !== transporterId) {
+          return res.status(403).json({ success: false, message: 'Driver does not belong to your transporter account' });
+        }
+        if (driver.status !== 'active') {
+          return res.status(400).json({
+            success: false,
+            message: 'Only active drivers can receive trip assignments. This driver is currently inactive or pending.',
+          });
+        }
+        tripPayload.driverId = driverId;
+      }
+
+      tripPayload.containerNumber = containerNumber?.trim().toUpperCase() || null;
+      if ((vehicleId || normalizedHiredVehicle) && driverId) {
+        tripPayload.assignedAt = new Date();
       }
     }
 
@@ -388,48 +467,18 @@ const createTrip = async (req, res, next) => {
       });
     }
 
-    const photoRules = await getDefaultPhotoRules();
-
     // Create trip
-    const trip = new Trip({
-      transporterId,
-      vehicleId: vehicleId || null,
-      hiredVehicle: normalizedHiredVehicle,
-      driverId: driverId || null,
-      containerNumber: containerNumber?.trim().toUpperCase() || null,
-      reference: reference?.trim() || null,
-      pickupLocation: normalizeLocation(pickupLocation),
-      dropLocation: normalizeLocation(dropLocation),
-      tripType,
-      status: TRIP_STATUS.PLANNED,
-      customerOwnership: {
-        ownerType: 'TRANSPORTER_MANAGED',
-        payerType: 'TRANSPORTER',
-      },
-      visibilityMode: 'FULL_EXECUTION',
-      photoRules,
-      audit: {
-        createdBy: {
-          userId: req.user.id,
-          userType: toAuditUserType(req.user.userType),
-        },
-        updatedBy: {
-          userId: req.user.id,
-          userType: toAuditUserType(req.user.userType),
-        },
-      },
-    });
-
-    if ((vehicleId || normalizedHiredVehicle) && driverId) {
-      trip.assignedAt = new Date();
-    }
-
+    const trip = new Trip(tripPayload);
     await trip.save();
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
     await trip.populate('transporterId', 'name company');
+    if (trip.assignments?.length) {
+      await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
+      await trip.populate('assignments.driverId', 'name mobile');
+    }
 
     // Emit Socket.IO event
     emitTripCreated(transporterId, trip);
@@ -546,7 +595,9 @@ const getTripById = async (req, res, next) => {
       .populate('driverId', 'name mobile status')
       .populate('transporterId', 'name company')
       .populate('customerId', 'name mobile email isRegistered')
-      .populate('acceptedTransporterId', 'name company mobile');
+      .populate('acceptedTransporterId', 'name company mobile')
+      .populate('assignments.vehicleId', 'vehicleNumber trailerType')
+      .populate('assignments.driverId', 'name mobile');
 
     if (!trip) {
       return res.status(404).json({
@@ -621,23 +672,6 @@ const getTripById = async (req, res, next) => {
  */
 const updateTrip = async (req, res, next) => {
   try {
-    // Transporters and company users with createTrips permission can update trips
-    const transporterId = getTransporterId(req.user);
-    if (!transporterId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Only transporters and authorized company users can update trips.',
-      });
-    }
-
-    // Check permission for company users
-    if (req.user.userType === 'company-user' && !hasPermission(req.user, 'createTrips')) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. You do not have permission to update trips.',
-      });
-    }
-
     const { id } = req.params;
     const { vehicleId, hiredVehicle, driverId, containerNumber, reference, pickupLocation, dropLocation } = req.body;
 
@@ -650,6 +684,58 @@ const updateTrip = async (req, res, next) => {
       });
     }
 
+    // Driver path: allow update of containerNumber only for assigned trips
+    if (req.user.userType === 'driver') {
+      const driverId = trip.driverId?._id || trip.driverId;
+      if (!driverId || driverId.toString() !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only update container for trips assigned to you.',
+        });
+      }
+      // Allow containerNumber update for PLANNED or ACTIVE status
+      if (![TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE].includes(trip.status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Container can only be updated when trip is PLANNED or ACTIVE',
+        });
+      }
+      // Driver can only update containerNumber
+      if (containerNumber !== undefined) {
+        trip.containerNumber = containerNumber?.trim().toUpperCase() || null;
+      }
+      setAuditActor(trip, req.user);
+      await trip.save();
+      await trip.populate('vehicleId', 'vehicleNumber trailerType');
+      await trip.populate('driverId', 'name mobile');
+      await trip.populate('transporterId', 'name company');
+      if (trip.assignments?.length) {
+        await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
+        await trip.populate('assignments.driverId', 'name mobile');
+      }
+      return res.json({
+        success: true,
+        message: 'Trip updated successfully',
+        data: serializeTrip(trip, { includeCurrentMilestone: true }),
+      });
+    }
+
+    // Transporter path: require transporterId and createTrips permission
+    const transporterId = getTransporterId(req.user);
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters and authorized company users can update trips.',
+      });
+    }
+
+    if (req.user.userType === 'company-user' && !hasPermission(req.user, 'createTrips')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to update trips.',
+      });
+    }
+
     // Check access
     if (trip.transporterId.toString() !== transporterId) {
       return res.status(403).json({
@@ -658,11 +744,24 @@ const updateTrip = async (req, res, next) => {
       });
     }
 
-    // Only allow updates if trip is PLANNED
-    if (trip.status !== TRIP_STATUS.PLANNED) {
+    // Only allow full updates (vehicle, driver, etc) if trip is PLANNED
+    // For containerNumber only, allow PLANNED or ACTIVE
+    const isContainerOnlyUpdate = containerNumber !== undefined &&
+      vehicleId === undefined && hiredVehicle === undefined &&
+      driverId === undefined && reference === undefined &&
+      pickupLocation === undefined && dropLocation === undefined;
+
+    if (!isContainerOnlyUpdate && trip.status !== TRIP_STATUS.PLANNED) {
       return res.status(400).json({
         success: false,
         message: 'Trip can only be updated when status is PLANNED',
+      });
+    }
+
+    if (isContainerOnlyUpdate && ![TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE].includes(trip.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Container can only be updated when trip is PLANNED or ACTIVE',
       });
     }
 
@@ -722,16 +821,27 @@ const updateTrip = async (req, res, next) => {
           });
         }
 
+        if (driver.status !== 'active') {
+          return res.status(400).json({
+            success: false,
+            message: 'Only active drivers can receive trip assignments. This driver is currently inactive or pending.',
+          });
+        }
+
         trip.driverId = driverId;
       }
     }
 
     // Update other fields
     if (containerNumber !== undefined) {
-      trip.containerNumber = containerNumber?.trim().toUpperCase() || null;
+      const normalized = containerNumber?.trim().toUpperCase() || null;
+      trip.containerNumber = normalized;
+      if (trip.assignments?.length > 0) {
+        trip.assignments[0].containerNumber = normalized;
+      }
     }
     if (reference !== undefined) {
-      trip.reference = reference?.trim() || null;
+      trip.reference = reference?.trim().toUpperCase() || null;
     }
     if (pickupLocation !== undefined) {
       if (pickupLocation && (!pickupLocation.coordinates?.latitude || !pickupLocation.coordinates?.longitude)) {
@@ -759,6 +869,10 @@ const updateTrip = async (req, res, next) => {
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
     await trip.populate('transporterId', 'name company');
+    if (trip.assignments?.length) {
+      await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
+      await trip.populate('assignments.driverId', 'name mobile');
+    }
 
     res.json({
       success: true,
@@ -1881,6 +1995,13 @@ const assignTripDriver = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         message: 'Driver does not belong to your transporter account',
+      });
+    }
+
+    if (driver.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only active drivers can receive trip assignments. This driver is currently inactive or pending.',
       });
     }
 
