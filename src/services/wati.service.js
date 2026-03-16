@@ -264,6 +264,21 @@ const sendTripCompletedTemplate = async ({ recipient, trip, recipientKey }) => {
   });
 };
 
+const sendTripClosedWithoutPODTemplate = async ({ recipient, trip, recipientKey }) => {
+  const whatsappNumber = normalizeWhatsappNumber(recipient?.mobile);
+
+  return sendTemplateMessage({
+    whatsappNumber,
+    templateName: 'trip_closed_without_pod',
+    broadcastName: buildBroadcastName('trip_closed_without_pod', `${trip?.tripId}_${recipientKey || 'recipient'}`),
+    parameters: [
+      trip?.tripId || 'N/A',
+      trip?.vehicleId?.vehicleNumber || 'N/A',
+      trip?.driverId?.mobile || 'N/A',
+    ],
+  });
+};
+
 module.exports = {
   sendTemplateMessage,
   sendTripCreatedConfirmation,
@@ -274,4 +289,5 @@ module.exports = {
   sendBookingRequestReceivedTemplate,
   sendContainerPickedTemplate,
   sendTripCompletedTemplate,
+  sendTripClosedWithoutPODTemplate,
 };

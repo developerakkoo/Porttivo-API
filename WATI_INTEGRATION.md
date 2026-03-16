@@ -171,6 +171,23 @@ Parameters:
 - `{{1}}` Vehicle number
 - `{{2}}` Driver mobile number
 
+### 9. `trip_closed_without_pod`
+
+Trigger:
+- Transporter closes trip without POD (after 72-hour POD window expires)
+
+Endpoint:
+- `PUT /api/trips/:id/close-without-pod`
+
+Recipients:
+- Customer
+- Driver
+
+Parameters:
+- `{{1}}` Trip ID
+- `{{2}}` Vehicle number
+- `{{3}}` Driver mobile number
+
 ## API Flow Mapping
 
 ### Customer Booking Flow

@@ -11,7 +11,10 @@ const {
   emitTripAutoActivated,
 } = require('../services/socket.service');
 const { activateNextTrip } = require('../services/tripQueue.service');
-const { sendTripCompletedTemplate } = require('../services/wati.service');
+const {
+  sendTripCompletedTemplate,
+  sendTripClosedWithoutPODTemplate,
+} = require('../services/wati.service');
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState');
 
 const toAuditUserType = (userType) => {
@@ -463,6 +466,29 @@ const closeTripWithoutPOD = async (req, res, next) => {
     await trip.populate('customerId', 'name mobile');
 
     emitTripClosedWithoutPOD(trip);
+
+    if (trip.customerId?.mobile) {
+      await triggerWatiTemplate(
+        () =>
+          sendTripClosedWithoutPODTemplate({
+            recipient: trip.customerId,
+            trip,
+            recipientKey: 'customer',
+          }),
+        'trip closed without POD template for customer'
+      );
+    }
+    if (trip.driverId?.mobile) {
+      await triggerWatiTemplate(
+        () =>
+          sendTripClosedWithoutPODTemplate({
+            recipient: trip.driverId,
+            trip,
+            recipientKey: 'driver',
+          }),
+        'trip closed without POD template for driver'
+      );
+    }
 
     try {
       const nextTrip = await activateNextTrip(trip);

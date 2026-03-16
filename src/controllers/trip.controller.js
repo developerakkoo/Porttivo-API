@@ -1551,6 +1551,11 @@ const bookCustomerTrip = async (req, res, next) => {
       )
     );
 
+    // Emit trip:created to each transporter with hasAccess for real-time app notification
+    activeTransporters.forEach((t) => {
+      emitTripCreated(t._id.toString(), customerTripData);
+    });
+
     await trip.populate('customerId', 'name mobile email isRegistered');
     await triggerWatiTemplate(
       () =>
