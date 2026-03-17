@@ -12,6 +12,7 @@ const Settlement = require('../models/Settlement');
 const Wallet = require('../models/Wallet');
 const SystemConfig = require('../models/SystemConfig');
 const AdminAuditLog = require('../models/AdminAuditLog');
+const AuditLog = require('../models/AuditLog');
 const { generateTokens } = require('../services/jwt.service');
 const { TRIP_STATUS, CLOSED_TRIP_STATUSES } = require('../utils/tripState');
 const { logAdminAction } = require('../services/adminAudit.service');
@@ -1549,6 +1550,66 @@ const getSettlementOversight = async (req, res, next) => {
 };
 
 /**
+ * Get system audit logs (all user types)
+ * GET /api/admin/system-audit-logs
+ */
+const getSystemAuditLogs = async (req, res, next) => {
+  try {
+    const {
+      page = 1,
+      limit = 50,
+      userType,
+      action,
+      resource,
+      userId,
+      startDate,
+      endDate,
+      result,
+    } = req.query;
+
+    const query = {};
+    if (userType) query.userType = userType;
+    if (action) query.action = action;
+    if (resource) query.resource = resource;
+    if (userId) query.userId = userId;
+    if (result) query.result = result;
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [logs, total] = await Promise.all([
+      AuditLog.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      AuditLog.countDocuments(query),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        logs,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get admin audit logs
  * GET /api/admin/audit-logs
  */
@@ -1618,4 +1679,5 @@ module.exports = {
   getFraudReviewQueue,
   getSettlementOversight,
   getAuditLogs,
+  getSystemAuditLogs,
 };

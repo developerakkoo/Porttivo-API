@@ -7,6 +7,7 @@ const { engine } = require('express-handlebars');
 const connectDB = require('./src/config/database');
 const { port } = require('./src/config/env');
 const { errorHandler, notFound } = require('./src/middleware/error.middleware');
+const { auditRequest } = require('./src/middleware/audit.middleware');
 const { initializeSocketIO } = require('./src/services/socket.service');
 
 // Import routes
@@ -47,6 +48,9 @@ app.set('views', path.join(__dirname, 'src/views'));
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Audit middleware for /api routes (logs mutating ops when req.user exists)
+app.use('/api', auditRequest);
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

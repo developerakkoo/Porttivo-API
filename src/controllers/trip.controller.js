@@ -13,6 +13,7 @@ const {
   emitTripVehicleAssigned,
   emitTripDriverAssigned,
   emitTripAssigned,
+  emitTripCancelled,
 } = require('../services/socket.service');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 const {
@@ -744,24 +745,27 @@ const updateTrip = async (req, res, next) => {
       });
     }
 
-    // Only allow full updates (vehicle, driver, etc) if trip is PLANNED
-    // For containerNumber only, allow PLANNED or ACTIVE
+    // Only allow full updates (vehicle, driver, etc) if trip is PLANNED or ACCEPTED (customer-booked)
+    // For containerNumber only, allow PLANNED, ACTIVE, or ACCEPTED
     const isContainerOnlyUpdate = containerNumber !== undefined &&
       vehicleId === undefined && hiredVehicle === undefined &&
       driverId === undefined && reference === undefined &&
       pickupLocation === undefined && dropLocation === undefined;
 
-    if (!isContainerOnlyUpdate && trip.status !== TRIP_STATUS.PLANNED) {
+    const canUpdateVehicleDriver = trip.status === TRIP_STATUS.PLANNED ||
+      (trip.status === TRIP_STATUS.ACCEPTED && trip.bookedBy === 'CUSTOMER');
+    if (!isContainerOnlyUpdate && !canUpdateVehicleDriver) {
       return res.status(400).json({
         success: false,
-        message: 'Trip can only be updated when status is PLANNED',
+        message: 'Trip can only be updated when status is PLANNED or ACCEPTED (customer-booked)',
       });
     }
 
-    if (isContainerOnlyUpdate && ![TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE].includes(trip.status)) {
+    const canUpdateContainer = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE, TRIP_STATUS.ACCEPTED].includes(trip.status);
+    if (isContainerOnlyUpdate && !canUpdateContainer) {
       return res.status(400).json({
         success: false,
-        message: 'Container can only be updated when trip is PLANNED or ACTIVE',
+        message: 'Container can only be updated when trip is PLANNED, ACTIVE, or ACCEPTED',
       });
     }
 
@@ -929,19 +933,21 @@ const cancelTrip = async (req, res, next) => {
       });
     }
 
-    // Only allow cancellation if trip is PLANNED or ACTIVE (admins can cancel ACTIVE trips)
-    if (trip.status !== TRIP_STATUS.PLANNED && trip.status !== TRIP_STATUS.ACTIVE) {
+    // Only allow cancellation if trip is PLANNED, ACCEPTED (customer-booked), or ACTIVE
+    const canCancelStatus = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE].includes(trip.status) ||
+      (trip.status === TRIP_STATUS.ACCEPTED && trip.bookedBy === 'CUSTOMER');
+    if (!canCancelStatus) {
       return res.status(400).json({
         success: false,
-        message: 'Trip can only be cancelled when status is PLANNED or ACTIVE',
+        message: 'Trip can only be cancelled when status is PLANNED, ACCEPTED, or ACTIVE',
       });
     }
-    
-    // Non-admins can only cancel PLANNED trips
-    if (!isAdmin && trip.status !== TRIP_STATUS.PLANNED) {
+
+    // Non-admins can only cancel PLANNED or ACCEPTED trips (not ACTIVE)
+    if (!isAdmin && trip.status === TRIP_STATUS.ACTIVE) {
       return res.status(400).json({
         success: false,
-        message: 'Only PLANNED trips can be cancelled',
+        message: 'Only PLANNED or ACCEPTED trips can be cancelled by transporters',
       });
     }
 
@@ -950,6 +956,8 @@ const cancelTrip = async (req, res, next) => {
     trip.closedAt = new Date();
     setAuditActor(trip, req.user);
     await trip.save();
+
+    emitTripCancelled(trip);
 
     res.json({
       success: true,

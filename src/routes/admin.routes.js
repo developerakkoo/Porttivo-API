@@ -29,6 +29,7 @@ const {
   getFraudReviewQueue,
   getSettlementOversight,
   getAuditLogs,
+  getSystemAuditLogs,
 } = require('../controllers/admin.controller');
 
 // All routes require authentication
@@ -80,6 +81,7 @@ router.put('/wallets/:userType/:userId/withdrawal', setWithdrawalPause);
 router.get('/fraud/review-queue', getFraudReviewQueue);
 router.get('/settlements/oversight', getSettlementOversight);
 router.get('/audit-logs', getAuditLogs);
+router.get('/system-audit-logs', getSystemAuditLogs);
 
 // User Management Routes
 

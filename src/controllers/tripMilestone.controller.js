@@ -338,16 +338,9 @@ const getCurrentMilestone = async (req, res, next) => {
  */
 const getTripTimeline = async (req, res, next) => {
   try {
-    // Only transporters can view timeline
-    if (req.user.userType !== 'transporter') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Only transporters can view trip timeline.'
-      })
-    }
-
     const { id } = req.params
-    const transporterId = req.user.id
+    const userId = req.user.id
+    const userType = req.user.userType
 
     // Find trip
     const trip = await Trip.findById(id)
@@ -361,11 +354,25 @@ const getTripTimeline = async (req, res, next) => {
       })
     }
 
-    // Check access
-    if (trip.transporterId.toString() !== transporterId) {
+    // Check access: transporter, customer (own trip), or admin
+    if (userType === 'transporter') {
+      if (trip.transporterId?.toString() !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this trip.'
+        })
+      }
+    } else if (userType === 'customer') {
+      if (trip.customerId?.toString() !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this trip.'
+        })
+      }
+    } else if (userType !== 'admin') {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. You do not have permission to view this trip.'
+        message: 'Access denied. Only transporters, customers, and admins can view trip timeline.'
       })
     }
 

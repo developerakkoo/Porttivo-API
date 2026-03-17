@@ -109,10 +109,11 @@ const uploadPOD = async (req, res, next) => {
 
     emitTripPodUploaded(trip);
 
+    const tripData = trip.toObject ? trip.toObject() : trip;
     res.json({
       success: true,
       message: 'POD uploaded successfully',
-      data: trip,
+      data: tripData,
     });
   } catch (error) {
     next(error);
@@ -212,10 +213,11 @@ const approvePOD = async (req, res, next) => {
       console.error('Error in auto-queue after POD approval:', queueError);
     }
 
+    const tripData = trip.toObject ? trip.toObject() : trip;
     res.json({
       success: true,
       message: 'POD approved successfully',
-      data: trip,
+      data: tripData,
     });
   } catch (error) {
     next(error);

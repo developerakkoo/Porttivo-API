@@ -636,6 +636,12 @@ const emitTripAutoActivated = (trip) => {
   });
 };
 
+const emitTripCancelled = (trip) => {
+  emitToTripAudience('trip:cancelled', {
+    trip: trip.toObject ? trip.toObject() : trip,
+  });
+};
+
 /**
  * Emit vehicle status updated event
  * @param {String} vehicleId - Vehicle ID
@@ -670,5 +676,6 @@ module.exports = {
   emitTripClosedWithPOD,
   emitTripClosedWithoutPOD,
   emitTripAutoActivated,
+  emitTripCancelled,
   emitVehicleStatusUpdated,
 };

@@ -8,7 +8,7 @@ const auditLogSchema = new mongoose.Schema(
     },
     userType: {
       type: String,
-      enum: ['TRANSPORTER', 'DRIVER', 'PUMP_OWNER', 'PUMP_STAFF', 'ADMIN', 'SYSTEM'],
+      enum: ['TRANSPORTER', 'DRIVER', 'PUMP_OWNER', 'PUMP_STAFF', 'ADMIN', 'SYSTEM', 'CUSTOMER', 'COMPANY_USER'],
       required: [true, 'User type is required'],
       index: true,
     },
@@ -74,6 +74,7 @@ auditLogSchema.index({ userId: 1, createdAt: -1 });
 auditLogSchema.index({ userType: 1, createdAt: -1 });
 auditLogSchema.index({ action: 1, createdAt: -1 });
 auditLogSchema.index({ resource: 1, createdAt: -1 });
+auditLogSchema.index({ resource: 1, resourceId: 1, createdAt: -1 });
 auditLogSchema.index({ result: 1, createdAt: -1 });
 auditLogSchema.index({ createdAt: -1 });
 auditLogSchema.index({ ipAddress: 1, createdAt: -1 });

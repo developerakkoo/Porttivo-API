@@ -2,6 +2,7 @@ const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
 const CompanyUser = require('../models/CompanyUser');
 const PumpOwner = require('../models/PumpOwner');
+const PumpStaff = require('../models/PumpStaff');
 const Customer = require('../models/Customer');
 const { generateTokens } = require('../services/jwt.service');
 const { validateMobile, cleanMobile, validateUserType, validatePin } = require('../utils/validation');
@@ -32,7 +33,7 @@ const sendOTP = async (req, res, next) => {
     if (!validateUserType(userType)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", or "customer"',
+        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"',
       });
     }
 
@@ -211,6 +212,54 @@ const sendOTP = async (req, res, next) => {
               status: pumpOwner.status,
               walletBalance: pumpOwner.walletBalance,
               commissionRate: pumpOwner.commissionRate,
+            },
+          },
+        });
+      } else if (normalizedUserType === 'pump_staff') {
+        const pumpStaff = await PumpStaff.findOne({ mobile: cleanedMobile })
+          .populate('pumpOwnerId', 'name pumpName');
+
+        if (!pumpStaff) {
+          return res.status(404).json({
+            success: false,
+            message: 'Pump staff not registered. Please contact your pump owner for registration.',
+          });
+        }
+
+        if (pumpStaff.status === 'blocked' || pumpStaff.status === 'disabled') {
+          return res.status(403).json({
+            success: false,
+            message: 'Your account has been blocked or disabled.',
+          });
+        }
+
+        if (pumpStaff.status === 'inactive') {
+          return res.status(403).json({
+            success: false,
+            message: 'Your account is not active. Please contact your pump owner.',
+          });
+        }
+
+        const tokens = generateTokens({
+          id: pumpStaff._id,
+          mobile: pumpStaff.mobile,
+          userType: 'pump_staff',
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: 'Login successful',
+          data: {
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            user: {
+              id: pumpStaff._id,
+              mobile: pumpStaff.mobile,
+              name: pumpStaff.name,
+              userType: 'pump_staff',
+              status: pumpStaff.status,
+              pumpOwnerId: pumpStaff.pumpOwnerId?._id || pumpStaff.pumpOwnerId,
+              pumpName: pumpStaff.pumpOwnerId?.pumpName,
             },
           },
         });
