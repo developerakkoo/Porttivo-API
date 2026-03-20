@@ -4,6 +4,7 @@ const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
 const Trip = require('../models/Trip');
 const Customer = require('../models/Customer');
+const Admin = require('../models/Admin');
 const { activateNextTrip } = require('./tripQueue.service');
 const { getMilestoneTypeByNumber, getBackendMeaning, getDriverLabel } = require('../utils/milestoneMapping');
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState');
@@ -60,6 +61,9 @@ const emitToTripAudience = (eventName, payload) => {
   }
 
   io.to(`trip:${trip._id || trip.id}`).emit(eventName, payload);
+
+  // Admin receives all trip events
+  io.to('admin:all').emit(eventName, payload);
 };
 
 /**
@@ -96,20 +100,22 @@ const initializeSocketIO = (httpServer) => {
           user = await Driver.findById(decoded.userId);
         } else if (decoded.userType === 'customer') {
           user = await Customer.findById(decoded.userId);
+        } else if (decoded.userType === 'admin') {
+          user = await Admin.findById(decoded.userId);
         }
 
         if (!user) {
           return next(new Error('Authentication error: User not found'));
         }
 
-        if (user.status === 'blocked') {
-          return next(new Error('Authentication error: Account blocked'));
+        if (user.status === 'blocked' || user.status === 'inactive') {
+          return next(new Error('Authentication error: Account blocked or inactive'));
         }
 
         // Attach user to socket
         socket.user = {
           id: user._id.toString(),
-          mobile: user.mobile,
+          mobile: user.mobile || user.email,
           userType: decoded.userType,
           userData: user,
         };
@@ -134,6 +140,9 @@ const initializeSocketIO = (httpServer) => {
       socket.join(`driver:${socket.user.id}`);
     } else if (socket.user.userType === 'customer') {
       socket.join(`customer:${socket.user.id}`);
+    } else if (socket.user.userType === 'admin') {
+      socket.join(`admin:${socket.user.id}`);
+      socket.join('admin:all');
     }
 
     // Handle room joins

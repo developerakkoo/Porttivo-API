@@ -30,6 +30,10 @@ const {
   getSettlementOversight,
   getAuditLogs,
   getSystemAuditLogs,
+  listAllCustomers,
+  updateCustomerStatus,
+  adminUpdateTripStatus,
+  adminReassignTrip,
 } = require('../controllers/admin.controller');
 
 // All routes require authentication
@@ -73,8 +77,12 @@ router.get('/dashboard/stats', getDashboardStats);
  * @access  Private (Admin only)
  */
 router.get('/analytics', getSystemAnalytics);
+router.get('/customers/list', listAllCustomers);
+router.put('/customers/:id/status', updateCustomerStatus);
 router.get('/customers/duplicates', getDuplicateCustomers);
 router.post('/customers/merge', mergeCustomers);
+router.put('/trips/:id/status', adminUpdateTripStatus);
+router.put('/trips/:id/reassign', adminReassignTrip);
 router.get('/settings/milestone-rules', getMilestoneRules);
 router.put('/settings/milestone-rules', updateMilestoneRules);
 router.put('/wallets/:userType/:userId/withdrawal', setWithdrawalPause);

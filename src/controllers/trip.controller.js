@@ -518,15 +518,15 @@ const getTrips = async (req, res, next) => {
         message: 'Access denied. You do not have permission to view trips.',
       });
     }
-    const { status, vehicleId, driverId, tripType, transporterId: queryTransporterId, page = 1, limit = 20, startDate, endDate } = req.query;
+    const { status, vehicleId, driverId, tripType, transporterId: queryTransporterId, customerId: queryCustomerId, page = 1, limit = 20, startDate, endDate } = req.query;
 
     // Build query - admins can see all, others see only their transporter's trips
     const query = {};
     if (!isAdmin) {
       query.transporterId = transporterId;
-    } else if (queryTransporterId) {
-      // Admin can filter by transporterId if provided
-      query.transporterId = queryTransporterId;
+    } else {
+      if (queryTransporterId) query.transporterId = queryTransporterId;
+      if (queryCustomerId) query.customerId = queryCustomerId;
     }
 
     if (status) {

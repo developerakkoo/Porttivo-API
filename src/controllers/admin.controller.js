@@ -16,6 +16,13 @@ const AuditLog = require('../models/AuditLog');
 const { generateTokens } = require('../services/jwt.service');
 const { TRIP_STATUS, CLOSED_TRIP_STATUSES } = require('../utils/tripState');
 const { logAdminAction } = require('../services/adminAudit.service');
+const {
+  emitTripAssigned,
+  emitTripVehicleAssigned,
+  emitTripDriverAssigned,
+  emitTripCancelled,
+  emitTripClosedWithoutPOD,
+} = require('../services/socket.service');
 
 const getTripRulesConfig = async () => {
   let config = await SystemConfig.findOne({ key: 'TRIP_RULES' });
@@ -1210,6 +1217,313 @@ const getCompanyUserDetails = async (req, res, next) => {
 };
 
 /**
+ * List all customers (Admin only)
+ * GET /api/admin/customers/list
+ */
+const listAllCustomers = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20, status, search } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const query = {};
+    if (status) query.status = status;
+    if (search && search.trim()) {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      query.$or = [
+        { mobile: searchRegex },
+        { name: searchRegex },
+        { email: searchRegex },
+      ];
+    }
+
+    const [customers, total] = await Promise.all([
+      Customer.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Customer.countDocuments(query),
+    ]);
+
+    const tripCounts = await Promise.all(
+      customers.map((c) => Trip.countDocuments({ customerId: c._id }))
+    );
+
+    const customersWithCount = customers.map((c, i) => ({
+      id: c._id,
+      mobile: c.mobile,
+      name: c.name,
+      email: c.email,
+      status: c.status,
+      isRegistered: c.isRegistered,
+      tripCount: tripCounts[i],
+      createdAt: c.createdAt,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: {
+        customers: customersWithCount,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update customer status (Admin only)
+ * PUT /api/admin/customers/:id/status
+ */
+const updateCustomerStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status || !['active', 'blocked'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid status is required (active or blocked)',
+      });
+    }
+
+    const customer = await Customer.findByIdAndUpdate(id, { status }, { new: true });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: status === 'blocked' ? 'CUSTOMER_BLOCKED' : 'CUSTOMER_UNBLOCKED',
+      entityType: 'CUSTOMER',
+      entityId: customer._id,
+      metadata: { status },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Customer ${status === 'blocked' ? 'blocked' : 'unblocked'} successfully`,
+      data: {
+        customer: {
+          id: customer._id,
+          status: customer.status,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin force update trip status
+ * PUT /api/admin/trips/:id/status
+ */
+const adminUpdateTripStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!status || ![TRIP_STATUS.CANCELLED, TRIP_STATUS.CLOSED_WITHOUT_POD].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid status is required (CANCELLED or CLOSED_WITHOUT_POD)',
+      });
+    }
+
+    const trip = await Trip.findById(id)
+      .populate('vehicleId', 'vehicleNumber trailerType')
+      .populate('driverId', 'name mobile')
+      .populate('transporterId', 'name company mobile')
+      .populate('customerId', 'name mobile');
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found',
+      });
+    }
+
+    const fromStatus = trip.status;
+
+    if (status === TRIP_STATUS.CANCELLED) {
+      const canCancel = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE, TRIP_STATUS.ACCEPTED, TRIP_STATUS.POD_PENDING].includes(trip.status);
+      if (!canCancel) {
+        return res.status(400).json({
+          success: false,
+          message: `Trip cannot be cancelled from status: ${trip.status}`,
+        });
+      }
+      trip.status = TRIP_STATUS.CANCELLED;
+      trip.closedReason = 'CANCELLED_BY_ADMIN';
+      trip.closedAt = new Date();
+      trip.audit = trip.audit || {};
+      trip.audit.updatedBy = { userId: req.user.id, userType: 'ADMIN' };
+      await trip.save();
+      emitTripCancelled(trip);
+    } else if (status === TRIP_STATUS.CLOSED_WITHOUT_POD) {
+      if (trip.status !== TRIP_STATUS.POD_PENDING) {
+        return res.status(400).json({
+          success: false,
+          message: `Trip can only be force-closed from POD_PENDING. Current: ${trip.status}`,
+        });
+      }
+      trip.status = TRIP_STATUS.CLOSED_WITHOUT_POD;
+      trip.closedAt = new Date();
+      trip.closedReason = 'CLOSED_BY_ADMIN';
+      trip.audit = trip.audit || {};
+      trip.audit.updatedBy = { userId: req.user.id, userType: 'ADMIN' };
+      await trip.save();
+      emitTripClosedWithoutPOD(trip);
+    }
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'TRIP_STATUS_FORCED',
+      entityType: 'TRIP',
+      entityId: trip._id,
+      metadata: { fromStatus, toStatus: status },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Trip status updated successfully',
+      data: { trip: trip.toObject ? trip.toObject() : trip },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Admin reassign trip (transporter, driver, vehicle)
+ * PUT /api/admin/trips/:id/reassign
+ */
+const adminReassignTrip = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { transporterId: newTransporterId, driverId: newDriverId, vehicleId: newVehicleId } = req.body;
+
+    if (!newTransporterId && !newDriverId && !newVehicleId) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one of transporterId, driverId, or vehicleId is required',
+      });
+    }
+
+    const trip = await Trip.findById(id);
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found',
+      });
+    }
+
+    if (![TRIP_STATUS.ACCEPTED, TRIP_STATUS.PLANNED].includes(trip.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Trip can only be reassigned when status is ACCEPTED or PLANNED. Current: ${trip.status}`,
+      });
+    }
+
+    let targetTransporterId = trip.transporterId?.toString() || trip.acceptedTransporterId?.toString();
+
+    if (newTransporterId) {
+      const transporter = await Transporter.findById(newTransporterId);
+      if (!transporter) {
+        return res.status(404).json({ success: false, message: 'Transporter not found' });
+      }
+      if (transporter.status !== 'active') {
+        return res.status(400).json({ success: false, message: 'Transporter must be active' });
+      }
+      trip.transporterId = newTransporterId;
+      trip.acceptedTransporterId = newTransporterId;
+      targetTransporterId = newTransporterId.toString();
+      trip.driverId = null;
+      trip.vehicleId = null;
+      trip.hiredVehicle = null;
+      trip.driverAcceptedAt = null;
+    }
+
+    if (newVehicleId) {
+      const vehicle = await Vehicle.findById(newVehicleId);
+      if (!vehicle) {
+        return res.status(404).json({ success: false, message: 'Vehicle not found' });
+      }
+      if (vehicle.transporterId.toString() !== targetTransporterId) {
+        return res.status(400).json({ success: false, message: 'Vehicle must belong to the trip transporter' });
+      }
+      if (vehicle.status !== 'active') {
+        return res.status(400).json({ success: false, message: 'Vehicle must be active' });
+      }
+      trip.vehicleId = newVehicleId;
+      trip.hiredVehicle = null;
+    }
+
+    if (newDriverId) {
+      const driver = await Driver.findById(newDriverId);
+      if (!driver) {
+        return res.status(404).json({ success: false, message: 'Driver not found' });
+      }
+      if (driver.transporterId?.toString() !== targetTransporterId) {
+        return res.status(400).json({ success: false, message: 'Driver must belong to the trip transporter' });
+      }
+      if (driver.status !== 'active') {
+        return res.status(400).json({ success: false, message: 'Driver must be active' });
+      }
+      trip.driverId = newDriverId;
+      trip.driverAcceptedAt = null;
+    }
+
+    trip.bookingStatus = trip.vehicleId && trip.driverId ? 'ASSIGNED' : trip.bookingStatus;
+    trip.status = trip.vehicleId && trip.driverId ? TRIP_STATUS.PLANNED : trip.status;
+    trip.audit = trip.audit || {};
+    trip.audit.updatedBy = { userId: req.user.id, userType: 'ADMIN' };
+    await trip.save();
+    await trip.populate('vehicleId', 'vehicleNumber trailerType');
+    await trip.populate('driverId', 'name mobile');
+    await trip.populate('transporterId', 'name company mobile');
+    await trip.populate('customerId', 'name mobile');
+
+    if (newVehicleId) {
+      emitTripVehicleAssigned(trip, { vehicleId: trip.vehicleId });
+    }
+    if (newDriverId) {
+      emitTripDriverAssigned(trip, { driverId: trip.driverId });
+    }
+    if (newVehicleId && newDriverId) {
+      emitTripAssigned(trip, { vehicleId: trip.vehicleId, driverId: trip.driverId });
+    }
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'TRIP_REASSIGNED',
+      entityType: 'TRIP',
+      entityId: trip._id,
+      metadata: { transporterId: newTransporterId, driverId: newDriverId, vehicleId: newVehicleId },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Trip reassigned successfully',
+      data: { trip: trip.toObject ? trip.toObject() : trip },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get customer duplicate candidates
  * GET /api/admin/customers/duplicates
  */
@@ -1671,8 +1985,12 @@ module.exports = {
   getPumpStaffDetails,
   listAllCompanyUsers,
   getCompanyUserDetails,
+  listAllCustomers,
+  updateCustomerStatus,
   getDuplicateCustomers,
   mergeCustomers,
+  adminUpdateTripStatus,
+  adminReassignTrip,
   getMilestoneRules,
   updateMilestoneRules,
   setWithdrawalPause,

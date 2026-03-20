@@ -91,6 +91,11 @@ const authenticate = async (req, res, next) => {
         req.user.permissions = user.permissions || [];
       }
 
+      // For admins, include permissions
+      if (decoded.userType === 'admin') {
+        req.user.permissions = user.permissions || {};
+      }
+
       next();
     } catch (tokenError) {
       return res.status(401).json({
