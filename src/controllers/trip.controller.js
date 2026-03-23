@@ -1974,6 +1974,13 @@ const assignTripVehicle = async (req, res, next) => {
           message: vehicleValidation.error,
         });
       }
+      const alreadyAssigned = await checkVehicleHasActiveTrip(vehicleId, req.params.id);
+      if (alreadyAssigned) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vehicle is already assigned to an active trip.',
+        });
+      }
       trip.vehicleId = vehicleId;
       trip.hiredVehicle = null;
     } else {
