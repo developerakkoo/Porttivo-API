@@ -1,13 +1,26 @@
 const Trip = require('../models/Trip');
 const path = require('path');
-const { TRIP_STATUS } = require('../utils/tripState');
+const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState');
 const {
   emitTripPodUploaded,
   emitTripClosedWithPOD,
   emitTripAutoActivated,
+  emitTripMilestoneUpdated,
+  emitTripPodPending,
+  emitTripCompleted,
 } = require('../services/socket.service');
 const { activateNextTrip } = require('../services/tripQueue.service');
 const { autoCloseTripIfExpired, toAuditUserType } = require('../services/tripLifecycle.service');
+const { getBackendMeaning, getMilestoneTypeByNumber } = require('../utils/milestoneMapping');
+const { sendTripCompletedTemplate } = require('../services/wati.service');
+
+const triggerWatiTemplate = async (handler, contextLabel) => {
+  try {
+    await handler();
+  } catch (error) {
+    console.error(`WATI ${contextLabel} failed:`, error.message);
+  }
+};
 
 const getVehicleRoom = (trip) => {
   if (trip.vehicleId) {
@@ -67,11 +80,12 @@ const uploadPOD = async (req, res, next) => {
       });
     }
 
-    // Validate trip status - POD can be uploaded only while POD is pending
-    if (trip.status !== TRIP_STATUS.POD_PENDING) {
+    // Validate trip status - POD can be uploaded when ACTIVE (4 milestones) or POD_PENDING
+    const isActiveWithFourMilestones = trip.status === TRIP_STATUS.ACTIVE && trip.milestones?.length === 4;
+    if (trip.status !== TRIP_STATUS.POD_PENDING && !isActiveWithFourMilestones) {
       return res.status(400).json({
         success: false,
-        message: `POD can only be uploaded when status is POD_PENDING. Current status: ${trip.status}`,
+        message: `POD can only be uploaded when trip is ACTIVE with 4 milestones or POD_PENDING. Current status: ${trip.status}, milestones: ${trip.milestones?.length || 0}`,
       });
     }
 
@@ -86,6 +100,26 @@ const uploadPOD = async (req, res, next) => {
     // Get photo URL
     const photoUrl = `/uploads/pod/${req.file.filename}`;
 
+    const wasActiveWithFourMilestones = isActiveWithFourMilestones;
+
+    if (wasActiveWithFourMilestones) {
+      // Milestone 5 = POD upload: add milestone 5 (TRIP_COMPLETED), set POD, move to POD_PENDING
+      const milestoneType = getMilestoneTypeByNumber(5);
+      const milestone = {
+        milestoneType,
+        milestoneNumber: 5,
+        timestamp: new Date(),
+        location: trip.milestones[3]?.location || { latitude: 0, longitude: 0 },
+        photo: null,
+        driverId: userId,
+        backendMeaning: getBackendMeaning(milestoneType, trip.tripType),
+      };
+      trip.milestones.push(milestone);
+      trip.completedAt = new Date();
+      trip.podDueAt = calculatePodDueAt(trip.completedAt);
+      trip.podTimerStartedAt = trip.completedAt;
+    }
+
     // Update trip POD
     trip.POD = {
       photo: photoUrl,
@@ -94,6 +128,11 @@ const uploadPOD = async (req, res, next) => {
       approvedAt: null,
       approvedBy: null,
     };
+
+    if (wasActiveWithFourMilestones) {
+      trip.status = TRIP_STATUS.POD_PENDING;
+    }
+
     trip.audit.updatedBy = {
       userId,
       userType: toAuditUserType(userType),
@@ -107,12 +146,54 @@ const uploadPOD = async (req, res, next) => {
     await trip.populate('transporterId', 'name company');
     await trip.populate('customerId', 'name mobile');
 
-    emitTripPodUploaded(trip);
+    if (wasActiveWithFourMilestones) {
+      const milestone = trip.milestones[trip.milestones.length - 1];
+      emitTripMilestoneUpdated(trip, milestone, null);
+      emitTripPodUploaded(trip);
+      emitTripPodPending(trip);
+      emitTripCompleted(trip);
+
+      if (trip.customerId) {
+        await triggerWatiTemplate(
+          () =>
+            sendTripCompletedTemplate({
+              recipient: trip.customerId,
+              trip,
+              recipientKey: 'customer',
+            }),
+          'trip completed template for customer'
+        );
+      }
+      if (trip.transporterId) {
+        await triggerWatiTemplate(
+          () =>
+            sendTripCompletedTemplate({
+              recipient: trip.transporterId,
+              trip,
+              recipientKey: 'transporter',
+            }),
+          'trip completed template for transporter'
+        );
+      }
+
+      try {
+        const nextTrip = await activateNextTrip(trip);
+        if (nextTrip) {
+          emitTripAutoActivated(nextTrip);
+        }
+      } catch (queueError) {
+        console.error('Error in auto-queue after POD upload (milestone 5):', queueError);
+      }
+    } else {
+      emitTripPodUploaded(trip);
+    }
 
     const tripData = trip.toObject ? trip.toObject() : trip;
     res.json({
       success: true,
-      message: 'POD uploaded successfully',
+      message: wasActiveWithFourMilestones
+        ? 'POD uploaded successfully. Trip completed and POD is now pending approval.'
+        : 'POD uploaded successfully',
       data: tripData,
     });
   } catch (error) {

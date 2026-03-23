@@ -59,6 +59,14 @@ const updateMilestone = async (req, res, next) => {
       })
     }
 
+    // Milestone 5 is POD upload - use POST /trips/:id/pod instead
+    if (milestoneNum === 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Milestone 5 (Trip Completed) is completed via POD upload. Use the Upload POD action instead.',
+      })
+    }
+
     // Find trip
     const trip = await Trip.findById(id)
     if (!trip) {
@@ -158,12 +166,19 @@ const updateMilestone = async (req, res, next) => {
     // Get backend meaning based on trip type
     const backendMeaning = getBackendMeaning(milestoneType, trip.tripType)
 
-    // Get photo URL if file was uploaded
-    let photoUrl = null
-    if (req.file) {
-      // File path relative to uploads directory
-      photoUrl = `/uploads/milestones/${req.file.filename}`
+    // Get photo URLs from req.files (supports both 'photo' single and 'photos' array)
+    const photoUrls = []
+    if (req.files) {
+      const photosArr = req.files.photos || []
+      const photoSingle = req.files.photo || []
+      const allFiles = [...photosArr, ...photoSingle]
+      allFiles.forEach((f) => {
+        if (f && f.filename) {
+          photoUrls.push(`/uploads/milestones/${f.filename}`)
+        }
+      })
     }
+    const photoUrl = photoUrls[0] || null
 
     const photoValidationError = ensureMilestonePhoto(trip, milestoneType, photoUrl)
     if (photoValidationError) {
@@ -183,6 +198,7 @@ const updateMilestone = async (req, res, next) => {
         longitude
       },
       photo: photoUrl,
+      photos: photoUrls,
       driverId: userId,
       backendMeaning
     }
@@ -390,6 +406,15 @@ const getTripTimeline = async (req, res, next) => {
       const completedMilestone = trip.milestones.find(
         m => m.milestoneNumber === milestoneNumber
       )
+      // For milestone 5 (TRIP_COMPLETED), use POD photo if milestone has no photo
+      const photos = completedMilestone?.photos?.length
+        ? completedMilestone.photos
+        : completedMilestone?.photo
+          ? [completedMilestone.photo]
+          : milestoneNumber === 5 && trip.POD?.photo
+            ? [trip.POD.photo]
+            : []
+      const photo = photos[0] || completedMilestone?.photo || (milestoneNumber === 5 ? trip.POD?.photo : null) || null
 
       return {
         milestoneNumber,
@@ -401,7 +426,8 @@ const getTripTimeline = async (req, res, next) => {
         completed: !!completedMilestone,
         timestamp: completedMilestone ? completedMilestone.timestamp : null,
         location: completedMilestone ? completedMilestone.location : null,
-        photo: completedMilestone ? completedMilestone.photo : null,
+        photo,
+        photos,
         driverId: completedMilestone ? completedMilestone.driverId : null
       }
     })

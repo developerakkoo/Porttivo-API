@@ -30,7 +30,7 @@ const {
   getTripTimeline,
 } = require('../controllers/tripMilestone.controller');
 const { uploadPOD, approvePOD } = require('../controllers/tripPOD.controller');
-const { uploadPOD: uploadPODMiddleware, uploadMilestonePhoto, handleMulterError } = require('../middleware/upload.middleware');
+const { uploadPOD: uploadPODMiddleware, uploadMilestonePhotos, handleMulterError } = require('../middleware/upload.middleware');
 const { optionalAuth } = require('../middleware/auth.middleware');
 
 // Shared trip routes (public, no authentication required)
@@ -67,7 +67,7 @@ router.put('/:id/complete', completeTrip);
 router.put('/:id/close-without-pod', closeTripWithoutPOD);
 
 // Milestone routes
-router.post('/:id/milestones/:milestoneNumber', uploadMilestonePhoto, handleMulterError, updateMilestone);
+router.post('/:id/milestones/:milestoneNumber', uploadMilestonePhotos, handleMulterError, updateMilestone);
 router.get('/:id/current-milestone', getCurrentMilestone);
 router.get('/:id/timeline', getTripTimeline);
 

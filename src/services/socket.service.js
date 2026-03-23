@@ -292,6 +292,9 @@ const initializeSocketIO = (httpServer) => {
         if (milestoneNum < 1 || milestoneNum > 5) {
           return socket.emit('error', { message: 'Milestone number must be between 1 and 5' });
         }
+        if (milestoneNum === 5) {
+          return socket.emit('error', { message: 'Milestone 5 (Trip Completed) is completed via POD upload. Use the Upload POD action instead.' });
+        }
 
         // Find trip
         const trip = await Trip.findById(tripId);
@@ -329,6 +332,7 @@ const initializeSocketIO = (httpServer) => {
         }
 
         // Create milestone object
+        const photos = photo ? [photo] : [];
         const milestone = {
           milestoneType,
           milestoneNumber: milestoneNum,
@@ -338,6 +342,7 @@ const initializeSocketIO = (httpServer) => {
             longitude,
           },
           photo: photo || null,
+          photos,
           driverId: socket.user.id,
           backendMeaning,
         };
@@ -408,6 +413,55 @@ const initializeSocketIO = (httpServer) => {
       } catch (error) {
         console.error('Error handling trip:milestone:update:', error);
         socket.emit('error', { message: error.message || 'Failed to update milestone' });
+      }
+    });
+
+    // Handle driver location update (from driver app, for real-time tracking)
+    socket.on('driver:location:update', async (data) => {
+      try {
+        const { tripId, latitude, longitude } = data;
+
+        if (!tripId || latitude === undefined || longitude === undefined) {
+          return socket.emit('error', { message: 'Trip ID and GPS coordinates are required' });
+        }
+
+        const lat = parseFloat(latitude);
+        const lng = parseFloat(longitude);
+        if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+          return socket.emit('error', { message: 'Invalid coordinates' });
+        }
+
+        if (socket.user.userType !== 'driver') {
+          return socket.emit('error', { message: 'Only drivers can send location updates' });
+        }
+
+        const trip = await Trip.findById(tripId);
+        if (!trip) {
+          return socket.emit('error', { message: 'Trip not found' });
+        }
+
+        if (!trip.driverId || trip.driverId.toString() !== socket.user.id) {
+          return socket.emit('error', { message: 'Access denied. This trip is not assigned to you.' });
+        }
+
+        if (trip.status !== TRIP_STATUS.ACTIVE) {
+          return socket.emit('error', {
+            message: `Location updates only allowed for ACTIVE trips. Current status: ${trip.status}`,
+          });
+        }
+
+        const payload = {
+          tripId: trip._id.toString(),
+          trip: trip.toObject(),
+          latitude: lat,
+          longitude: lng,
+          timestamp: new Date().toISOString(),
+        };
+
+        emitToTripAudience('driver:location:updated', payload);
+      } catch (error) {
+        console.error('Error handling driver:location:update:', error);
+        socket.emit('error', { message: error.message || 'Failed to update location' });
       }
     });
 

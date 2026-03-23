@@ -23,7 +23,7 @@ const storage = multer.diskStorage({
       cb(null, uploadDirs.pod);
     } else if (file.fieldname === 'receipt') {
       cb(null, uploadDirs.receipts);
-    } else if (file.fieldname === 'photo' || file.fieldname === 'milestonePhoto') {
+    } else if (file.fieldname === 'photo' || file.fieldname === 'photos' || file.fieldname === 'milestonePhoto') {
       cb(null, uploadDirs.milestones);
     } else {
       cb(null, uploadDirs.pod); // Default
@@ -74,8 +74,14 @@ const upload = multer({
 // Middleware for POD upload (single file)
 const uploadPOD = upload.single('pod');
 
-// Middleware for milestone photo upload (single file, optional)
+// Middleware for milestone photo upload (single file, optional) - backward compat
 const uploadMilestonePhoto = upload.single('photo');
+
+// Middleware for milestone photos - accepts both 'photo' (single) and 'photos' (array, up to 10)
+const uploadMilestonePhotos = upload.fields([
+  { name: 'photo', maxCount: 1 },
+  { name: 'photos', maxCount: 10 },
+]);
 
 // Middleware for receipt upload (single file)
 const uploadReceipt = upload.single('receipt');
@@ -106,6 +112,7 @@ const handleMulterError = (err, req, res, next) => {
 module.exports = {
   uploadPOD,
   uploadMilestonePhoto,
+  uploadMilestonePhotos,
   uploadReceipt,
   upload,
   handleMulterError,
