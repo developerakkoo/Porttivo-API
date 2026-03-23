@@ -36,7 +36,7 @@ const getTripVehicleRoom = (trip) => {
   return null;
 };
 
-const emitToTripAudience = (eventName, payload) => {
+const emitToTripAudience = (eventName, payload, options = {}) => {
   if (!io || !payload?.trip) {
     return;
   }
@@ -51,7 +51,7 @@ const emitToTripAudience = (eventName, payload) => {
     io.to(`driver:${trip.driverId._id || trip.driverId}`).emit(eventName, payload);
   }
 
-  if (trip.customerId) {
+  if (trip.customerId && !options.excludeCustomer) {
     io.to(`customer:${trip.customerId._id || trip.customerId}`).emit(eventName, payload);
   }
 
@@ -235,8 +235,8 @@ const initializeSocketIO = (httpServer) => {
         const currentMilestone = trip.getCurrentMilestone();
         const milestoneLabel = currentMilestone ? getDriverLabel(currentMilestone.milestoneType) : null;
 
-        // Broadcast trip started event
-        io.to(`transporter:${trip.transporterId}`).emit('trip:started', {
+        // Broadcast trip started event (transporter, driver, customer, vehicle, trip room, admin)
+        const startedPayload = {
           trip: trip.toObject(),
           currentMilestone: currentMilestone
             ? {
@@ -245,29 +245,8 @@ const initializeSocketIO = (httpServer) => {
                 label: milestoneLabel,
               }
             : null,
-        });
-
-        io.to(`driver:${socket.user.id}`).emit('trip:started', {
-          trip: trip.toObject(),
-          currentMilestone: currentMilestone
-            ? {
-                milestoneNumber: currentMilestone.milestoneNumber,
-                milestoneType: currentMilestone.milestoneType,
-                label: milestoneLabel,
-              }
-            : null,
-        });
-
-        const vehicleRoom = getTripVehicleRoom(trip);
-        if (vehicleRoom) {
-          io.to(vehicleRoom).emit('trip:started', {
-            trip: trip.toObject(),
-          });
-        }
-
-        io.to(`trip:${tripId}`).emit('trip:started', {
-          trip: trip.toObject(),
-        });
+        };
+        emitToTripAudience('trip:started', startedPayload);
       } catch (error) {
         console.error('Error handling trip:start:', error);
         socket.emit('error', { message: error.message || 'Failed to start trip' });
@@ -359,8 +338,8 @@ const initializeSocketIO = (httpServer) => {
         const currentMilestone = trip.getCurrentMilestone();
         const milestoneLabel = currentMilestone ? getDriverLabel(currentMilestone.milestoneType) : null;
 
-        // Broadcast milestone updated event
-        io.to(`transporter:${trip.transporterId}`).emit('trip:milestone:updated', {
+        // Broadcast milestone updated event (transporter, driver, customer, vehicle, trip room, admin)
+        const milestonePayload = {
           trip: trip.toObject(),
           milestone,
           currentMilestone: currentMilestone
@@ -370,46 +349,8 @@ const initializeSocketIO = (httpServer) => {
                 label: milestoneLabel,
               }
             : null,
-        });
-
-        io.to(`driver:${socket.user.id}`).emit('trip:milestone:updated', {
-          trip: trip.toObject(),
-          milestone,
-          currentMilestone: currentMilestone
-            ? {
-                milestoneNumber: currentMilestone.milestoneNumber,
-                milestoneType: currentMilestone.milestoneType,
-                label: milestoneLabel,
-              }
-            : null,
-        });
-
-        if (trip.customerId) {
-          io.to(`customer:${trip.customerId}`).emit('trip:milestone:updated', {
-            trip: trip.toObject(),
-            milestone,
-            currentMilestone: currentMilestone
-              ? {
-                  milestoneNumber: currentMilestone.milestoneNumber,
-                  milestoneType: currentMilestone.milestoneType,
-                  label: milestoneLabel,
-                }
-              : null,
-          });
-        }
-
-        const vehicleRoom = getTripVehicleRoom(trip);
-        if (vehicleRoom) {
-          io.to(vehicleRoom).emit('trip:milestone:updated', {
-            trip: trip.toObject(),
-            milestone,
-          });
-        }
-
-        io.to(`trip:${tripId}`).emit('trip:milestone:updated', {
-          trip: trip.toObject(),
-          milestone,
-        });
+        };
+        emitToTripAudience('trip:milestone:updated', milestonePayload);
       } catch (error) {
         console.error('Error handling trip:milestone:update:', error);
         socket.emit('error', { message: error.message || 'Failed to update milestone' });
@@ -517,48 +458,14 @@ const initializeSocketIO = (httpServer) => {
         };
         await trip.save();
 
-        // Broadcast pod pending event
-        io.to(`transporter:${trip.transporterId}`).emit('trip:pod:pending', {
-          trip: trip.toObject(),
-        });
-
-        io.to(`driver:${socket.user.id}`).emit('trip:pod:pending', {
-          trip: trip.toObject(),
-        });
-
-        if (trip.customerId) {
-          io.to(`customer:${trip.customerId}`).emit('trip:pod:pending', {
-            trip: trip.toObject(),
-          });
-        }
-
-        const vehicleRoom = getTripVehicleRoom(trip);
-        if (vehicleRoom) {
-          io.to(vehicleRoom).emit('trip:pod:pending', {
-            trip: trip.toObject(),
-          });
-        }
-
-        io.to(`trip:${tripId}`).emit('trip:pod:pending', {
-          trip: trip.toObject(),
-        });
+        // Broadcast pod pending event (transporter, driver, customer, vehicle, trip room, admin)
+        emitToTripAudience('trip:pod:pending', { trip: trip.toObject() });
 
         // Auto-activate next queued trip
         try {
           const nextTrip = await activateNextTrip(trip);
           if (nextTrip) {
-            // Notify driver about next trip
-            if (nextTrip.driverId) {
-              io.to(`driver:${nextTrip.driverId}`).emit('trip:auto-activated', {
-                trip: nextTrip.toObject(),
-                message: 'Next trip has been auto-activated',
-              });
-            }
-
-            // Notify transporter
-            io.to(`transporter:${nextTrip.transporterId}`).emit('trip:auto-activated', {
-              trip: nextTrip.toObject(),
-            });
+            emitTripAutoActivated(nextTrip);
           }
         } catch (queueError) {
           console.error('Error in auto-queue after trip completion:', queueError);
@@ -591,13 +498,26 @@ const getIO = () => {
 };
 
 /**
- * Emit trip created event
+ * Emit trip created event to transporter
  * @param {String} transporterId - Transporter ID
  * @param {Object} trip - Trip object
  */
 const emitTripCreated = (transporterId, trip) => {
   if (io) {
     io.to(`transporter:${transporterId}`).emit('trip:created', {
+      trip: trip.toObject ? trip.toObject() : trip,
+    });
+  }
+};
+
+/**
+ * Emit trip created event to customer (when they book)
+ * @param {String} customerId - Customer ID
+ * @param {Object} trip - Trip object
+ */
+const emitTripCreatedForCustomer = (customerId, trip) => {
+  if (io) {
+    io.to(`customer:${customerId}`).emit('trip:created', {
       trip: trip.toObject ? trip.toObject() : trip,
     });
   }
@@ -693,10 +613,14 @@ const emitTripClosedWithoutPOD = (trip) => {
 };
 
 const emitTripAutoActivated = (trip) => {
-  emitToTripAudience('trip:auto-activated', {
-    trip: trip.toObject ? trip.toObject() : trip,
-    message: 'Next trip has been auto-activated',
-  });
+  emitToTripAudience(
+    'trip:auto-activated',
+    {
+      trip: trip.toObject ? trip.toObject() : trip,
+      message: 'Next trip has been auto-activated',
+    },
+    { excludeCustomer: true }
+  );
 };
 
 const emitTripCancelled = (trip) => {
@@ -726,6 +650,7 @@ module.exports = {
   initializeSocketIO,
   getIO,
   emitTripCreated,
+  emitTripCreatedForCustomer,
   emitBookingAccepted,
   emitBookingRejected,
   emitTripVehicleAssigned,

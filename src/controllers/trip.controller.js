@@ -8,6 +8,7 @@ const SystemConfig = require('../models/SystemConfig');
 const { checkVehicleHasActiveTrip } = require('../utils/vehicleValidation');
 const {
   emitTripCreated,
+  emitTripCreatedForCustomer,
   emitBookingAccepted,
   emitBookingRejected,
   emitTripVehicleAssigned,
@@ -894,18 +895,18 @@ const updateTrip = async (req, res, next) => {
  */
 const cancelTrip = async (req, res, next) => {
   try {
-    // Admins can cancel any trip, transporters and company users can cancel their own
     const transporterId = getTransporterId(req.user);
     const isAdmin = req.user.userType === 'admin';
+    const isCustomer = req.user.userType === 'customer';
+    const isDriver = req.user.userType === 'driver';
 
-    if (!transporterId && !isAdmin) {
+    if (!transporterId && !isAdmin && !isCustomer && !isDriver) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Only transporters, authorized company users, or admins can cancel trips.',
+        message: 'Access denied. Only transporters, company users, customers, drivers, or admins can cancel trips.',
       });
     }
 
-    // Check permission for company users
     if (req.user.userType === 'company-user' && !hasPermission(req.user, 'createTrips')) {
       return res.status(403).json({
         success: false,
@@ -916,7 +917,6 @@ const cancelTrip = async (req, res, next) => {
     const { id } = req.params;
     const { reason } = req.body;
 
-    // Find trip
     const trip = await Trip.findById(id);
     if (!trip) {
       return res.status(404).json({
@@ -925,29 +925,69 @@ const cancelTrip = async (req, res, next) => {
       });
     }
 
-    // Check access - admins can cancel any trip
-    if (!isAdmin && trip.transporterId.toString() !== transporterId) {
+    if (isCustomer) {
+      if (!trip.customerId || trip.customerId.toString() !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only cancel your own trips.',
+        });
+      }
+    } else if (isDriver) {
+      if (!trip.driverId || trip.driverId.toString() !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only cancel trips assigned to you.',
+        });
+      }
+    } else if (!isAdmin && trip.transporterId.toString() !== transporterId) {
       return res.status(403).json({
         success: false,
         message: 'Access denied. You do not have permission to cancel this trip.',
       });
     }
 
-    // Only allow cancellation if trip is PLANNED, ACCEPTED (customer-booked), or ACTIVE
     const canCancelStatus = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE].includes(trip.status) ||
-      (trip.status === TRIP_STATUS.ACCEPTED && trip.bookedBy === 'CUSTOMER');
+      (trip.status === TRIP_STATUS.ACCEPTED && trip.bookedBy === 'CUSTOMER') ||
+      trip.status === TRIP_STATUS.BOOKED;
     if (!canCancelStatus) {
       return res.status(400).json({
         success: false,
-        message: 'Trip can only be cancelled when status is PLANNED, ACCEPTED, or ACTIVE',
+        message: 'Trip can only be cancelled when status is BOOKED, PLANNED, ACCEPTED, or ACTIVE',
       });
     }
 
-    // Non-admins can only cancel PLANNED or ACCEPTED trips (not ACTIVE)
-    if (!isAdmin && trip.status === TRIP_STATUS.ACTIVE) {
+    if (isCustomer) {
+      if (![TRIP_STATUS.BOOKED, TRIP_STATUS.ACCEPTED, TRIP_STATUS.PLANNED].includes(trip.status)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Customers can only cancel trips that are not yet active',
+        });
+      }
+    } else if (isDriver) {
+      if (trip.status !== TRIP_STATUS.PLANNED) {
+        return res.status(400).json({
+          success: false,
+          message: 'Drivers can only decline queued trips that are not yet started',
+        });
+      }
+    } else if (!isAdmin && trip.status === TRIP_STATUS.ACTIVE) {
       return res.status(400).json({
         success: false,
         message: 'Only PLANNED or ACCEPTED trips can be cancelled by transporters',
+      });
+    }
+
+    if (isDriver && trip.status === TRIP_STATUS.PLANNED) {
+      trip.driverId = undefined;
+      trip.driverAcceptedAt = undefined;
+      trip.queuedAt = null;
+      setAuditActor(trip, req.user);
+      await trip.save();
+      emitTripDriverAssigned(trip, { unassigned: true });
+      return res.json({
+        success: true,
+        message: 'Trip declined. You have been unassigned from this trip.',
+        data: serializeTrip(trip, { includeCurrentMilestone: true }),
       });
     }
 
@@ -1248,27 +1288,27 @@ const getTripsByStatus = async (req, res, next) => {
  */
 const shareTrip = async (req, res, next) => {
   try {
-    // Transporters and company users with viewTrips permission can share trips
     const transporterId = getTransporterId(req.user);
-    if (!transporterId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Only transporters and authorized company users can share trips.',
-      });
-    }
+    const isCustomer = req.user.userType === 'customer';
 
-    // Check permission for company users
-    if (req.user.userType === 'company-user' && !hasPermission(req.user, 'viewTrips')) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. You do not have permission to share trips.',
-      });
+    if (!transporterId && !isCustomer) {
+      if (req.user.userType === 'company-user' && !hasPermission(req.user, 'viewTrips')) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to share trips.',
+        });
+      }
+      if (req.user.userType !== 'company-user') {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Only transporters, company users, or customers can share trips.',
+        });
+      }
     }
 
     const { id } = req.params;
     const { expiryHours = 168, expiryDays, linkType, visibilityMode } = req.body; // Default 7 days (168 hours)
 
-    // Find trip
     const trip = await Trip.findById(id);
     if (!trip) {
       return res.status(404).json({
@@ -1277,12 +1317,20 @@ const shareTrip = async (req, res, next) => {
       });
     }
 
-    // Check access
-    if (trip.transporterId.toString() !== transporterId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. You do not have permission to share this trip.',
-      });
+    if (isCustomer) {
+      if (!trip.customerId || trip.customerId.toString() !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You can only share your own trips.',
+        });
+      }
+    } else {
+      if (trip.transporterId.toString() !== transporterId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to share this trip.',
+        });
+      }
     }
 
     // Generate share token
@@ -1563,6 +1611,9 @@ const bookCustomerTrip = async (req, res, next) => {
     activeTransporters.forEach((t) => {
       emitTripCreated(t._id.toString(), customerTripData);
     });
+
+    // Emit trip:created to customer so their list updates without refresh
+    emitTripCreatedForCustomer(customer._id.toString(), customerTripData);
 
     await trip.populate('customerId', 'name mobile email isRegistered');
     await triggerWatiTemplate(
