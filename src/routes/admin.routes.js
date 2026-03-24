@@ -21,6 +21,8 @@ const {
   getPumpStaffDetails,
   listAllCompanyUsers,
   getCompanyUserDetails,
+  updateCompanyUserStatus,
+  updatePumpStaffStatus,
   getDuplicateCustomers,
   mergeCustomers,
   getMilestoneRules,
@@ -178,6 +180,13 @@ router.get('/pump-staff', listAllPumpStaff);
 router.get('/pump-staff/:id', getPumpStaffDetails);
 
 /**
+ * @route   PUT /api/admin/pump-staff/:id/status
+ * @desc    Update pump staff status (Admin only)
+ * @access  Private (Admin only)
+ */
+router.put('/pump-staff/:id/status', updatePumpStaffStatus);
+
+/**
  * @route   GET /api/admin/company-users
  * @desc    List all company users (Admin only)
  * @access  Private (Admin only)
@@ -190,5 +199,12 @@ router.get('/company-users', listAllCompanyUsers);
  * @access  Private (Admin only)
  */
 router.get('/company-users/:id', getCompanyUserDetails);
+
+/**
+ * @route   PUT /api/admin/company-users/:id/status
+ * @desc    Update company user status (Admin only)
+ * @access  Private (Admin only)
+ */
+router.put('/company-users/:id/status', updateCompanyUserStatus);
 
 module.exports = router;

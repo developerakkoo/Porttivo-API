@@ -24,6 +24,17 @@ const {
   emitTripClosedWithoutPOD,
 } = require('../services/socket.service');
 
+const ADMIN_LIST_SORT_FIELDS = ['createdAt', 'name', 'mobile'];
+
+/**
+ * Whitelisted sort for admin list endpoints (avoids arbitrary field injection).
+ */
+const buildAdminListSort = (sortBy, sortOrder) => {
+  const field = ADMIN_LIST_SORT_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
+  const order = String(sortOrder || '').toLowerCase() === 'asc' ? 1 : -1;
+  return { [field]: order };
+};
+
 const getTripRulesConfig = async () => {
   let config = await SystemConfig.findOne({ key: 'TRIP_RULES' });
   if (!config) {
@@ -498,7 +509,7 @@ const getSystemAnalytics = async (req, res, next) => {
  */
 const listAllTransporters = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 20, search } = req.query;
+    const { status, page = 1, limit = 20, search, sortBy, sortOrder } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Build query
@@ -513,10 +524,12 @@ const listAllTransporters = async (req, res, next) => {
       ];
     }
 
+    const sort = buildAdminListSort(sortBy, sortOrder);
+
     const [transporters, total] = await Promise.all([
       Transporter.find(query)
         .select('-pin')
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip(skip)
         .limit(parseInt(limit)),
       Transporter.countDocuments(query),
@@ -649,7 +662,7 @@ const updateTransporterStatus = async (req, res, next) => {
  */
 const listAllDrivers = async (req, res, next) => {
   try {
-    const { status, riskLevel, transporterId, page = 1, limit = 20 } = req.query;
+    const { status, riskLevel, transporterId, page = 1, limit = 20, search, sortBy, sortOrder } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Build query
@@ -657,15 +670,34 @@ const listAllDrivers = async (req, res, next) => {
     if (status) query.status = status;
     if (riskLevel) query.riskLevel = riskLevel;
     if (transporterId) query.transporterId = transporterId;
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      const rx = { $regex: s, $options: 'i' };
+      query.$or = [{ name: rx }, { mobile: rx }];
+    }
+
+    const sort = buildAdminListSort(sortBy, sortOrder);
 
     const [drivers, total] = await Promise.all([
       Driver.find(query)
         .populate('transporterId', 'name company')
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip(skip)
         .limit(parseInt(limit)),
       Driver.countDocuments(query),
     ]);
+
+    const driverIds = drivers.map((d) => d._id);
+    let tripCountByDriver = new Map();
+    if (driverIds.length > 0) {
+      const tripCounts = await Trip.aggregate([
+        { $match: { driverId: { $in: driverIds } } },
+        { $group: { _id: '$driverId', totalTrips: { $sum: 1 } } },
+      ]);
+      tripCountByDriver = new Map(
+        tripCounts.map((t) => [t._id.toString(), t.totalTrips])
+      );
+    }
 
     return res.status(200).json({
       success: true,
@@ -684,6 +716,7 @@ const listAllDrivers = async (req, res, next) => {
           riskLevel: d.riskLevel,
           language: d.language,
           walletBalance: d.walletBalance,
+          totalTrips: tripCountByDriver.get(d._id.toString()) || 0,
           createdAt: d.createdAt,
         })),
         pagination: {
@@ -867,16 +900,28 @@ const updateDriverStatus = async (req, res, next) => {
  */
 const listAllPumpOwners = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
+    const { status, page = 1, limit = 20, search, sortBy, sortOrder } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Build query
     const query = {};
     if (status) query.status = status;
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      const rx = { $regex: s, $options: 'i' };
+      query.$or = [
+        { name: rx },
+        { mobile: rx },
+        { email: rx },
+        { pumpName: rx },
+      ];
+    }
+
+    const sort = buildAdminListSort(sortBy, sortOrder);
 
     const [pumpOwners, total] = await Promise.all([
       PumpOwner.find(query)
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip(skip)
         .limit(parseInt(limit)),
       PumpOwner.countDocuments(query),
@@ -1022,22 +1067,41 @@ const updatePumpOwnerStatus = async (req, res, next) => {
  */
 const listAllPumpStaff = async (req, res, next) => {
   try {
-    const { pumpOwnerId, status, page = 1, limit = 20 } = req.query;
+    const { pumpOwnerId, status, page = 1, limit = 20, search, sortBy, sortOrder } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Build query
     const query = {};
     if (pumpOwnerId) query.pumpOwnerId = pumpOwnerId;
     if (status) query.status = status;
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      const rx = { $regex: s, $options: 'i' };
+      query.$or = [{ name: rx }, { mobile: rx }];
+    }
+
+    const sort = buildAdminListSort(sortBy, sortOrder);
 
     const [staff, total] = await Promise.all([
       PumpStaff.find(query)
         .populate('pumpOwnerId', 'name pumpName')
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip(skip)
         .limit(parseInt(limit)),
       PumpStaff.countDocuments(query),
     ]);
+
+    const staffIds = staff.map((s) => s._id);
+    let txCountByStaff = new Map();
+    if (staffIds.length > 0) {
+      const txCounts = await FuelTransaction.aggregate([
+        { $match: { pumpStaffId: { $in: staffIds }, status: 'completed' } },
+        { $group: { _id: '$pumpStaffId', totalTransactions: { $sum: 1 } } },
+      ]);
+      txCountByStaff = new Map(
+        txCounts.map((t) => [t._id.toString(), t.totalTransactions])
+      );
+    }
 
     return res.status(200).json({
       success: true,
@@ -1054,6 +1118,7 @@ const listAllPumpStaff = async (req, res, next) => {
           } : null,
           status: s.status,
           permissions: s.permissions,
+          totalTransactions: txCountByStaff.get(s._id.toString()) || 0,
           createdAt: s.createdAt,
         })),
         pagination: {
@@ -1121,19 +1186,54 @@ const getPumpStaffDetails = async (req, res, next) => {
  */
 const listAllCompanyUsers = async (req, res, next) => {
   try {
-    const { transporterId, status, hasAccess, page = 1, limit = 20 } = req.query;
+    const {
+      transporterId,
+      status,
+      hasAccess,
+      page = 1,
+      limit = 20,
+      search,
+      sortBy,
+      sortOrder,
+    } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Build query
     const query = {};
     if (transporterId) query.transporterId = transporterId;
     if (status) query.status = status;
-    if (hasAccess !== undefined) query.hasAccess = hasAccess === 'true';
+    if (hasAccess !== undefined && hasAccess !== '') {
+      query.hasAccess = hasAccess === 'true' || hasAccess === true;
+    }
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      const rx = { $regex: s, $options: 'i' };
+      const searchOr = [
+        { name: rx },
+        { mobile: rx },
+        { email: rx },
+      ];
+      const transporterMatches = await Transporter.find({
+        $or: [
+          { company: rx },
+          { name: rx },
+        ],
+      })
+        .select('_id')
+        .lean();
+      const tIds = transporterMatches.map((t) => t._id);
+      if (tIds.length) {
+        searchOr.push({ transporterId: { $in: tIds } });
+      }
+      query.$or = searchOr;
+    }
+
+    const sort = buildAdminListSort(sortBy, sortOrder);
 
     const [users, total] = await Promise.all([
       CompanyUser.find(query)
         .populate('transporterId', 'name company')
-        .sort({ createdAt: -1 })
+        .sort(sort)
         .skip(skip)
         .limit(parseInt(limit)),
       CompanyUser.countDocuments(query),
@@ -1208,6 +1308,92 @@ const getCompanyUserDetails = async (req, res, next) => {
           permissions: user.permissions,
           hasPinSet: !!user.pin,
           createdAt: user.createdAt,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update company user status (Admin only)
+ * PUT /api/admin/company-users/:id/status
+ */
+const updateCompanyUserStatus = async (req, res, next) => {
+  try {
+    const { status } = req.body;
+
+    if (!status || !['active', 'inactive', 'blocked'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid status is required (active, inactive, blocked)',
+      });
+    }
+
+    const user = await CompanyUser.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    ).select('-pin');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Company user not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Company user status updated successfully',
+      data: {
+        user: {
+          id: user._id,
+          status: user.status,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update pump staff status (Admin only)
+ * PUT /api/admin/pump-staff/:id/status
+ */
+const updatePumpStaffStatus = async (req, res, next) => {
+  try {
+    const { status } = req.body;
+
+    if (!status || !['active', 'inactive', 'blocked', 'disabled'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid status is required (active, inactive, blocked, disabled)',
+      });
+    }
+
+    const staff = await PumpStaff.findByIdAndUpdate(
+      req.params.id,
+      { status },
+      { new: true }
+    );
+
+    if (!staff) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pump staff not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Pump staff status updated successfully',
+      data: {
+        staff: {
+          id: staff._id,
+          status: staff.status,
         },
       },
     });
@@ -1985,6 +2171,8 @@ module.exports = {
   getPumpStaffDetails,
   listAllCompanyUsers,
   getCompanyUserDetails,
+  updateCompanyUserStatus,
+  updatePumpStaffStatus,
   listAllCustomers,
   updateCustomerStatus,
   getDuplicateCustomers,
