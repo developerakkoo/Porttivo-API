@@ -6,6 +6,12 @@ const {
   updateProfile,
   getDashboardStats,
   getSystemAnalytics,
+  listAdminTrips,
+  getAdminTripDetails,
+  listSavedLocations,
+  createSavedLocation,
+  listSavedLocationCatalog,
+  getSavedLocationDetails,
   // User management
   listAllTransporters,
   getTransporterDetails,
@@ -79,6 +85,12 @@ router.get('/dashboard/stats', getDashboardStats);
  * @access  Private (Admin only)
  */
 router.get('/analytics', getSystemAnalytics);
+router.get('/trips', listAdminTrips);
+router.get('/trips/:id', getAdminTripDetails);
+router.get('/locations', listSavedLocations);
+router.post('/locations/saved', createSavedLocation);
+router.get('/locations/saved', listSavedLocationCatalog);
+router.get('/locations/saved/:id', getSavedLocationDetails);
 router.get('/customers/list', listAllCustomers);
 router.put('/customers/:id/status', updateCustomerStatus);
 router.get('/customers/duplicates', getDuplicateCustomers);

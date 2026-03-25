@@ -13,6 +13,7 @@ const Wallet = require('../models/Wallet');
 const SystemConfig = require('../models/SystemConfig');
 const AdminAuditLog = require('../models/AdminAuditLog');
 const AuditLog = require('../models/AuditLog');
+const SavedLocation = require('../models/SavedLocation');
 const { generateTokens } = require('../services/jwt.service');
 const { TRIP_STATUS, CLOSED_TRIP_STATUSES } = require('../utils/tripState');
 const { logAdminAction } = require('../services/adminAudit.service');
@@ -25,6 +26,7 @@ const {
 } = require('../services/socket.service');
 
 const ADMIN_LIST_SORT_FIELDS = ['createdAt', 'name', 'mobile'];
+const ADMIN_TRIP_SORT_FIELDS = ['createdAt', 'updatedAt', 'scheduledAt', 'status', 'tripType', 'tripId'];
 
 /**
  * Whitelisted sort for admin list endpoints (avoids arbitrary field injection).
@@ -33,6 +35,72 @@ const buildAdminListSort = (sortBy, sortOrder) => {
   const field = ADMIN_LIST_SORT_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
   const order = String(sortOrder || '').toLowerCase() === 'asc' ? 1 : -1;
   return { [field]: order };
+};
+
+const buildAdminTripSort = (sortBy, sortOrder) => {
+  const field = ADMIN_TRIP_SORT_FIELDS.includes(sortBy) ? sortBy : 'createdAt';
+  const order = String(sortOrder || '').toLowerCase() === 'asc' ? 1 : -1;
+  return { [field]: order };
+};
+
+const isFiniteLocationCoordinate = (value) => Number.isFinite(Number(value));
+
+const normalizeSavedLocationInput = (location) => {
+  if (!location) {
+    return null;
+  }
+
+  let longitude = null;
+  let latitude = null;
+
+  if (Array.isArray(location.coordinates)) {
+    [longitude, latitude] = location.coordinates;
+  } else if (location.coordinates) {
+    longitude = location.coordinates.longitude;
+    latitude = location.coordinates.latitude;
+  }
+
+  longitude = isFiniteLocationCoordinate(longitude) ? Number(longitude) : null;
+  latitude = isFiniteLocationCoordinate(latitude) ? Number(latitude) : null;
+
+  return {
+    type: 'Point',
+    coordinates: longitude !== null && latitude !== null ? [longitude, latitude] : [],
+    formattedAddress: location.formattedAddress?.trim() || location.address?.trim() || '',
+    placeId: location.placeId?.trim() || null,
+    addressLine1: location.addressLine1?.trim() || null,
+    locality: location.locality?.trim() || location.city?.trim() || null,
+    administrativeArea: location.administrativeArea?.trim() || location.state?.trim() || null,
+    postalCode: location.postalCode?.trim() || location.pincode?.trim() || null,
+    countryCode: location.countryCode?.trim()?.toUpperCase() || null,
+    name: location.name?.trim() || null,
+    provider: location.provider || null,
+    resolvedAt: location.resolvedAt ? new Date(location.resolvedAt) : null,
+  };
+};
+
+const validateSavedLocationInput = (location) => {
+  if (!location) {
+    return 'location is required';
+  }
+
+  const normalized = normalizeSavedLocationInput(location);
+
+  if (!normalized.formattedAddress) {
+    return 'location.formattedAddress is required';
+  }
+
+  if (!Array.isArray(normalized.coordinates) || normalized.coordinates.length !== 2) {
+    return 'location.coordinates must be [longitude, latitude] or { longitude, latitude }';
+  }
+
+  const [longitude, latitude] = normalized.coordinates;
+
+  if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+    return 'location coordinates are out of range';
+  }
+
+  return null;
 };
 
 const getTripRulesConfig = async () => {
@@ -497,6 +565,365 @@ const getSystemAnalytics = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       data: { analytics },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * List trips for admin
+ * GET /api/admin/trips
+ */
+const listAdminTrips = async (req, res, next) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      tripType,
+      transporterId,
+      customerId,
+      driverId,
+      vehicleId,
+      q,
+      startDate,
+      endDate,
+      sortBy,
+      sortOrder,
+    } = req.query;
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    const query = {};
+
+    if (status) query.status = status;
+    if (tripType) query.tripType = tripType;
+    if (transporterId) query.transporterId = transporterId;
+    if (customerId) query.customerId = customerId;
+    if (driverId) query.driverId = driverId;
+    if (vehicleId) query.vehicleId = vehicleId;
+
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    if (q?.trim()) {
+      const search = q.trim();
+      query.$or = [
+        { tripId: { $regex: search, $options: 'i' } },
+        { containerNumber: { $regex: search.toUpperCase(), $options: 'i' } },
+        { reference: { $regex: search, $options: 'i' } },
+        { 'pickupLocation.formattedAddress': { $regex: search, $options: 'i' } },
+        { 'dropLocation.formattedAddress': { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const sort = buildAdminTripSort(sortBy, sortOrder);
+
+    const [trips, total] = await Promise.all([
+      Trip.find(query)
+        .populate('vehicleId', 'vehicleNumber trailerType status')
+        .populate('driverId', 'name mobile status')
+        .populate('transporterId', 'name company mobile')
+        .populate('customerId', 'name mobile email isRegistered')
+        .sort(sort)
+        .skip(skip)
+        .limit(limitNum),
+      Trip.countDocuments(query),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        trips,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get trip details for admin
+ * GET /api/admin/trips/:id
+ */
+const getAdminTripDetails = async (req, res, next) => {
+  try {
+    const trip = await Trip.findById(req.params.id)
+      .populate('vehicleId', 'vehicleNumber trailerType status')
+      .populate('driverId', 'name mobile status')
+      .populate('transporterId', 'name company mobile')
+      .populate('customerId', 'name mobile email isRegistered')
+      .populate('acceptedTransporterId', 'name company mobile')
+      .populate('assignments.vehicleId', 'vehicleNumber trailerType')
+      .populate('assignments.driverId', 'name mobile');
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: { trip },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * List saved trip locations for admin
+ * GET /api/admin/locations
+ */
+const listSavedLocations = async (req, res, next) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      q,
+      tripId,
+      transporterId,
+      customerId,
+      locationType = 'both',
+    } = req.query;
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const query = {
+      $or: [
+        { pickupLocation: { $ne: null } },
+        { dropLocation: { $ne: null } },
+      ],
+    };
+
+    if (tripId) {
+      query.tripId = { $regex: tripId.trim(), $options: 'i' };
+    }
+
+    if (transporterId) {
+      query.transporterId = transporterId;
+    }
+
+    if (customerId) {
+      query.customerId = customerId;
+    }
+
+    if (q?.trim()) {
+      const search = q.trim();
+      query.$and = [
+        {
+          $or: [
+            { tripId: { $regex: search, $options: 'i' } },
+            { containerNumber: { $regex: search.toUpperCase(), $options: 'i' } },
+            { reference: { $regex: search, $options: 'i' } },
+            { 'pickupLocation.formattedAddress': { $regex: search, $options: 'i' } },
+            { 'dropLocation.formattedAddress': { $regex: search, $options: 'i' } },
+            { 'pickupLocation.placeId': { $regex: search, $options: 'i' } },
+            { 'dropLocation.placeId': { $regex: search, $options: 'i' } },
+          ],
+        },
+      ];
+    }
+
+    const [trips, total] = await Promise.all([
+      Trip.find(query)
+        .populate('transporterId', 'name company mobile')
+        .populate('customerId', 'name mobile email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Trip.countDocuments(query),
+    ]);
+
+    const locations = trips.map((trip) => {
+      const item = {
+        tripObjectId: trip._id,
+        tripId: trip.tripId,
+        containerNumber: trip.containerNumber,
+        reference: trip.reference,
+        status: trip.status,
+        tripType: trip.tripType,
+        transporter: trip.transporterId,
+        customer: trip.customerId,
+        createdAt: trip.createdAt,
+        updatedAt: trip.updatedAt,
+      };
+
+      if (locationType === 'pickup') {
+        item.pickupLocation = trip.pickupLocation || null;
+      } else if (locationType === 'drop') {
+        item.dropLocation = trip.dropLocation || null;
+      } else {
+        item.pickupLocation = trip.pickupLocation || null;
+        item.dropLocation = trip.dropLocation || null;
+      }
+
+      return item;
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        locations,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Create saved location for admin
+ * POST /api/admin/locations/saved
+ */
+const createSavedLocation = async (req, res, next) => {
+  try {
+    const { label, location, notes, isActive } = req.body;
+
+    if (!label?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'label is required',
+      });
+    }
+
+    const locationError = validateSavedLocationInput(location);
+    if (locationError) {
+      return res.status(400).json({
+        success: false,
+        message: locationError,
+      });
+    }
+
+    const savedLocation = await SavedLocation.create({
+      label: label.trim(),
+      location: normalizeSavedLocationInput(location),
+      notes: notes?.trim() || null,
+      isActive: isActive !== undefined ? Boolean(isActive) : true,
+      createdBy: {
+        userId: req.user.id,
+        userType: 'ADMIN',
+      },
+      updatedBy: {
+        userId: req.user.id,
+        userType: 'ADMIN',
+      },
+    });
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'SAVED_LOCATION_CREATED',
+      entityType: 'SAVED_LOCATION',
+      entityId: savedLocation._id,
+      metadata: {
+        locationId: savedLocation.locationId,
+        label: savedLocation.label,
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Saved location created successfully',
+      data: {
+        savedLocation,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * List saved location catalog for admin
+ * GET /api/admin/locations/saved
+ */
+const listSavedLocationCatalog = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20, q, isActive } = req.query;
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+    const query = {};
+
+    if (isActive !== undefined) {
+      query.isActive = String(isActive).toLowerCase() === 'true';
+    }
+
+    if (q?.trim()) {
+      const search = q.trim();
+      query.$or = [
+        { locationId: { $regex: search, $options: 'i' } },
+        { label: { $regex: search, $options: 'i' } },
+        { notes: { $regex: search, $options: 'i' } },
+        { 'location.formattedAddress': { $regex: search, $options: 'i' } },
+        { 'location.placeId': { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const [savedLocations, total] = await Promise.all([
+      SavedLocation.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
+      SavedLocation.countDocuments(query),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        savedLocations,
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          pages: Math.ceil(total / limitNum),
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get saved location details for admin
+ * GET /api/admin/locations/saved/:id
+ */
+const getSavedLocationDetails = async (req, res, next) => {
+  try {
+    const savedLocation = await SavedLocation.findById(req.params.id);
+
+    if (!savedLocation) {
+      return res.status(404).json({
+        success: false,
+        message: 'Saved location not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        savedLocation,
+      },
     });
   } catch (error) {
     next(error);
@@ -2156,6 +2583,12 @@ module.exports = {
   updateProfile,
   getDashboardStats,
   getSystemAnalytics,
+  listAdminTrips,
+  getAdminTripDetails,
+  listSavedLocations,
+  createSavedLocation,
+  listSavedLocationCatalog,
+  getSavedLocationDetails,
   // User management
   listAllTransporters,
   getTransporterDetails,

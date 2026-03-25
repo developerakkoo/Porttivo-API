@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { TRIP_STATUS, TRIP_STATUS_VALUES, BOOKING_STATUS_VALUES } = require('../utils/tripState');
+const locationSchema = require('./schemas/location.schema');
 
 // Milestone Schema
 const milestoneSchema = new mongoose.Schema(
@@ -73,42 +74,6 @@ const podSchema = new mongoose.Schema(
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',
-      default: null,
-    },
-  },
-  { _id: false }
-);
-
-// Location Schema
-const locationSchema = new mongoose.Schema(
-  {
-    address: {
-      type: String,
-      trim: true,
-    },
-    coordinates: {
-      latitude: {
-        type: Number,
-        required: true,
-      },
-      longitude: {
-        type: Number,
-        required: true,
-      },
-    },
-    city: {
-      type: String,
-      trim: true,
-      default: null,
-    },
-    state: {
-      type: String,
-      trim: true,
-      default: null,
-    },
-    pincode: {
-      type: String,
-      trim: true,
       default: null,
     },
   },

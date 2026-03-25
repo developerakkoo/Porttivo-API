@@ -34,6 +34,27 @@ const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
   acceptedTransporterId: null,
 };
 
+const isFiniteCoordinate = (value) => Number.isFinite(Number(value));
+
+const getLocationCoordinates = (location) => {
+  if (!location || location.coordinates === undefined || location.coordinates === null) {
+    return { longitude: null, latitude: null };
+  }
+
+  if (Array.isArray(location.coordinates)) {
+    const [longitude, latitude] = location.coordinates;
+    return {
+      longitude: isFiniteCoordinate(longitude) ? Number(longitude) : null,
+      latitude: isFiniteCoordinate(latitude) ? Number(latitude) : null,
+    };
+  }
+
+  return {
+    longitude: isFiniteCoordinate(location.coordinates.longitude) ? Number(location.coordinates.longitude) : null,
+    latitude: isFiniteCoordinate(location.coordinates.latitude) ? Number(location.coordinates.latitude) : null,
+  };
+};
+
 const normalizeHiredVehicle = (hiredVehicle) => {
   if (!hiredVehicle) {
     return null;
@@ -86,29 +107,52 @@ const normalizeLocation = (location) => {
     return null;
   }
 
+  const { longitude, latitude } = getLocationCoordinates(location);
+
   return {
-    address: location.address?.trim() || '',
-    coordinates: {
-      latitude: location.coordinates.latitude,
-      longitude: location.coordinates.longitude,
-    },
-    city: location.city?.trim() || null,
-    state: location.state?.trim() || null,
-    pincode: location.pincode?.trim() || null,
+    type: 'Point',
+    coordinates: longitude !== null && latitude !== null ? [longitude, latitude] : [],
+    formattedAddress: location.formattedAddress?.trim() || location.address?.trim() || '',
+    placeId: location.placeId?.trim() || null,
+    addressLine1: location.addressLine1?.trim() || null,
+    locality: location.locality?.trim() || location.city?.trim() || null,
+    administrativeArea: location.administrativeArea?.trim() || location.state?.trim() || null,
+    postalCode: location.postalCode?.trim() || location.pincode?.trim() || null,
+    countryCode: location.countryCode?.trim()?.toUpperCase() || null,
+    name: location.name?.trim() || null,
+    provider: location.provider || null,
+    resolvedAt: location.resolvedAt ? new Date(location.resolvedAt) : null,
   };
 };
 
-const validateCoordinates = (location, label) => {
-  if (!location || !location.coordinates) {
+const validateLocation = (location, label) => {
+  if (!location) {
     return `${label} is required`;
   }
 
-  const { latitude, longitude } = location.coordinates;
+  const { latitude, longitude } = getLocationCoordinates(location);
   if (latitude === undefined || latitude === null || longitude === undefined || longitude === null) {
-    return `${label} must include coordinates (latitude and longitude)`;
+    return `${label} must include valid coordinates as [longitude, latitude] or { latitude, longitude }`;
+  }
+
+  if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
+    return `${label} coordinates are out of range`;
+  }
+
+  const formattedAddress = location.formattedAddress?.trim() || location.address?.trim();
+  if (!formattedAddress) {
+    return `${label} formattedAddress is required`;
   }
 
   return null;
+};
+
+const serializeLocation = (location) => {
+  if (!location) {
+    return null;
+  }
+
+  return normalizeLocation(location);
 };
 
 const createNotification = async ({ userId, userType, type, title, message, data = {}, priority = 'medium' }) => {
@@ -171,6 +215,8 @@ const serializeTrip = (trip, options = {}) => {
 
   return {
     ...tripData,
+    pickupLocation: serializeLocation(tripData.pickupLocation),
+    dropLocation: serializeLocation(tripData.dropLocation),
     vehicle: tripData.vehicleId
       ? {
           id: tripData.vehicleId._id || tripData.vehicleId,
@@ -455,18 +501,24 @@ const createTrip = async (req, res, next) => {
     }
 
     // Validate locations if provided
-    if (pickupLocation && (!pickupLocation.coordinates?.latitude || !pickupLocation.coordinates?.longitude)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Pickup location must include coordinates (latitude and longitude)',
-      });
+    if (pickupLocation) {
+      const pickupError = validateLocation(pickupLocation, 'Pickup location');
+      if (pickupError) {
+        return res.status(400).json({
+          success: false,
+          message: pickupError,
+        });
+      }
     }
 
-    if (dropLocation && (!dropLocation.coordinates?.latitude || !dropLocation.coordinates?.longitude)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Drop location must include coordinates (latitude and longitude)',
-      });
+    if (dropLocation) {
+      const dropError = validateLocation(dropLocation, 'Drop location');
+      if (dropError) {
+        return res.status(400).json({
+          success: false,
+          message: dropError,
+        });
+      }
     }
 
     // Create trip
@@ -849,20 +901,26 @@ const updateTrip = async (req, res, next) => {
       trip.reference = reference?.trim().toUpperCase() || null;
     }
     if (pickupLocation !== undefined) {
-      if (pickupLocation && (!pickupLocation.coordinates?.latitude || !pickupLocation.coordinates?.longitude)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Pickup location must include coordinates (latitude and longitude)',
-        });
+      if (pickupLocation) {
+        const pickupError = validateLocation(pickupLocation, 'Pickup location');
+        if (pickupError) {
+          return res.status(400).json({
+            success: false,
+            message: pickupError,
+          });
+        }
       }
       trip.pickupLocation = normalizeLocation(pickupLocation);
     }
     if (dropLocation !== undefined) {
-      if (dropLocation && (!dropLocation.coordinates?.latitude || !dropLocation.coordinates?.longitude)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Drop location must include coordinates (latitude and longitude)',
-        });
+      if (dropLocation) {
+        const dropError = validateLocation(dropLocation, 'Drop location');
+        if (dropError) {
+          return res.status(400).json({
+            success: false,
+            message: dropError,
+          });
+        }
       }
       trip.dropLocation = normalizeLocation(dropLocation);
     }
@@ -1518,12 +1576,12 @@ const bookCustomerTrip = async (req, res, next) => {
       });
     }
 
-    const pickupError = validateCoordinates(pickupLocation, 'Pickup location');
+    const pickupError = validateLocation(pickupLocation, 'Pickup location');
     if (pickupError) {
       return res.status(400).json({ success: false, message: pickupError });
     }
 
-    const dropError = validateCoordinates(dropLocation, 'Drop location');
+    const dropError = validateLocation(dropLocation, 'Drop location');
     if (dropError) {
       return res.status(400).json({ success: false, message: dropError });
     }
