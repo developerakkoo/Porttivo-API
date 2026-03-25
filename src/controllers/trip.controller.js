@@ -24,6 +24,7 @@ const {
   sendBookingRejectedTemplate,
   sendBookingRequestReceivedTemplate,
 } = require('../services/wati.service');
+const { syncTripLocationsToSavedCatalog } = require('../services/savedLocation.service');
 const { TRIP_STATUS, BOOKING_STATUS, TRIP_STATUS_VALUES } = require('../utils/tripState');
 const { buildVisibleTrip } = require('../services/tripVisibility.service');
 
@@ -192,6 +193,14 @@ const toAuditUserType = (userType) => {
     default:
       return 'SYSTEM';
   }
+};
+
+const toSavedLocationActorType = (userType) => {
+  if (userType === 'admin') {
+    return 'ADMIN';
+  }
+
+  return 'SYSTEM';
 };
 
 const setAuditActor = (trip, user) => {
@@ -524,6 +533,13 @@ const createTrip = async (req, res, next) => {
     // Create trip
     const trip = new Trip(tripPayload);
     await trip.save();
+    await syncTripLocationsToSavedCatalog({
+      trip,
+      actor: {
+        userId: req.user.id,
+        userType: toSavedLocationActorType(req.user.userType),
+      },
+    });
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
@@ -760,6 +776,15 @@ const updateTrip = async (req, res, next) => {
       }
       setAuditActor(trip, req.user);
       await trip.save();
+      if (pickupLocation !== undefined || dropLocation !== undefined) {
+        await syncTripLocationsToSavedCatalog({
+          trip,
+          actor: {
+            userId: req.user.id,
+            userType: toSavedLocationActorType(req.user.userType),
+          },
+        });
+      }
       await trip.populate('vehicleId', 'vehicleNumber trailerType');
       await trip.populate('driverId', 'name mobile');
       await trip.populate('transporterId', 'name company');
@@ -927,6 +952,15 @@ const updateTrip = async (req, res, next) => {
 
     setAuditActor(trip, req.user);
     await trip.save();
+    if (pickupLocation !== undefined || dropLocation !== undefined) {
+      await syncTripLocationsToSavedCatalog({
+        trip,
+        actor: {
+          userId: req.user.id,
+          userType: toSavedLocationActorType(req.user.userType),
+        },
+      });
+    }
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
@@ -1626,6 +1660,13 @@ const bookCustomerTrip = async (req, res, next) => {
           userId: req.user.id,
           userType: toAuditUserType(req.user.userType),
         },
+      },
+    });
+    await syncTripLocationsToSavedCatalog({
+      trip,
+      actor: {
+        userId: req.user.id,
+        userType: toSavedLocationActorType(req.user.userType),
       },
     });
 
