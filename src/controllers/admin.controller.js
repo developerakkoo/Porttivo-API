@@ -996,10 +996,8 @@ const listAllTransporters = async (req, res, next) => {
  */
 const getTransporterDetails = async (req, res, next) => {
   try {
-    const transporter = await Transporter.findById(req.params.id)
-      .select('-pin')
-      .populate('vehicles', 'vehicleNumber status')
-      .populate('drivers', 'name mobile status');
+    // Vehicles/drivers are not embedded on Transporter; they reference transporterId.
+    const transporter = await Transporter.findById(req.params.id).select('-pin');
 
     if (!transporter) {
       return res.status(404).json({
@@ -1008,11 +1006,16 @@ const getTransporterDetails = async (req, res, next) => {
       });
     }
 
-    // Get additional stats
-    const [totalVehicles, totalDrivers, totalTrips] = await Promise.all([
+    // Stats + related lists (vehicles/drivers use transporterId; they are not embedded on Transporter)
+    const [totalVehicles, totalDrivers, totalTrips, vehicles, drivers] = await Promise.all([
       Vehicle.countDocuments({ transporterId: transporter._id }),
       Driver.countDocuments({ transporterId: transporter._id }),
       Trip.countDocuments({ transporterId: transporter._id }),
+      Vehicle.find({ transporterId: transporter._id })
+        .select('vehicleNumber status trailerType driverId')
+        .populate('driverId', 'name mobile')
+        .lean(),
+      Driver.find({ transporterId: transporter._id }).select('name mobile status').lean(),
     ]);
 
     return res.status(200).json({
@@ -1032,6 +1035,25 @@ const getTransporterDetails = async (req, res, next) => {
           totalDrivers,
           totalTrips,
           createdAt: transporter.createdAt,
+          vehicles: vehicles.map((v) => ({
+            id: v._id,
+            vehicleNumber: v.vehicleNumber,
+            status: v.status,
+            trailerType: v.trailerType,
+            driver: v.driverId
+              ? {
+                  id: v.driverId._id,
+                  name: v.driverId.name,
+                  mobile: v.driverId.mobile,
+                }
+              : null,
+          })),
+          drivers: drivers.map((d) => ({
+            id: d._id,
+            name: d.name,
+            mobile: d.mobile,
+            status: d.status,
+          })),
         },
       },
     });
