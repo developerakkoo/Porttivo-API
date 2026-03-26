@@ -407,14 +407,22 @@ const getTripTimeline = async (req, res, next) => {
         m => m.milestoneNumber === milestoneNumber
       )
       // For milestone 5 (TRIP_COMPLETED), use POD photo if milestone has no photo
-      const photos = completedMilestone?.photos?.length
+      let photos = completedMilestone?.photos?.length
         ? completedMilestone.photos
         : completedMilestone?.photo
           ? [completedMilestone.photo]
           : milestoneNumber === 5 && trip.POD?.photo
             ? [trip.POD.photo]
             : []
-      const photo = photos[0] || completedMilestone?.photo || (milestoneNumber === 5 ? trip.POD?.photo : null) || null
+      photos = (photos || []).map((s) => String(s).trim()).filter(Boolean)
+      const fallbackPhoto =
+        completedMilestone?.photo ||
+        (milestoneNumber === 5 ? trip.POD?.photo : null) ||
+        null
+      if (!photos.length && fallbackPhoto) {
+        photos = [String(fallbackPhoto).trim()].filter(Boolean)
+      }
+      const photo = photos[0] || fallbackPhoto || null
 
       return {
         milestoneNumber,

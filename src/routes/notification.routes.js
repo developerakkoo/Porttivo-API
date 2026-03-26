@@ -19,18 +19,18 @@ router.use(authenticate);
 router.get('/', getNotifications);
 
 /**
- * @route   PUT /api/notifications/:id/read
- * @desc    Mark notification as read
- * @access  Private
- */
-router.put('/:id/read', markAsRead);
-
-/**
  * @route   PUT /api/notifications/read-all
  * @desc    Mark all notifications as read
  * @access  Private
  */
 router.put('/read-all', markAllAsRead);
+
+/**
+ * @route   PUT /api/notifications/:id/read
+ * @desc    Mark notification as read
+ * @access  Private
+ */
+router.put('/:id/read', markAsRead);
 
 /**
  * @route   POST /api/notifications/send

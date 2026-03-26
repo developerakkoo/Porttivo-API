@@ -1891,6 +1891,57 @@ const listAllCustomers = async (req, res, next) => {
 };
 
 /**
+ * Get single customer (Admin only)
+ * GET /api/admin/customers/:id
+ */
+const getCustomerDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const customer = await Customer.findById(id).lean();
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found',
+      });
+    }
+
+    const tripCount = await Trip.countDocuments({ customerId: customer._id });
+    const activeTripCount = await Trip.countDocuments({
+      customerId: customer._id,
+      status: {
+        $in: [
+          TRIP_STATUS.BOOKED,
+          TRIP_STATUS.ACCEPTED,
+          TRIP_STATUS.PLANNED,
+          TRIP_STATUS.ACTIVE,
+          TRIP_STATUS.POD_PENDING,
+        ],
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        customer: {
+          id: customer._id,
+          mobile: customer.mobile,
+          name: customer.name,
+          email: customer.email,
+          status: customer.status,
+          isRegistered: customer.isRegistered,
+          tripCount,
+          activeTripCount,
+          createdAt: customer.createdAt,
+          updatedAt: customer.updatedAt,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Update customer status (Admin only)
  * PUT /api/admin/customers/:id/status
  */
@@ -2607,6 +2658,7 @@ module.exports = {
   updateCompanyUserStatus,
   updatePumpStaffStatus,
   listAllCustomers,
+  getCustomerDetails,
   updateCustomerStatus,
   getDuplicateCustomers,
   mergeCustomers,

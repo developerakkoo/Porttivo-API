@@ -39,6 +39,7 @@ const {
   getAuditLogs,
   getSystemAuditLogs,
   listAllCustomers,
+  getCustomerDetails,
   updateCustomerStatus,
   adminUpdateTripStatus,
   adminReassignTrip,
@@ -92,8 +93,9 @@ router.post('/locations/saved', createSavedLocation);
 router.get('/locations/saved', listSavedLocationCatalog);
 router.get('/locations/saved/:id', getSavedLocationDetails);
 router.get('/customers/list', listAllCustomers);
-router.put('/customers/:id/status', updateCustomerStatus);
 router.get('/customers/duplicates', getDuplicateCustomers);
+router.get('/customers/:id', getCustomerDetails);
+router.put('/customers/:id/status', updateCustomerStatus);
 router.post('/customers/merge', mergeCustomers);
 router.put('/trips/:id/status', adminUpdateTripStatus);
 router.put('/trips/:id/reassign', adminReassignTrip);

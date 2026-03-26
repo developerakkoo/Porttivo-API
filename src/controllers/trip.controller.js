@@ -168,6 +168,29 @@ const createNotification = async ({ userId, userType, type, title, message, data
   });
 };
 
+const notifyDriverOfTripAssignment = async (trip, notificationMessage) => {
+  const driverId = trip.driverId?._id || trip.driverId;
+  if (!driverId) {
+    return;
+  }
+
+  await createNotification({
+    userId: driverId,
+    userType: 'DRIVER',
+    type: 'TRIP_DRIVER_ASSIGNED',
+    title: 'New trip assigned',
+    message: notificationMessage,
+    data: {
+      tripId: trip._id,
+      publicTripId: trip.tripId,
+      vehicleId: trip.vehicleId?._id || trip.vehicleId || null,
+      hiredVehicle: trip.hiredVehicle || null,
+      status: trip.status,
+    },
+    priority: 'high',
+  });
+};
+
 const serializeTripForRealtime = (trip) => (trip.toObject ? trip.toObject() : trip);
 
 const triggerWatiTemplate = async (handler, contextLabel) => {
@@ -339,6 +362,10 @@ const emitAssignmentEvents = async (trip, eventName, notificationMessage) => {
     emitTripVehicleAssigned(payload.trip, payload.assignment);
   } else if (eventName === 'trip:driver:assigned') {
     emitTripDriverAssigned(payload.trip, payload.assignment);
+    const driverId = trip.driverId?._id || trip.driverId;
+    if (driverId) {
+      await notifyDriverOfTripAssignment(trip, `You have been assigned trip ${trip.tripId}.`);
+    }
   }
 
   if (trip.customerId) {
@@ -2316,6 +2343,8 @@ const assignCustomerTrip = async (req, res, next) => {
       },
       priority: 'high',
     });
+
+    await notifyDriverOfTripAssignment(trip, `You have been assigned trip ${trip.tripId}.`);
 
     emitTripAssigned(trip, buildAssignmentPayload(trip).assignment);
 

@@ -3,8 +3,10 @@ const { verifyToken } = require('./jwt.service');
 const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
 const Trip = require('../models/Trip');
+const Vehicle = require('../models/Vehicle');
 const Customer = require('../models/Customer');
 const Admin = require('../models/Admin');
+const CompanyUser = require('../models/CompanyUser');
 const { activateNextTrip } = require('./tripQueue.service');
 const { getMilestoneTypeByNumber, getBackendMeaning, getDriverLabel } = require('../utils/milestoneMapping');
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState');
@@ -33,6 +35,16 @@ const getTripVehicleRoom = (trip) => {
     return `vehicle:hired:${trip.hiredVehicle.vehicleNumber}`;
   }
 
+  return null;
+};
+
+/** Transporter id for socket user (company users act as their transporter). */
+const getTransporterScopeId = (user) => {
+  if (!user) return null;
+  if (user.userType === 'transporter') return user.id?.toString?.() ?? `${user.id}`;
+  if (user.userType === 'company-user' && user.transporterId) {
+    return user.transporterId.toString?.() ?? `${user.transporterId}`;
+  }
   return null;
 };
 
@@ -96,6 +108,8 @@ const initializeSocketIO = (httpServer) => {
         let user = null;
         if (decoded.userType === 'transporter') {
           user = await Transporter.findById(decoded.userId);
+        } else if (decoded.userType === 'company-user') {
+          user = await CompanyUser.findById(decoded.userId);
         } else if (decoded.userType === 'driver') {
           user = await Driver.findById(decoded.userId);
         } else if (decoded.userType === 'customer') {
@@ -113,12 +127,22 @@ const initializeSocketIO = (httpServer) => {
         }
 
         // Attach user to socket
-        socket.user = {
-          id: user._id.toString(),
-          mobile: user.mobile || user.email,
-          userType: decoded.userType,
-          userData: user,
-        };
+        if (decoded.userType === 'company-user') {
+          socket.user = {
+            id: user._id.toString(),
+            mobile: user.mobile || user.email,
+            userType: 'company-user',
+            transporterId: user.transporterId.toString(),
+            userData: user,
+          };
+        } else {
+          socket.user = {
+            id: user._id.toString(),
+            mobile: user.mobile || user.email,
+            userType: decoded.userType,
+            userData: user,
+          };
+        }
 
         next();
       } catch (tokenError) {
@@ -136,6 +160,8 @@ const initializeSocketIO = (httpServer) => {
     // Join user-specific rooms
     if (socket.user.userType === 'transporter') {
       socket.join(`transporter:${socket.user.id}`);
+    } else if (socket.user.userType === 'company-user' && socket.user.transporterId) {
+      socket.join(`transporter:${socket.user.transporterId}`);
     } else if (socket.user.userType === 'driver') {
       socket.join(`driver:${socket.user.id}`);
     } else if (socket.user.userType === 'customer') {
@@ -147,9 +173,16 @@ const initializeSocketIO = (httpServer) => {
 
     // Handle room joins
     socket.on('join:transporter', (transporterId) => {
-      if (socket.user.userType === 'transporter' && socket.user.id === transporterId) {
-        socket.join(`transporter:${transporterId}`);
-        console.log(`Socket ${socket.id} joined transporter:${transporterId}`);
+      const id = transporterId?.toString?.() ?? transporterId;
+      if (socket.user.userType === 'transporter' && socket.user.id === id) {
+        socket.join(`transporter:${id}`);
+        console.log(`Socket ${socket.id} joined transporter:${id}`);
+      } else if (
+        socket.user.userType === 'company-user' &&
+        socket.user.transporterId === id
+      ) {
+        socket.join(`transporter:${id}`);
+        console.log(`Socket ${socket.id} joined transporter:${id} (company-user)`);
       }
     });
 
@@ -167,14 +200,96 @@ const initializeSocketIO = (httpServer) => {
       }
     });
 
-    socket.on('join:vehicle', (vehicleId) => {
-      socket.join(`vehicle:${vehicleId}`);
-      console.log(`Socket ${socket.id} joined vehicle:${vehicleId}`);
+    socket.on('join:vehicle', async (vehicleId) => {
+      try {
+        const vid = vehicleId?.toString?.() ?? vehicleId;
+        if (!vid) return;
+
+        const vehicle = await Vehicle.findById(vid);
+        if (!vehicle) {
+          console.warn(`Socket ${socket.id} join:vehicle denied — vehicle not found`);
+          return;
+        }
+
+        const ut = socket.user.userType;
+        if (ut === 'admin') {
+          socket.join(`vehicle:${vid}`);
+          console.log(`Socket ${socket.id} joined vehicle:${vid} (admin)`);
+          return;
+        }
+
+        if (ut === 'driver') {
+          if (vehicle.driverId && vehicle.driverId.toString() === socket.user.id) {
+            socket.join(`vehicle:${vid}`);
+            console.log(`Socket ${socket.id} joined vehicle:${vid} (driver)`);
+          }
+          return;
+        }
+
+        const scopeId = getTransporterScopeId(socket.user);
+        if (!scopeId) return;
+
+        const ownerMatch = vehicle.transporterId.toString() === scopeId;
+        const hired = (vehicle.hiredBy || []).some((h) => h.toString() === scopeId);
+        if (!ownerMatch && !hired) {
+          console.warn(`Socket ${socket.id} join:vehicle denied — not owner/hirer`);
+          return;
+        }
+
+        socket.join(`vehicle:${vid}`);
+        console.log(`Socket ${socket.id} joined vehicle:${vid}`);
+      } catch (err) {
+        console.error('join:vehicle error', err);
+      }
     });
 
-    socket.on('join:trip', (tripId) => {
-      socket.join(`trip:${tripId}`);
-      console.log(`Socket ${socket.id} joined trip:${tripId}`);
+    socket.on('join:trip', async (tripId) => {
+      try {
+        const tid = tripId?.toString?.() ?? tripId;
+        if (!tid) return;
+
+        const trip = await Trip.findById(tid).select('transporterId driverId customerId');
+        if (!trip) {
+          console.warn(`Socket ${socket.id} join:trip denied — trip not found`);
+          return;
+        }
+
+        const ut = socket.user.userType;
+        if (ut === 'admin') {
+          socket.join(`trip:${tid}`);
+          console.log(`Socket ${socket.id} joined trip:${tid} (admin)`);
+          return;
+        }
+
+        if (ut === 'driver') {
+          if (trip.driverId && trip.driverId.toString() === socket.user.id) {
+            socket.join(`trip:${tid}`);
+            console.log(`Socket ${socket.id} joined trip:${tid} (driver)`);
+          } else {
+            console.warn(`Socket ${socket.id} join:trip denied — not assigned driver`);
+          }
+          return;
+        }
+
+        if (ut === 'customer') {
+          if (trip.customerId && trip.customerId.toString() === socket.user.id) {
+            socket.join(`trip:${tid}`);
+            console.log(`Socket ${socket.id} joined trip:${tid} (customer)`);
+          }
+          return;
+        }
+
+        const scopeId = getTransporterScopeId(socket.user);
+        if (!scopeId) return;
+        if (trip.transporterId && trip.transporterId.toString() === scopeId) {
+          socket.join(`trip:${tid}`);
+          console.log(`Socket ${socket.id} joined trip:${tid}`);
+        } else {
+          console.warn(`Socket ${socket.id} join:trip denied — wrong transporter`);
+        }
+      } catch (err) {
+        console.error('join:trip error', err);
+      }
     });
 
     // Handle trip start (from driver app)
