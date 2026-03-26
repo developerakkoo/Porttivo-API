@@ -245,8 +245,11 @@ const serializeTrip = (trip, options = {}) => {
       ? trip.getCurrentMilestone()
       : null;
 
+  const idStr = tripData._id != null ? String(tripData._id) : undefined;
+
   return {
     ...tripData,
+    ...(idStr ? { id: idStr } : {}),
     pickupLocation: serializeLocation(tripData.pickupLocation),
     dropLocation: serializeLocation(tripData.dropLocation),
     vehicle: tripData.vehicleId

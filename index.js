@@ -25,6 +25,18 @@ const adminRoutes = require('./src/routes/admin.routes');
 const walletRoutes = require('./src/routes/wallet.routes');
 const settlementRoutes = require('./src/routes/settlement.routes');
 const notificationRoutes = require('./src/routes/notification.routes');
+const { getCustomerDetails } = require('./src/controllers/admin.controller');
+const { authenticate } = require('./src/middleware/auth.middleware');
+
+function requireAdminUser(req, res, next) {
+  if (req.user?.userType !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. This endpoint is for admins only.',
+    });
+  }
+  next();
+}
 
 // Initialize Express app
 const app = express();
@@ -75,6 +87,9 @@ app.use('/api/fuel', fuelRoutes);
 app.use('/api/company-users', companyUserRoutes);
 app.use('/api/pump-owners', pumpOwnerRoutes);
 app.use('/api/pump-staff', pumpStaffRoutes);
+// Customer detail must be registered before mounting admin router so GET always matches
+app.get('/api/admin/customers/:id', authenticate, requireAdminUser, getCustomerDetails);
+app.get('/api/admins/customers/:id', authenticate, requireAdminUser, getCustomerDetails);
 app.use('/api/admins', adminRoutes);
 app.use('/api/admin', adminRoutes); // Admin dashboard routes
 app.use('/api/wallets', walletRoutes);
