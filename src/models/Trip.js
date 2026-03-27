@@ -427,6 +427,20 @@ const tripSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    lastDriverLocation: {
+      latitude: {
+        type: Number,
+        default: null,
+      },
+      longitude: {
+        type: Number,
+        default: null,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+    },
     photoRules: {
       type: photoRulesSchema,
       default: () => ({}),

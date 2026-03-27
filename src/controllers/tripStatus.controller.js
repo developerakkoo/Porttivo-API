@@ -9,6 +9,7 @@ const {
   emitTripPodPending,
   emitTripClosedWithoutPOD,
   emitTripAutoActivated,
+  emitTripUpdated,
 } = require('../services/socket.service');
 const { activateNextTrip } = require('../services/tripQueue.service');
 const {
@@ -118,6 +119,15 @@ const acceptTripByDriver = async (req, res, next) => {
       userType: toAuditUserType('driver'),
     };
     await trip.save();
+
+    await trip.populate('vehicleId', 'vehicleNumber trailerType');
+    await trip.populate('driverId', 'name mobile');
+    await trip.populate('transporterId', 'name company');
+    if (trip.assignments?.length) {
+      await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
+      await trip.populate('assignments.driverId', 'name mobile');
+    }
+    emitTripUpdated(trip, { reason: 'driver_accepted', changedFields: ['driverAcceptedAt'] });
 
     return res.status(200).json({
       success: true,

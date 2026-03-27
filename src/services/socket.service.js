@@ -506,6 +506,13 @@ const initializeSocketIO = (httpServer) => {
           });
         }
 
+        trip.lastDriverLocation = {
+          latitude: lat,
+          longitude: lng,
+          updatedAt: new Date(),
+        };
+        await trip.save();
+
         const payload = {
           tripId: trip._id.toString(),
           trip: trip.toObject(),
@@ -745,6 +752,20 @@ const emitTripCancelled = (trip) => {
 };
 
 /**
+ * Generic trip mutation (REST or other) — broadcast full trip snapshot to all audience.
+ * @param {Object} trip - Trip mongoose doc or plain object
+ * @param {{ reason?: string, changedFields?: string[] }} meta
+ */
+const emitTripUpdated = (trip, meta = {}) => {
+  const tripObj = trip.toObject ? trip.toObject() : trip;
+  emitToTripAudience('trip:updated', {
+    trip: tripObj,
+    reason: meta.reason || 'trip_updated',
+    changedFields: meta.changedFields || [],
+  });
+};
+
+/**
  * Emit vehicle status updated event
  * @param {String} vehicleId - Vehicle ID
  * @param {String} transporterId - Transporter ID
@@ -780,5 +801,6 @@ module.exports = {
   emitTripClosedWithoutPOD,
   emitTripAutoActivated,
   emitTripCancelled,
+  emitTripUpdated,
   emitVehicleStatusUpdated,
 };

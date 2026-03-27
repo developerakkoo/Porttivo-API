@@ -15,6 +15,7 @@ const {
   emitTripDriverAssigned,
   emitTripAssigned,
   emitTripCancelled,
+  emitTripUpdated,
 } = require('../services/socket.service');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 const {
@@ -822,6 +823,10 @@ const updateTrip = async (req, res, next) => {
         await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
         await trip.populate('assignments.driverId', 'name mobile');
       }
+      const driverChanged = [];
+      if (containerNumber !== undefined) driverChanged.push('containerNumber');
+      emitTripUpdated(trip, { reason: 'trip_updated', changedFields: driverChanged });
+
       return res.json({
         success: true,
         message: 'Trip updated successfully',
@@ -1000,6 +1005,18 @@ const updateTrip = async (req, res, next) => {
       await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
       await trip.populate('assignments.driverId', 'name mobile');
     }
+
+    const updatableKeys = [
+      'vehicleId',
+      'hiredVehicle',
+      'driverId',
+      'containerNumber',
+      'reference',
+      'pickupLocation',
+      'dropLocation',
+    ];
+    const changedFields = updatableKeys.filter((k) => req.body[k] !== undefined);
+    emitTripUpdated(trip, { reason: 'trip_updated', changedFields });
 
     res.json({
       success: true,
