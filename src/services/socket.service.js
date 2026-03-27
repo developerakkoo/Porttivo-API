@@ -443,6 +443,11 @@ const initializeSocketIO = (httpServer) => {
 
         // Add milestone to trip
         trip.milestones.push(milestone);
+        trip.lastDriverLocation = {
+          latitude,
+          longitude,
+          updatedAt: new Date(),
+        };
         trip.audit.updatedBy = {
           userId: socket.user.id,
           userType: toAuditUserType(socket.user.userType),

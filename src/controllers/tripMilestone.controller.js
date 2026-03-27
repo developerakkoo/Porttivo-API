@@ -205,6 +205,11 @@ const updateMilestone = async (req, res, next) => {
 
     // Add milestone to trip
     trip.milestones.push(milestone)
+    trip.lastDriverLocation = {
+      latitude,
+      longitude,
+      updatedAt: new Date()
+    }
     trip.audit.updatedBy = {
       userId,
       userType: toAuditUserType(userType)
