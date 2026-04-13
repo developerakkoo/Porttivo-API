@@ -43,6 +43,13 @@ const vehicleSchema = new mongoose.Schema(
       enum: ['active', 'inactive'],
       default: 'active',
     },
+    vehicleType: {
+      type: String,
+      trim: true,
+      enum: ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'],
+      index: true,
+      default: null,
+    },
     trailerType: {
       type: String,
       trim: true,

@@ -125,7 +125,7 @@ const createVehicle = async (req, res, next) => {
       });
     }
 
-    const { vehicleNumber, ownerType, driverId, trailerType } = req.body;
+    const { vehicleNumber, ownerType, driverId, trailerType, vehicleType } = req.body;
 
     // Validation
     if (!vehicleNumber) {
@@ -182,6 +182,19 @@ const createVehicle = async (req, res, next) => {
       }
     }
 
+    // Validate vehicleType if provided
+    const allowedTypes = ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'];
+    let finalVehicleType = null;
+    if (vehicleType !== undefined && vehicleType !== null && vehicleType !== '') {
+      if (!allowedTypes.includes(vehicleType)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid vehicle type. Allowed: ${allowedTypes.join(', ')}`,
+        });
+      }
+      finalVehicleType = vehicleType;
+    }
+
     // Create vehicle
     const vehicle = await Vehicle.create({
       vehicleNumber: cleanedVehicleNumber,
@@ -190,6 +203,7 @@ const createVehicle = async (req, res, next) => {
       originalOwnerId: req.user.id,
       driverId: driverId || null,
       trailerType: trailerType?.trim() || null,
+      vehicleType: finalVehicleType,
       status: 'active',
     });
 
@@ -225,6 +239,7 @@ const createVehicle = async (req, res, next) => {
             : null,
           status: vehicle.status,
           trailerType: vehicle.trailerType,
+          vehicleType: vehicle.vehicleType || null,
           documents: vehicle.documents,
           createdAt: vehicle.createdAt,
           updatedAt: vehicle.updatedAt,
@@ -312,7 +327,7 @@ const getVehicleById = async (req, res, next) => {
 const updateVehicle = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { status, driverId, trailerType, ownerType } = req.body;
+    const { status, driverId, trailerType, ownerType, vehicleType } = req.body;
 
     // Transporters and company users with manageVehicles permission can update vehicles
     const transporterId = getTransporterId(req.user);
@@ -383,6 +398,21 @@ const updateVehicle = async (req, res, next) => {
 
     if (trailerType !== undefined) {
       updateData.trailerType = trailerType?.trim() || null;
+    }
+
+    if (vehicleType !== undefined) {
+      const allowedTypes = ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'];
+      if (vehicleType === null || vehicleType === '') {
+        updateData.vehicleType = null;
+      } else {
+        if (!allowedTypes.includes(vehicleType)) {
+          return res.status(400).json({
+            success: false,
+            message: `Invalid vehicle type. Allowed: ${allowedTypes.join(', ')}`,
+          });
+        }
+        updateData.vehicleType = vehicleType;
+      }
     }
 
     if (ownerType !== undefined) {

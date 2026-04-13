@@ -25,6 +25,7 @@ const adminRoutes = require('./src/routes/admin.routes');
 const walletRoutes = require('./src/routes/wallet.routes');
 const settlementRoutes = require('./src/routes/settlement.routes');
 const notificationRoutes = require('./src/routes/notification.routes');
+const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
 const { getCustomerDetails } = require('./src/controllers/admin.controller');
 const { authenticate } = require('./src/middleware/auth.middleware');
 
@@ -95,6 +96,7 @@ app.use('/api/admin', adminRoutes); // Admin dashboard routes
 app.use('/api/wallets', walletRoutes);
 app.use('/api/settlements', settlementRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/vehicle-posts', vehiclePostRoutes);
 
 // 404 handler
 app.use(notFound);
