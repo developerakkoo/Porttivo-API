@@ -6,6 +6,7 @@ const {
   searchAvailability,
   getMyPosts,
   cancelPost,
+  updateAvailability,
 } = require('../controllers/vehiclePost.controller');
 
 // All endpoints require authentication
@@ -16,6 +17,11 @@ router.use(authenticate);
  * Create a vehicle availability post (transporter)
  */
 router.post('/', createAvailability);
+/**
+ * PUT /api/vehicle-posts/:id
+ * Update an availability post (owner only)
+ */
+router.put('/:id', updateAvailability);
 
 /**
  * GET /api/vehicle-posts

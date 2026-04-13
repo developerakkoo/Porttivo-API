@@ -1,5 +1,6 @@
 const Vehicle = require('../models/Vehicle');
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability');
+const { getIO } = require('../services/socket.service');
 
 // Create a new vehicle availability post
 const createAvailability = async (req, res, next) => {
@@ -122,7 +123,17 @@ const createAvailability = async (req, res, next) => {
       status: populated.status,
       createdAt: populated.createdAt,
       updatedAt: populated.updatedAt,
+      lastEdited: populated.updatedAt,
     };
+
+    // Emit socket event to notify other clients about new availability
+    try {
+      const io = getIO();
+      io.emit('vehiclePost:created', { post: response });
+    } catch (err) {
+      // Socket not initialized or emit failed — continue without failing the request
+      console.warn('Socket emit failed (vehiclePost:created):', err.message || err);
+    }
 
     return res.status(201).json({ success: true, message: 'Vehicle availability posted', data: { post: response } });
   } catch (error) {
@@ -180,6 +191,8 @@ const searchAvailability = async (req, res, next) => {
       availableTo: p.availableTo,
       note: p.note,
       createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      lastEdited: p.updatedAt,
     }));
 
     const total = await VehicleRouteAvailability.countDocuments(query);
@@ -196,9 +209,142 @@ const getMyPosts = async (req, res, next) => {
     const transporterId = req.user?.id;
     if (!transporterId) return res.status(403).json({ success: false, message: 'Only transporters can access their posts' });
 
-    const posts = await VehicleRouteAvailability.find({ transporterId }).sort({ createdAt: -1 }).populate('vehicleId', 'vehicleNumber vehicleType');
+    const posts = await VehicleRouteAvailability.find({ transporterId })
+      .sort({ createdAt: -1 })
+      .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+      .populate('transporterId', 'name company mobile status')
+      .lean();
 
-    return res.status(200).json({ success: true, message: 'Your availability posts', data: { posts } });
+    const results = posts.map((p) => ({
+      id: p._id,
+      transporter: p.transporterId
+        ? {
+            id: p.transporterId._id || p.transporterId,
+            name: p.transporterId.name || null,
+            company: p.transporterId.company || null,
+            mobile: p.transporterId.mobile || null,
+            status: p.transporterId.status || null,
+          }
+        : null,
+      vehicle: p.vehicleId
+        ? {
+            id: p.vehicleId._id,
+            vehicleNumber: p.vehicleId.vehicleNumber || null,
+            vehicleType: p.vehicleId.vehicleType || p.vehicleType,
+            trailerType: p.vehicleId.trailerType || null,
+          }
+        : null,
+      vehicleType: p.vehicleType,
+      origin: p.origin,
+      destination: p.destination,
+      quantity: p.quantity,
+      availableFrom: p.availableFrom,
+      availableTo: p.availableTo,
+      note: p.note,
+      status: p.status,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      lastEdited: p.updatedAt,
+    }));
+
+    return res.status(200).json({ success: true, message: 'Your availability posts', data: { results } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update a post (owner only)
+const updateAvailability = async (req, res, next) => {
+  try {
+    const transporterId = req.user?.id;
+    if (!transporterId) return res.status(403).json({ success: false, message: 'Only transporters can update posts' });
+
+    const { id } = req.params;
+    const { vehicleId, vehicleType, origin, destination, availableFrom, availableTo, durationDays, quantity, note, status } = req.body;
+
+    const post = await VehicleRouteAvailability.findById(id);
+    if (!post) return res.status(404).json({ success: false, message: 'Post not found' });
+    if (post.transporterId.toString() !== transporterId) return res.status(403).json({ success: false, message: 'Not authorized' });
+
+    // Update fields if provided
+    if (vehicleType !== undefined) {
+      const allowedTypes = ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'];
+      if (!allowedTypes.includes(vehicleType)) return res.status(400).json({ success: false, message: `Invalid vehicleType. Allowed: ${allowedTypes.join(', ')}` });
+      post.vehicleType = vehicleType;
+    }
+    if (vehicleId !== undefined) post.vehicleId = vehicleId || null;
+    if (origin !== undefined) post.origin = origin?.trim() || post.origin;
+    if (destination !== undefined) post.destination = destination?.trim() || null;
+    if (quantity !== undefined) post.quantity = Number(quantity) || post.quantity;
+    if (note !== undefined) post.note = note || null;
+    if (status !== undefined) post.status = status;
+
+    // Dates
+    if (availableFrom) {
+      const fromDate = new Date(availableFrom);
+      if (isNaN(fromDate)) return res.status(400).json({ success: false, message: 'Invalid availableFrom date' });
+      post.availableFrom = fromDate;
+    }
+    if (availableTo) {
+      const toDate = new Date(availableTo);
+      if (isNaN(toDate)) return res.status(400).json({ success: false, message: 'Invalid availableTo date' });
+      post.availableTo = toDate;
+    } else if (durationDays) {
+      const days = parseInt(durationDays, 10);
+      if (isNaN(days) || days <= 0) return res.status(400).json({ success: false, message: 'Invalid durationDays' });
+      const fromDate = post.availableFrom || new Date();
+      const toDate = new Date(fromDate);
+      toDate.setDate(toDate.getDate() + days - 1);
+      post.availableTo = toDate;
+    }
+
+    await post.save();
+
+    const populated = await VehicleRouteAvailability.findById(post._id)
+      .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+      .populate('transporterId', 'name company mobile status')
+      .lean();
+
+    const response = {
+      id: populated._id,
+      transporter: populated.transporterId
+        ? {
+            id: populated.transporterId._id || populated.transporterId,
+            name: populated.transporterId.name || null,
+            company: populated.transporterId.company || null,
+            mobile: populated.transporterId.mobile || null,
+            status: populated.transporterId.status || null,
+          }
+        : null,
+      vehicle: populated.vehicleId
+        ? {
+            id: populated.vehicleId._id,
+            vehicleNumber: populated.vehicleId.vehicleNumber || null,
+            vehicleType: populated.vehicleId.vehicleType || populated.vehicleType,
+            trailerType: populated.vehicleId.trailerType || null,
+          }
+        : null,
+      vehicleType: populated.vehicleType,
+      origin: populated.origin,
+      destination: populated.destination,
+      quantity: populated.quantity,
+      availableFrom: populated.availableFrom,
+      availableTo: populated.availableTo,
+      note: populated.note,
+      status: populated.status,
+      createdAt: populated.createdAt,
+      updatedAt: populated.updatedAt,
+      lastEdited: populated.updatedAt,
+    };
+
+    try {
+      const io = getIO();
+      io.emit('vehiclePost:updated', { post: response });
+    } catch (err) {
+      console.warn('Socket emit failed (vehiclePost:updated):', err.message || err);
+    }
+
+    return res.status(200).json({ success: true, message: 'Post updated', data: { post: response } });
   } catch (error) {
     next(error);
   }
@@ -217,7 +363,52 @@ const cancelPost = async (req, res, next) => {
     post.status = 'cancelled';
     await post.save();
 
-    return res.status(200).json({ success: true, message: 'Post cancelled' });
+    // Populate for response & emit socket event
+    const populated = await VehicleRouteAvailability.findById(post._id)
+      .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+      .populate('transporterId', 'name company mobile status')
+      .lean();
+
+    const response = {
+      id: populated._id,
+      transporter: populated.transporterId
+        ? {
+            id: populated.transporterId._id || populated.transporterId,
+            name: populated.transporterId.name || null,
+            company: populated.transporterId.company || null,
+            mobile: populated.transporterId.mobile || null,
+            status: populated.transporterId.status || null,
+          }
+        : null,
+      vehicle: populated.vehicleId
+        ? {
+            id: populated.vehicleId._id,
+            vehicleNumber: populated.vehicleId.vehicleNumber || null,
+            vehicleType: populated.vehicleId.vehicleType || populated.vehicleType,
+            trailerType: populated.vehicleId.trailerType || null,
+          }
+        : null,
+      vehicleType: populated.vehicleType,
+      origin: populated.origin,
+      destination: populated.destination,
+      quantity: populated.quantity,
+      availableFrom: populated.availableFrom,
+      availableTo: populated.availableTo,
+      note: populated.note,
+      status: populated.status,
+      createdAt: populated.createdAt,
+      updatedAt: populated.updatedAt,
+      lastEdited: populated.updatedAt,
+    };
+
+    try {
+      const io = getIO();
+      io.emit('vehiclePost:updated', { post: response });
+    } catch (err) {
+      console.warn('Socket emit failed (vehiclePost:updated):', err.message || err);
+    }
+
+    return res.status(200).json({ success: true, message: 'Post cancelled', data: { post: response } });
   } catch (error) {
     next(error);
   }
@@ -228,4 +419,5 @@ module.exports = {
   searchAvailability,
   getMyPosts,
   cancelPost,
+  updateAvailability,
 };
