@@ -1,5 +1,6 @@
 const Vehicle = require('../models/Vehicle');
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability');
+const VehicleRouteAssignment = require('../models/VehicleRouteAssignment');
 const { getIO } = require('../services/socket.service');
 
 // Create a new vehicle availability post
@@ -20,17 +21,20 @@ const createAvailability = async (req, res, next) => {
       durationDays,
       quantity,
       note,
+      pricePerVehicle,
     } = req.body;
 
     if (!origin || origin.toString().trim() === '') {
       return res.status(400).json({ success: false, message: 'Origin is required' });
     }
 
-    // vehicleType is required
-    const allowedTypes = ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'];
-    if (!vehicleType || !allowedTypes.includes(vehicleType)) {
-      return res.status(400).json({ success: false, message: `vehicleType is required. Allowed: ${allowedTypes.join(', ')}` });
+    // vehicleType is required and must exist in VehicleType collection
+    const VehicleType = require('../models/VehicleType');
+    if (!vehicleType || !vehicleType.toString().trim()) {
+      return res.status(400).json({ success: false, message: 'vehicleType is required' });
     }
+    const vtExists = await VehicleType.findOne({ name: vehicleType.trim() });
+    if (!vtExists) return res.status(400).json({ success: false, message: 'Invalid vehicleType' });
 
     // Parse dates
     if (!availableFrom) {
@@ -82,6 +86,8 @@ const createAvailability = async (req, res, next) => {
       origin: origin.trim(),
       destination: destination?.trim() || null,
       quantity: quantity ? Number(quantity) : 1,
+      slotsLeft: quantity ? Number(quantity) : 1,
+      pricePerVehicle: pricePerVehicle === undefined ? null : Number(pricePerVehicle),
       availableFrom: fromDate,
       availableTo: toDate,
       note: note || null,
@@ -117,6 +123,8 @@ const createAvailability = async (req, res, next) => {
       origin: populated.origin,
       destination: populated.destination,
       quantity: populated.quantity,
+      slotsLeft: populated.slotsLeft,
+      pricePerVehicle: populated.pricePerVehicle || null,
       availableFrom: populated.availableFrom,
       availableTo: populated.availableTo,
       note: populated.note,
@@ -124,6 +132,8 @@ const createAvailability = async (req, res, next) => {
       createdAt: populated.createdAt,
       updatedAt: populated.updatedAt,
       lastEdited: populated.updatedAt,
+      slotsLeft: populated.slotsLeft,
+      pricePerVehicle: populated.pricePerVehicle || null,
     };
 
     // Emit socket event to notify other clients about new availability
@@ -208,6 +218,22 @@ const searchAvailability = async (req, res, next) => {
       .populate('transporterId', 'name company mobile status')
       .lean();
 
+    // Load assignments for all returned posts so we can show which vehicles were added
+    const postIds = posts.map((p) => p._id);
+    let assignmentsByPost = {};
+    if (postIds.length) {
+      const assignments = await VehicleRouteAssignment.find({ postId: { $in: postIds } })
+        .populate('vehicleId', 'vehicleNumber vehicleType')
+        .populate('transporterId', 'name company mobile')
+        .lean();
+      assignmentsByPost = assignments.reduce((acc, a) => {
+        const key = a.postId.toString();
+        acc[key] = acc[key] || [];
+        acc[key].push(a);
+        return acc;
+      }, {});
+    }
+
     // Attach transporter and vehicle summary
     const results = posts.map((p) => ({
       id: p._id,
@@ -226,9 +252,21 @@ const searchAvailability = async (req, res, next) => {
       origin: p.origin,
       destination: p.destination,
       quantity: p.quantity,
+      slotsLeft: p.slotsLeft,
+      pricePerVehicle: p.pricePerVehicle || null,
       availableFrom: p.availableFrom,
       availableTo: p.availableTo,
       note: p.note,
+      availableVehicles: (assignmentsByPost[p._id] || []).map((a) => ({
+        id: a._id,
+        vehicleId: a.vehicleId?._id || a.vehicleId,
+        vehicleNumber: a.vehicleId?.vehicleNumber || null,
+        price: a.price === undefined || a.price === null ? null : a.price,
+        transporter: a.transporterId
+          ? { id: a.transporterId._id || a.transporterId, name: a.transporterId.name || null, mobile: a.transporterId.mobile || null }
+          : null,
+        createdAt: a.createdAt,
+      })),
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
       lastEdited: p.updatedAt,
@@ -257,6 +295,22 @@ const getMyPosts = async (req, res, next) => {
       .populate('transporterId', 'name company mobile status')
       .lean();
 
+    // Load assignments for these posts
+    const myPostIds = posts.map((p) => p._id);
+    let myAssignmentsByPost = {};
+    if (myPostIds.length) {
+      const myAssignments = await VehicleRouteAssignment.find({ postId: { $in: myPostIds } })
+        .populate('vehicleId', 'vehicleNumber vehicleType')
+        .populate('transporterId', 'name company mobile')
+        .lean();
+      myAssignmentsByPost = myAssignments.reduce((acc, a) => {
+        const key = a.postId.toString();
+        acc[key] = acc[key] || [];
+        acc[key].push(a);
+        return acc;
+      }, {});
+    }
+
     const results = posts.map((p) => ({
       id: p._id,
       transporter: p.transporterId
@@ -280,9 +334,21 @@ const getMyPosts = async (req, res, next) => {
       origin: p.origin,
       destination: p.destination,
       quantity: p.quantity,
+      slotsLeft: p.slotsLeft,
+      pricePerVehicle: p.pricePerVehicle || null,
       availableFrom: p.availableFrom,
       availableTo: p.availableTo,
       note: p.note,
+      availableVehicles: (myAssignmentsByPost[p._id] || []).map((a) => ({
+        id: a._id,
+        vehicleId: a.vehicleId?._id || a.vehicleId,
+        vehicleNumber: a.vehicleId?.vehicleNumber || null,
+        price: a.price === undefined || a.price === null ? null : a.price,
+        transporter: a.transporterId
+          ? { id: a.transporterId._id || a.transporterId, name: a.transporterId.name || null, mobile: a.transporterId.mobile || null }
+          : null,
+        createdAt: a.createdAt,
+      })),
       status: p.status,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -321,6 +387,12 @@ const getById = async (req, res, next) => {
     }
 
     const p = post;
+    // load assignments for this post
+    const postAssignments = await VehicleRouteAssignment.find({ postId: p._id })
+      .populate('vehicleId', 'vehicleNumber vehicleType')
+      .populate('transporterId', 'name company mobile')
+      .lean();
+
     const response = {
       id: p._id,
       transporter: p.transporterId
@@ -344,9 +416,21 @@ const getById = async (req, res, next) => {
       origin: p.origin,
       destination: p.destination,
       quantity: p.quantity,
+      slotsLeft: p.slotsLeft,
+      pricePerVehicle: p.pricePerVehicle || null,
       availableFrom: p.availableFrom,
       availableTo: p.availableTo,
       note: p.note,
+      availableVehicles: postAssignments.map((a) => ({
+        id: a._id,
+        vehicleId: a.vehicleId?._id || a.vehicleId,
+        vehicleNumber: a.vehicleId?.vehicleNumber || null,
+        price: a.price === undefined || a.price === null ? null : a.price,
+        transporter: a.transporterId
+          ? { id: a.transporterId._id || a.transporterId, name: a.transporterId.name || null, mobile: a.transporterId.mobile || null }
+          : null,
+        createdAt: a.createdAt,
+      })),
       status: p.status,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -374,8 +458,10 @@ const updateAvailability = async (req, res, next) => {
 
     // Update fields if provided
     if (vehicleType !== undefined) {
-      const allowedTypes = ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'];
-      if (!allowedTypes.includes(vehicleType)) return res.status(400).json({ success: false, message: `Invalid vehicleType. Allowed: ${allowedTypes.join(', ')}` });
+      const VehicleType = require('../models/VehicleType');
+      if (!vehicleType || !vehicleType.toString().trim()) return res.status(400).json({ success: false, message: 'Invalid vehicleType' });
+      const vtExists = await VehicleType.findOne({ name: vehicleType.trim() });
+      if (!vtExists) return res.status(400).json({ success: false, message: 'Invalid vehicleType' });
       post.vehicleType = vehicleType;
     }
     if (vehicleId !== undefined) post.vehicleId = vehicleId || null;
@@ -406,6 +492,15 @@ const updateAvailability = async (req, res, next) => {
 
     await post.save();
 
+    // Recompute slotsLeft based on assignments if quantity changed
+    try {
+      const assignedCount = await VehicleRouteAssignment.countDocuments({ postId: post._id });
+      post.slotsLeft = Math.max(0, post.quantity - assignedCount);
+      await post.save();
+    } catch (e) {
+      // non-fatal
+    }
+
     const populated = await VehicleRouteAvailability.findById(post._id)
       .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
       .populate('transporterId', 'name company mobile status')
@@ -434,6 +529,8 @@ const updateAvailability = async (req, res, next) => {
       origin: populated.origin,
       destination: populated.destination,
       quantity: populated.quantity,
+      slotsLeft: populated.slotsLeft,
+      pricePerVehicle: populated.pricePerVehicle || null,
       availableFrom: populated.availableFrom,
       availableTo: populated.availableTo,
       note: populated.note,
@@ -498,6 +595,8 @@ const cancelPost = async (req, res, next) => {
       origin: populated.origin,
       destination: populated.destination,
       quantity: populated.quantity,
+      slotsLeft: populated.slotsLeft,
+      pricePerVehicle: populated.pricePerVehicle || null,
       availableFrom: populated.availableFrom,
       availableTo: populated.availableTo,
       note: populated.note,
@@ -520,6 +619,83 @@ const cancelPost = async (req, res, next) => {
   }
 };
 
+// Add a vehicle to a post (transporters adding their vehicle to an available post)
+const addVehicleToPost = async (req, res, next) => {
+  try {
+    const transporterId = req.user?.id;
+    if (!transporterId) return res.status(403).json({ success: false, message: 'Only transporters can add vehicles' });
+
+    const { id } = req.params; // post id
+    const { vehicleId, price, note } = req.body;
+
+    if (!vehicleId) return res.status(400).json({ success: false, message: 'vehicleId is required' });
+
+    // validate vehicle belongs to transporter
+    const vehicle = await Vehicle.findById(vehicleId);
+    if (!vehicle) return res.status(404).json({ success: false, message: 'Vehicle not found' });
+    if (vehicle.transporterId.toString() !== transporterId) return res.status(403).json({ success: false, message: 'You do not own this vehicle' });
+
+    // Atomically decrement slotsLeft if available
+    const post = await VehicleRouteAvailability.findOneAndUpdate(
+      { _id: id, status: 'active', slotsLeft: { $gt: 0 } },
+      { $inc: { slotsLeft: -1 } },
+      { new: true }
+    );
+
+    if (!post) return res.status(400).json({ success: false, message: 'No slots available or post not active' });
+
+    // Create assignment (unique constraint will prevent duplicate vehicle for same post)
+    try {
+      const assignment = await VehicleRouteAssignment.create({
+        postId: post._id,
+        vehicleId,
+        transporterId,
+        price: price === undefined ? (post.pricePerVehicle === undefined || post.pricePerVehicle === null ? null : Number(post.pricePerVehicle)) : Number(price),
+        note: note || null,
+      });
+
+      // Populate response and emit update
+      const populated = await VehicleRouteAvailability.findById(post._id)
+        .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+        .populate('transporterId', 'name company mobile status')
+        .lean();
+
+      const response = {
+        id: populated._id,
+        vehicleType: populated.vehicleType,
+        origin: populated.origin,
+        destination: populated.destination,
+        quantity: populated.quantity,
+        slotsLeft: populated.slotsLeft,
+        availableFrom: populated.availableFrom,
+        availableTo: populated.availableTo,
+        note: populated.note,
+        status: populated.status,
+        createdAt: populated.createdAt,
+        updatedAt: populated.updatedAt,
+      };
+
+      try {
+        const io = getIO();
+        io.emit('vehiclePost:updated', { post: response });
+      } catch (e) {}
+
+      return res.status(201).json({ success: true, message: 'Vehicle added to post', data: { assignment } });
+    } catch (err) {
+      // duplicate assignment or other DB error - restore slot
+      try {
+        await VehicleRouteAvailability.findByIdAndUpdate(id, { $inc: { slotsLeft: 1 } });
+      } catch (e) {}
+
+      // If duplicate key, inform client
+      if (err.code === 11000) return res.status(400).json({ success: false, message: 'This vehicle is already added to the post' });
+      throw err;
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createAvailability,
   searchAvailability,
@@ -527,4 +703,5 @@ module.exports = {
   getById,
   cancelPost,
   updateAvailability,
+  addVehicleToPost,
 };

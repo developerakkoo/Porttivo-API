@@ -44,6 +44,8 @@ const {
   adminReassignTrip,
 } = require('../controllers/admin.controller');
 
+const { listVehicleTypes, createVehicleType, updateVehicleType, deleteVehicleType } = require('../controllers/vehicleType.controller');
+
 // All routes require authentication
 router.use(authenticate);
 
@@ -97,6 +99,11 @@ router.put('/customers/:id/status', updateCustomerStatus);
 router.post('/customers/merge', mergeCustomers);
 router.put('/trips/:id/status', adminUpdateTripStatus);
 router.put('/trips/:id/reassign', adminReassignTrip);
+// Vehicle types (admin CRUD)
+router.get('/vehicle-types', listVehicleTypes);
+router.post('/vehicle-types', createVehicleType);
+router.put('/vehicle-types/:id', updateVehicleType);
+router.delete('/vehicle-types/:id', deleteVehicleType);
 router.get('/settings/milestone-rules', getMilestoneRules);
 router.put('/settings/milestone-rules', updateMilestoneRules);
 router.put('/wallets/:userType/:userId/withdrawal', setWithdrawalPause);

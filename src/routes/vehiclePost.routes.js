@@ -8,6 +8,7 @@ const {
   getById,
   cancelPost,
   updateAvailability,
+  addVehicleToPost,
 } = require('../controllers/vehiclePost.controller');
 
 // All endpoints require authentication
@@ -47,5 +48,11 @@ router.get('/:id', getById);
  * Cancel a post (owner only)
  */
 router.delete('/:id', cancelPost);
+
+/**
+ * POST /api/vehicle-posts/:id/vehicles
+ * Add a vehicle to a post (transporters)
+ */
+router.post('/:id/vehicles', addVehicleToPost);
 
 module.exports = router;

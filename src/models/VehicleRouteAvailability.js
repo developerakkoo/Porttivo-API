@@ -17,7 +17,6 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
     vehicleType: {
       type: String,
       trim: true,
-      enum: ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'],
       required: true,
       index: true,
     },
@@ -37,6 +36,18 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
       type: Number,
       default: 1,
       min: 1,
+    },
+    // remaining slots available for vehicles to be attached to this post
+    slotsLeft: {
+      type: Number,
+      default: 1,
+      min: 0,
+    },
+    // optional suggested price per vehicle for this route (in smallest currency unit)
+    pricePerVehicle: {
+      type: Number,
+      default: null,
+      min: 0,
     },
     availableFrom: {
       type: Date,

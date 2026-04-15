@@ -46,7 +46,6 @@ const vehicleSchema = new mongoose.Schema(
     vehicleType: {
       type: String,
       trim: true,
-      enum: ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'],
       index: true,
       default: null,
     },
