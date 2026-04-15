@@ -147,19 +147,58 @@ const searchAvailability = async (req, res, next) => {
     const { origin, destination, date, vehicleType, page = 1, limit = 20 } = req.query;
 
     const query = { status: 'active' };
-    if (origin) query.origin = { $regex: new RegExp(`^${origin.trim()}$`, 'i') };
-    if (destination) query.destination = { $regex: new RegExp(`^${destination.trim()}$`, 'i') };
-    if (vehicleType) query.vehicleType = vehicleType;
 
-    // Date filtering
-    const filterDate = date ? new Date(date) : new Date();
-    if (!isNaN(filterDate)) {
-      // ensure match where availableFrom <= filterDate <= availableTo
-      query.availableFrom = { $lte: filterDate };
-      query.availableTo = { $gte: filterDate };
+    // escape user input for safe regex construction
+    const escapeRegex = (s) => (s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Build flexible matching: when searching by origin or destination, allow
+    // matches against either field so posts are visible to all transporters.
+    // Use string-based $regex + $options so the query serializes cleanly.
+    const extraAnd = [];
+
+    if (origin) {
+      const pattern = escapeRegex(origin.trim());
+      extraAnd.push({ $or: [{ origin: { $regex: pattern, $options: 'i' } }, { destination: { $regex: pattern, $options: 'i' } }] });
+    }
+
+    if (vehicleType) extraAnd.push({ vehicleType });
+
+    if (destination) {
+      const pattern = escapeRegex(destination.trim());
+      extraAnd.push({ $or: [{ destination: { $regex: pattern, $options: 'i' } }, { origin: { $regex: pattern, $options: 'i' } }, { destination: null }, { destination: '' }] });
+    }
+
+    // merge extraAnd into main query as $and if needed
+    if (extraAnd.length) query.$and = extraAnd;
+
+    // Date filtering - treat the filter as a day and match posts whose
+    // availability range intersects that day (inclusive). This avoids
+    // excluding posts that end earlier the same day because of time-of-day.
+    const rawFilterDate = date ? new Date(date) : new Date();
+    if (!isNaN(rawFilterDate)) {
+      const startOfDay = new Date(rawFilterDate);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(rawFilterDate);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // match where availableFrom <= endOfDay AND availableTo >= startOfDay
+      query.availableFrom = { $lte: endOfDay };
+      query.availableTo = { $gte: startOfDay };
+
+      try {
+        console.debug('vehiclePost.searchAvailability - filter range:', { startOfDay: startOfDay.toISOString(), endOfDay: endOfDay.toISOString() });
+      } catch (e) {}
     }
 
     const skip = (Number(page) - 1) * Number(limit);
+
+    // Debug: log query details and requester to help diagnose visibility issues
+    try {
+      console.debug('vehiclePost.searchAvailability - user:', req.user?.id, 'patterns:', { origin: origin ? escapeRegex(origin.trim()) : null, destination: destination ? escapeRegex(destination.trim()) : null, date: date || null });
+      console.debug('vehiclePost.searchAvailability - finalQueryPreview:', JSON.stringify(query));
+    } catch (e) {
+      // ignore serialization issues
+    }
 
     const posts = await VehicleRouteAvailability.find(query)
       .sort({ availableFrom: 1, createdAt: -1 })
@@ -196,6 +235,9 @@ const searchAvailability = async (req, res, next) => {
     }));
 
     const total = await VehicleRouteAvailability.countDocuments(query);
+    try {
+      console.debug('vehiclePost.searchAvailability - results:', posts.length, 'total:', total);
+    } catch (e) {}
 
     return res.status(200).json({ success: true, message: 'Availability posts retrieved', data: { results, total } });
   } catch (error) {
