@@ -5,6 +5,7 @@ const {
   createAvailability,
   searchAvailability,
   getMyPosts,
+  getById,
   cancelPost,
   updateAvailability,
 } = require('../controllers/vehiclePost.controller');
@@ -34,6 +35,12 @@ router.get('/', searchAvailability);
  * Get posts created by the authenticated transporter
  */
 router.get('/mine', getMyPosts);
+
+/**
+ * GET /api/vehicle-posts/:id
+ * Single post (active public; cancelled etc. only for owner)
+ */
+router.get('/:id', getById);
 
 /**
  * DELETE /api/vehicle-posts/:id

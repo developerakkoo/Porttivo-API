@@ -253,6 +253,70 @@ const getMyPosts = async (req, res, next) => {
   }
 };
 
+// Get single post by id (active for anyone; non-active only for owner)
+const getById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const post = await VehicleRouteAvailability.findById(id)
+      .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+      .populate('transporterId', 'name company mobile status')
+      .lean();
+
+    if (!post) {
+      return res.status(404).json({ success: false, message: 'Post not found' });
+    }
+
+    const ownerId = post.transporterId?._id?.toString() || post.transporterId?.toString();
+    const isOwner = ownerId === userId;
+
+    if (post.status !== 'active' && !isOwner) {
+      return res.status(404).json({ success: false, message: 'Post not found' });
+    }
+
+    const p = post;
+    const response = {
+      id: p._id,
+      transporter: p.transporterId
+        ? {
+            id: p.transporterId._id || p.transporterId,
+            name: p.transporterId.name || null,
+            company: p.transporterId.company || null,
+            mobile: p.transporterId.mobile || null,
+            status: p.transporterId.status || null,
+          }
+        : null,
+      vehicle: p.vehicleId
+        ? {
+            id: p.vehicleId._id,
+            vehicleNumber: p.vehicleId.vehicleNumber || null,
+            vehicleType: p.vehicleId.vehicleType || p.vehicleType,
+            trailerType: p.vehicleId.trailerType || null,
+          }
+        : null,
+      vehicleType: p.vehicleType,
+      origin: p.origin,
+      destination: p.destination,
+      quantity: p.quantity,
+      availableFrom: p.availableFrom,
+      availableTo: p.availableTo,
+      note: p.note,
+      status: p.status,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      lastEdited: p.updatedAt,
+    };
+
+    return res.status(200).json({ success: true, data: { post: response } });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Update a post (owner only)
 const updateAvailability = async (req, res, next) => {
   try {
@@ -418,6 +482,7 @@ module.exports = {
   createAvailability,
   searchAvailability,
   getMyPosts,
+  getById,
   cancelPost,
   updateAvailability,
 };
