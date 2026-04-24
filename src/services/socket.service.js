@@ -787,6 +787,107 @@ const emitVehicleStatusUpdated = (vehicleId, transporterId, vehicle) => {
   }
 };
 
+/**
+ * Emit booking requested event (to seller)
+ * @param {String} sellerId - Seller transporter ID
+ * @param {Object} booking - Booking object
+ */
+const emitBookingRequested = (sellerId, booking) => {
+  if (io) {
+    io.to(`transporter:${sellerId}`).emit('booking:requested', {
+      booking: booking.toObject ? booking.toObject() : booking,
+    });
+  }
+};
+
+/**
+ * Emit price proposed event
+ * @param {String} recipientId - Recipient transporter ID
+ * @param {Object} booking - Booking object
+ * @param {Object} message - Message object
+ */
+const emitPriceProposed = (recipientId, booking, message) => {
+  if (io) {
+    io.to(`transporter:${recipientId}`).emit('booking:price-proposed', {
+      booking: booking.toObject ? booking.toObject() : booking,
+      message: message.toObject ? message.toObject() : message,
+    });
+  }
+};
+
+/**
+ * Emit booking confirmed event (to both parties)
+ * @param {String} buyerId - Buyer transporter ID
+ * @param {String} sellerId - Seller transporter ID
+ * @param {Object} booking - Booking object
+ */
+const emitBookingConfirmed = (buyerId, sellerId, booking) => {
+  if (io) {
+    io.to(`transporter:${buyerId}`).emit('booking:confirmed', {
+      booking: booking.toObject ? booking.toObject() : booking,
+    });
+    io.to(`transporter:${sellerId}`).emit('booking:confirmed', {
+      booking: booking.toObject ? booking.toObject() : booking,
+    });
+  }
+};
+
+// /**
+//  * Emit booking rejected event (to buyer)
+//  * @param {String} buyerId - Buyer transporter ID
+//  * @param {Object} booking - Booking object
+//  */
+// const emitBookingRejected = (buyerId, booking) => {
+//   if (io) {
+//     io.to(`transporter:${buyerId}`).emit('booking:rejected', {
+//       booking: booking.toObject ? booking.toObject() : booking,
+//     });
+//   }
+// };
+
+/**
+ * Emit booking cancelled event (to seller)
+ * @param {String} sellerId - Seller transporter ID
+ * @param {Object} booking - Booking object
+ */
+const emitBookingCancelled = (sellerId, booking) => {
+  if (io) {
+    io.to(`transporter:${sellerId}`).emit('booking:cancelled', {
+      booking: booking.toObject ? booking.toObject() : booking,
+    });
+  }
+};
+
+/**
+ * Emit new message event
+ * @param {String} recipientId - Recipient transporter ID
+ * @param {String} bookingId - Booking ID
+ * @param {Object} message - Message object
+ */
+const emitNewMessage = (recipientId, bookingId, message) => {
+  if (io) {
+    io.to(`transporter:${recipientId}`).emit('message:new', {
+      bookingId,
+      message: message.toObject ? message.toObject() : message,
+    });
+  }
+};
+
+/**
+ * Emit message read event
+ * @param {String} senderId - Sender transporter ID
+ * @param {String} messageId - Message ID
+ * @param {Date} readAt - Read timestamp
+ */
+const emitMessageRead = (senderId, messageId, readAt) => {
+  if (io) {
+    io.to(`transporter:${senderId}`).emit('message:read', {
+      messageId,
+      readAt,
+    });
+  }
+};
+
 module.exports = {
   initializeSocketIO,
   getIO,
@@ -808,4 +909,11 @@ module.exports = {
   emitTripCancelled,
   emitTripUpdated,
   emitVehicleStatusUpdated,
+  emitBookingRequested,
+  emitPriceProposed,
+  emitBookingConfirmed,
+  emitBookingRejected: emitBookingRejected,
+  emitBookingCancelled,
+  emitNewMessage,
+  emitMessageRead,
 };
