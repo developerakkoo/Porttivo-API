@@ -72,5 +72,6 @@ transporterMessageSchema.index({ senderId: 1, receiverId: 1, bookingId: 1 });
 transporterMessageSchema.index({ status: 1, createdAt: -1 });
 transporterMessageSchema.index({ readAt: 1 });
 transporterMessageSchema.index({ receiverId: 1, status: 1 });
+transporterMessageSchema.index({ bookingId: 1, status: 1 });
 
 module.exports = mongoose.model('TransporterMessage', transporterMessageSchema);
