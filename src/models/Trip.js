@@ -1,84 +1,94 @@
-const mongoose = require('mongoose');
-const { TRIP_STATUS, TRIP_STATUS_VALUES, BOOKING_STATUS_VALUES } = require('../utils/tripState');
-const locationSchema = require('./schemas/location.schema');
+const mongoose = require('mongoose')
+const {
+  TRIP_STATUS,
+  TRIP_STATUS_VALUES,
+  BOOKING_STATUS_VALUES
+} = require('../utils/tripState')
+const locationSchema = require('./schemas/location.schema')
 
 // Milestone Schema
 const milestoneSchema = new mongoose.Schema(
   {
     milestoneType: {
       type: String,
-      enum: ['CONTAINER_PICKED', 'REACHED_LOCATION', 'LOADING_UNLOADING', 'REACHED_DESTINATION', 'TRIP_COMPLETED'],
-      required: true,
+      enum: [
+        'CONTAINER_PICKED',
+        'REACHED_LOCATION',
+        'LOADING_UNLOADING',
+        'REACHED_DESTINATION',
+        'TRIP_COMPLETED'
+      ],
+      required: true
     },
     milestoneNumber: {
       type: Number,
       required: true,
       min: 1,
-      max: 5,
+      max: 5
     },
     timestamp: {
       type: Date,
-      default: Date.now,
+      default: Date.now
     },
     location: {
       latitude: {
         type: Number,
-        required: true,
+        required: true
       },
       longitude: {
         type: Number,
-        required: true,
-      },
+        required: true
+      }
     },
     photo: {
       type: String,
-      default: null,
+      default: null
     },
     photos: {
       type: [String],
-      default: [],
+      default: []
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Driver',
-      required: true,
+      required: true
     },
     backendMeaning: {
       type: String,
-      required: true,
-    },
+      required: true
+    }
   },
   { _id: false }
-);
+)
 
 // POD Schema
 const podSchema = new mongoose.Schema(
   {
     photo: {
       type: String,
-      default: null,
+      default: null
     },
     uploadedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     uploadedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Driver',
-      default: null,
+      default: null
     },
     approvedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',
-      default: null,
-    },
+      default: null
+    }
   },
   { _id: false }
-);
+)
 
 const hiredVehicleSchema = new mongoose.Schema(
   {
@@ -86,122 +96,129 @@ const hiredVehicleSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      uppercase: true,
+      uppercase: true
     },
     trailerType: {
       type: String,
       trim: true,
-      default: null,
-    },
+      default: null
+    }
   },
   { _id: false }
-);
+)
 
 const actorSchema = new mongoose.Schema(
   {
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      default: null,
+      default: null
     },
     userType: {
       type: String,
-      enum: ['TRANSPORTER', 'CUSTOMER', 'DRIVER', 'COMPANY_USER', 'ADMIN', 'SYSTEM'],
-      default: null,
-    },
+      enum: [
+        'TRANSPORTER',
+        'CUSTOMER',
+        'DRIVER',
+        'COMPANY_USER',
+        'ADMIN',
+        'SYSTEM'
+      ],
+      default: null
+    }
   },
   { _id: false }
-);
+)
 
 const shareConfigSchema = new mongoose.Schema(
   {
     enabled: {
       type: Boolean,
-      default: false,
+      default: false
     },
     linkType: {
       type: String,
       enum: ['TRIP_VISIBILITY', 'ORIGIN_PICKUP'],
-      default: 'TRIP_VISIBILITY',
+      default: 'TRIP_VISIBILITY'
     },
     visibilityMode: {
       type: String,
       enum: ['STATUS_ONLY', 'FULL_EXECUTION'],
-      default: 'STATUS_ONLY',
+      default: 'STATUS_ONLY'
     },
     token: {
       type: String,
       default: null,
-      index: true,
+      index: true
     },
     expiresAt: {
       type: Date,
-      default: null,
+      default: null
     },
     sharedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     sharedBy: {
       type: actorSchema,
-      default: () => ({}),
-    },
+      default: () => ({})
+    }
   },
   { _id: false }
-);
+)
 
 const photoRulesSchema = new mongoose.Schema(
   {
     containerPickedRequired: {
       type: Boolean,
-      default: false,
+      default: false
     },
     reachedLocationRequired: {
       type: Boolean,
-      default: false,
+      default: false
     },
     loadingUnloadingRequired: {
       type: Boolean,
-      default: false,
+      default: false
     },
     reachedDestinationRequired: {
       type: Boolean,
-      default: false,
+      default: false
     },
     tripCompletedRequired: {
       type: Boolean,
-      default: false,
+      default: false
     },
     podRequiredForBillable: {
       type: Boolean,
-      default: true,
-    },
+      default: true
+    }
   },
   { _id: false }
-);
+)
 
 const statusHistorySchema = new mongoose.Schema(
   {
     status: {
       type: String,
       enum: TRIP_STATUS_VALUES,
-      required: true,
+      required: true
     },
     changedAt: {
       type: Date,
-      default: Date.now,
+      default: Date.now
     },
     changedBy: {
       type: actorSchema,
-      default: () => ({}),
+      default: () => ({})
     },
     note: {
       type: String,
       trim: true,
-      default: null,
-    },
+      default: null
+    }
   },
   { _id: false }
-);
+)
 
 const assignmentSchema = new mongoose.Schema(
   {
@@ -209,21 +226,21 @@ const assignmentSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      uppercase: true,
+      uppercase: true
     },
     vehicleId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vehicle',
-      required: true,
+      required: true
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Driver',
-      required: true,
-    },
+      required: true
+    }
   },
   { _id: false }
-);
+)
 
 // Trip Schema
 const tripSchema = new mongoose.Schema(
@@ -232,312 +249,338 @@ const tripSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
-      default: () => `TRIP-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
-      index: true,
+      default: () =>
+        `TRIP-${Date.now().toString(36).toUpperCase()}-${Math.random()
+          .toString(36)
+          .substring(2, 6)
+          .toUpperCase()}`,
+      index: true
     },
     transporterId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',
       required: function () {
-        return this.bookedBy !== 'CUSTOMER';
+        return this.bookedBy !== 'CUSTOMER'
       },
       default: null,
-      index: true,
+      index: true
     },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Customer',
       default: null,
-      index: true,
+      index: true
     },
     vehicleId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vehicle',
       default: null,
-      index: true,
+      index: true
     },
     hiredVehicle: {
       type: hiredVehicleSchema,
-      default: null,
+      default: null
     },
     driverId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Driver',
       default: null,
-      index: true,
+      index: true
     },
     assignments: {
       type: [assignmentSchema],
-      default: [],
+      default: []
     },
     containerNumber: {
       type: String,
       trim: true,
-      uppercase: true,
+      uppercase: true
+    },
+    bookingId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'VehicleBooking',
+      default: null,
+      index: true
+    },
+    isFromBooking: {
+      type: Boolean,
+      default: false
     },
     reference: {
       type: String,
-      trim: true,
+      trim: true
     },
     pickupLocation: {
       type: locationSchema,
-      default: null,
+      default: null
     },
     dropLocation: {
       type: locationSchema,
-      default: null,
+      default: null
     },
     tripType: {
       type: String,
       enum: ['IMPORT', 'EXPORT'],
       required: [true, 'Trip type is required'],
-      index: true,
+      index: true
     },
     bookedBy: {
       type: String,
       enum: ['TRANSPORTER', 'CUSTOMER'],
       default: 'TRANSPORTER',
-      index: true,
+      index: true
     },
     bookingStatus: {
       type: String,
       enum: BOOKING_STATUS_VALUES,
       default: null,
-      index: true,
+      index: true
     },
     acceptedTransporterId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',
       default: null,
-      index: true,
+      index: true
     },
     rejectedTransporterIds: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Transporter',
-      },
+        ref: 'Transporter'
+      }
     ],
     acceptedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     assignedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     customerName: {
       type: String,
       trim: true,
-      default: null,
+      default: null
     },
     customerMobile: {
       type: String,
       trim: true,
-      default: null,
+      default: null
     },
     customerOwnership: {
       ownerType: {
         type: String,
         enum: ['CUSTOMER_MANAGED', 'TRANSPORTER_MANAGED'],
-        default: 'TRANSPORTER_MANAGED',
+        default: 'TRANSPORTER_MANAGED'
       },
       payerType: {
         type: String,
         enum: ['CUSTOMER', 'TRANSPORTER', 'THIRD_PARTY', 'UNKNOWN'],
-        default: 'UNKNOWN',
-      },
+        default: 'UNKNOWN'
+      }
     },
     scheduledAt: {
       type: Date,
-      default: null,
+      default: null
     },
     loadType: {
       type: String,
       trim: true,
-      default: null,
+      default: null
     },
     notes: {
       type: String,
       trim: true,
-      default: null,
+      default: null
     },
     status: {
       type: String,
       enum: TRIP_STATUS_VALUES,
       default: TRIP_STATUS.PLANNED,
-      index: true,
+      index: true
     },
     closureStatus: {
       type: String,
-      enum: ['OPEN', 'POD_PENDING', 'CLOSED_WITH_POD', 'CLOSED_WITHOUT_POD', 'CANCELLED'],
+      enum: [
+        'OPEN',
+        'POD_PENDING',
+        'CLOSED_WITH_POD',
+        'CLOSED_WITHOUT_POD',
+        'CANCELLED'
+      ],
       default: 'OPEN',
-      index: true,
+      index: true
     },
     visibilityMode: {
       type: String,
       enum: ['FULL_EXECUTION', 'STATUS_ONLY'],
       default: 'FULL_EXECUTION',
-      index: true,
+      index: true
     },
     completedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     podTimerStartedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     podDueAt: {
       type: Date,
       default: null,
-      index: true,
+      index: true
     },
     podWindowHours: {
       type: Number,
       default: 72,
-      min: 1,
+      min: 1
     },
     closedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     closedReason: {
       type: String,
       trim: true,
-      default: null,
+      default: null
     },
     milestones: {
       type: [milestoneSchema],
-      default: [],
+      default: []
     },
     queueSequence: {
       type: Number,
       default: null,
-      min: 1,
+      min: 1
     },
     queuedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     activatedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     driverAcceptedAt: {
       type: Date,
-      default: null,
+      default: null
     },
     lastDriverLocation: {
       latitude: {
         type: Number,
-        default: null,
+        default: null
       },
       longitude: {
         type: Number,
-        default: null,
+        default: null
       },
       updatedAt: {
         type: Date,
-        default: null,
-      },
+        default: null
+      }
     },
     photoRules: {
       type: photoRulesSchema,
-      default: () => ({}),
+      default: () => ({})
     },
     POD: {
       type: podSchema,
-      default: {},
+      default: {}
     },
     shareConfig: {
       type: shareConfigSchema,
-      default: () => ({}),
+      default: () => ({})
     },
     shareToken: {
       type: String,
       default: null,
-      index: true,
+      index: true
     },
     shareTokenExpiry: {
       type: Date,
-      default: null,
+      default: null
     },
     audit: {
       createdBy: {
         type: actorSchema,
-        default: () => ({}),
+        default: () => ({})
       },
       updatedBy: {
         type: actorSchema,
-        default: () => ({}),
+        default: () => ({})
       },
       acceptedBy: {
         type: actorSchema,
-        default: () => ({}),
+        default: () => ({})
       },
       lastStatusChangedAt: {
         type: Date,
-        default: Date.now,
+        default: Date.now
       },
       statusHistory: {
         type: [statusHistorySchema],
-        default: [],
-      },
-    },
+        default: []
+      }
+    }
   },
   {
-    timestamps: true,
+    timestamps: true
   }
-);
+)
 
 // Indexes
-tripSchema.index({ vehicleId: 1, status: 1 });
-tripSchema.index({ transporterId: 1, vehicleId: 1 });
-tripSchema.index({ transporterId: 1, status: 1 });
-tripSchema.index({ driverId: 1, status: 1 });
-tripSchema.index({ customerId: 1, createdAt: -1 });
-tripSchema.index({ bookedBy: 1, bookingStatus: 1, status: 1 });
-tripSchema.index({ acceptedTransporterId: 1, status: 1 });
-tripSchema.index({ 'hiredVehicle.vehicleNumber': 1, status: 1 });
-tripSchema.index({ visibilityMode: 1, status: 1 });
-tripSchema.index({ closureStatus: 1, status: 1 });
-tripSchema.index({ queueSequence: 1, queuedAt: 1 });
-tripSchema.index({ containerNumber: 1 });
-tripSchema.index({ reference: 1 });
-tripSchema.index({ tripId: 1 });
-tripSchema.index({ 'shareConfig.token': 1 });
-tripSchema.index({ 'audit.lastStatusChangedAt': -1 });
+tripSchema.index({ vehicleId: 1, status: 1 })
+tripSchema.index({ transporterId: 1, vehicleId: 1 })
+tripSchema.index({ transporterId: 1, status: 1 })
+tripSchema.index({ driverId: 1, status: 1 })
+tripSchema.index({ customerId: 1, createdAt: -1 })
+tripSchema.index({ bookedBy: 1, bookingStatus: 1, status: 1 })
+tripSchema.index({ acceptedTransporterId: 1, status: 1 })
+tripSchema.index({ 'hiredVehicle.vehicleNumber': 1, status: 1 })
+tripSchema.index({ visibilityMode: 1, status: 1 })
+tripSchema.index({ closureStatus: 1, status: 1 })
+tripSchema.index({ queueSequence: 1, queuedAt: 1 })
+tripSchema.index({ containerNumber: 1 })
+tripSchema.index({ reference: 1 })
+tripSchema.index({ tripId: 1 })
+tripSchema.index({ 'shareConfig.token': 1 })
+tripSchema.index({ 'audit.lastStatusChangedAt': -1 })
 
 // Virtual for next milestone number
 tripSchema.virtual('nextMilestoneNumber').get(function () {
-  return this.milestones.length + 1;
-});
+  return this.milestones.length + 1
+})
 
 // Method to check if all milestones are completed
 tripSchema.methods.areAllMilestonesCompleted = function () {
-  return this.milestones.length === 5;
-};
+  return this.milestones.length === 5
+}
 
 // Method to get current milestone
 tripSchema.methods.getCurrentMilestone = function () {
-  const nextNumber = this.milestones.length + 1;
+  const nextNumber = this.milestones.length + 1
   if (nextNumber > 5) {
-    return null; // All milestones completed
+    return null // All milestones completed
   }
   return {
     milestoneNumber: nextNumber,
-    milestoneType: this.getMilestoneTypeByNumber(nextNumber),
-  };
-};
+    milestoneType: this.getMilestoneTypeByNumber(nextNumber)
+  }
+}
 
 // Method to get milestone type by number
 tripSchema.methods.getMilestoneTypeByNumber = function (number) {
-  const types = ['CONTAINER_PICKED', 'REACHED_LOCATION', 'LOADING_UNLOADING', 'REACHED_DESTINATION', 'TRIP_COMPLETED'];
-  return types[number - 1];
-};
+  const types = [
+    'CONTAINER_PICKED',
+    'REACHED_LOCATION',
+    'LOADING_UNLOADING',
+    'REACHED_DESTINATION',
+    'TRIP_COMPLETED'
+  ]
+  return types[number - 1]
+}
 
 tripSchema.pre('save', function () {
-  const now = new Date();
+  const now = new Date()
 
   if (!this.audit?.statusHistory?.length) {
     this.audit.statusHistory = [
@@ -545,49 +588,49 @@ tripSchema.pre('save', function () {
         status: this.status,
         changedAt: now,
         changedBy: this.audit?.createdBy || {},
-        note: 'Trip created',
-      },
-    ];
-    this.audit.lastStatusChangedAt = now;
+        note: 'Trip created'
+      }
+    ]
+    this.audit.lastStatusChangedAt = now
   }
 
   if (!this.isNew && this.isModified('status')) {
-    this.audit.lastStatusChangedAt = now;
+    this.audit.lastStatusChangedAt = now
     this.audit.statusHistory.push({
       status: this.status,
       changedAt: now,
       changedBy: this.audit?.updatedBy || {},
-      note: null,
-    });
+      note: null
+    })
   }
 
   if (this.status === TRIP_STATUS.PLANNED && !this.queuedAt) {
-    this.queuedAt = now;
+    this.queuedAt = now
   }
 
   if (this.status === TRIP_STATUS.ACTIVE && !this.activatedAt) {
-    this.activatedAt = now;
+    this.activatedAt = now
   }
 
   if (this.status === TRIP_STATUS.POD_PENDING) {
-    this.closureStatus = 'POD_PENDING';
+    this.closureStatus = 'POD_PENDING'
     if (!this.podTimerStartedAt) {
-      this.podTimerStartedAt = now;
+      this.podTimerStartedAt = now
     }
   } else if (this.status === TRIP_STATUS.CLOSED_WITH_POD) {
-    this.closureStatus = 'CLOSED_WITH_POD';
+    this.closureStatus = 'CLOSED_WITH_POD'
   } else if (this.status === TRIP_STATUS.CLOSED_WITHOUT_POD) {
-    this.closureStatus = 'CLOSED_WITHOUT_POD';
+    this.closureStatus = 'CLOSED_WITHOUT_POD'
   } else if (this.status === TRIP_STATUS.CANCELLED) {
-    this.closureStatus = 'CANCELLED';
+    this.closureStatus = 'CANCELLED'
   } else {
-    this.closureStatus = 'OPEN';
+    this.closureStatus = 'OPEN'
   }
 
   if (this.shareConfig?.token) {
-    this.shareToken = this.shareConfig.token;
-    this.shareTokenExpiry = this.shareConfig.expiresAt;
+    this.shareToken = this.shareConfig.token
+    this.shareTokenExpiry = this.shareConfig.expiresAt
   }
-});
+})
 
-module.exports = mongoose.model('Trip', tripSchema);
+module.exports = mongoose.model('Trip', tripSchema)

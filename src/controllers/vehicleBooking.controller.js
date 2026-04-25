@@ -5,6 +5,7 @@ const TransporterMessage = require('../models/TransporterMessage')
 // const VehicleBookingAudit = require('../models/VehicleBookingAudit');
 const Vehicle = require('../models/Vehicle')
 const Transporter = require('../models/Transporter')
+const { createTripFromBooking } = require('../services/bookingToTrip.service')
 const { getIO } = require('../services/socket.service')
 const {
   VehicleBookingAudit,
@@ -397,12 +398,13 @@ const acceptBooking = async (req, res, next) => {
 
     const booking = await VehicleBooking.findById(id)
     if (!booking) {
-      return res
-        .status(404)
-        .json({ success: false, message: 'Booking not found' })
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      })
     }
 
-    // Only seller can accept/confirm booking
+    // 🔒 Only seller can accept
     if (booking.sellerId.toString() !== userId) {
       return res.status(403).json({
         success: false,
@@ -410,7 +412,7 @@ const acceptBooking = async (req, res, next) => {
       })
     }
 
-    // Can only accept if REQUESTED or NEGOTIATING
+    // 🔒 Valid status check
     if (!['REQUESTED', 'NEGOTIATING'].includes(booking.status)) {
       return res.status(400).json({
         success: false,
@@ -418,17 +420,55 @@ const acceptBooking = async (req, res, next) => {
       })
     }
 
-    // Set agreed price
+    // 🔒 CHECK: vehicle still available (prevents double booking)
+    const assignmentExists = await VehicleRouteAssignment.findById(
+      booking.assignmentId
+    )
+
+    if (!assignmentExists) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vehicle already booked by another user'
+      })
+    }
+
+    // 💰 Final price
     const finalPrice =
       booking.lastPriceProposal?.proposedPrice || booking.estimatedPrice
+
     booking.agreedPrice = finalPrice
     booking.status = 'CONFIRMED'
+
+    // 🔥 CREATE TRIP FIRST (IMPORTANT ORDER)
+    if (!booking.tripId) {
+      const trip = await createTripFromBooking(booking)
+      booking.tripId = trip._id
+
+      try {
+        const io = getIO()
+        io.to(`transporter:${booking.buyerId}`).emit(
+          'trip:created:from-booking',
+          {
+            trip,
+            bookingId: booking._id
+          }
+        )
+      } catch (err) {
+        console.warn('Socket emit failed (trip:created:from-booking)')
+      }
+    }
+
+    // 🔥 REMOVE VEHICLE AFTER TRIP CREATED
+    await VehicleRouteAssignment.findByIdAndDelete(booking.assignmentId)
+
+    // ⏱ timestamps
     booking.acceptedAt = new Date()
     booking.confirmedAt = new Date()
 
+    // ✅ SINGLE SAVE (important)
     await booking.save()
 
-    // Create confirmation message
+    // 💬 confirmation message
     const confirmMessage = await TransporterMessage.create({
       bookingId: id,
       senderId: userId,
@@ -438,7 +478,7 @@ const acceptBooking = async (req, res, next) => {
       proposedPrice: finalPrice
     })
 
-    // Create audit log
+    // 🧾 audit log
     await VehicleBookingAudit.logAction({
       bookingId: id,
       action: BOOKING_AUDIT_ACTIONS.CONFIRMED,
@@ -448,27 +488,26 @@ const acceptBooking = async (req, res, next) => {
       }
     })
 
-    // Populate for response
+    // 📦 response data
     const populatedBooking = await VehicleBooking.findById(id)
       .populate('buyerId', 'name mobile company')
       .populate('sellerId', 'name mobile company')
       .populate('vehicleId', 'vehicleNumber vehicleType')
       .lean()
 
-    // Emit socket events
+    // 📡 socket events
     try {
       const io = getIO()
+
       io.to(`transporter:${booking.buyerId}`).emit('booking:confirmed', {
         booking: populatedBooking
       })
+
       io.to(`transporter:${booking.sellerId}`).emit('booking:confirmed', {
         booking: populatedBooking
       })
     } catch (err) {
-      console.warn(
-        'Socket emit failed (booking:confirmed):',
-        err.message || err
-      )
+      console.warn('Socket emit failed (booking:confirmed)')
     }
 
     return res.status(200).json({
@@ -716,11 +755,11 @@ const submitBooking = async (req, res, next) => {
 
     // Can only submit if DRAFT
     if (!['DRAFT', 'NEGOTIATING'].includes(booking.status)) {
-  return res.status(400).json({
-    success: false,
-    message: `Cannot submit booking in ${booking.status} status`,
-  });
-}
+      return res.status(400).json({
+        success: false,
+        message: `Cannot submit booking in ${booking.status} status`
+      })
+    }
 
     // Move from DRAFT to REQUESTED status
     booking.status = 'REQUESTED'
