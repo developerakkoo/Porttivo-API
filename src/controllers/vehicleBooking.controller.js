@@ -163,6 +163,13 @@ const createBooking = async (req, res, next) => {
 const getBooking = async (req, res, next) => {
   try {
     const { id } = req.params
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      })
+    }
+
     const userId = getTransporterActorId(req.user)
     if (!userId) {
       return res.status(403).json({
