@@ -284,6 +284,27 @@ const getTripVisibilityResponse = (trip, context = {}) => {
   return buildVisibleTrip(trip, context);
 };
 
+const canBookingBuyerViewTrip = (trip, user) => {
+  if (!trip?.isFromBooking || !user?.id) {
+    return false;
+  }
+
+  const bookingBuyerId =
+    trip.customerId?._id?.toString?.() || trip.customerId?.toString?.();
+
+  return bookingBuyerId === user.id;
+};
+
+const buildBookingBuyerTripResponse = (trip, user) =>
+  getTripVisibilityResponse(trip, {
+    actor: {
+      id: user.id,
+      userType: 'customer',
+    },
+    accessType: 'direct',
+    includeCurrentMilestone: true,
+  });
+
 const getDefaultPhotoRules = async () => {
   const config = await SystemConfig.findOne({ key: 'TRIP_RULES' }).select('milestoneRules');
   return config?.milestoneRules || undefined;
@@ -709,9 +730,10 @@ const getTripById = async (req, res, next) => {
 
     // Check access - admins can see all trips
     const isAdmin = req.user.userType === 'admin';
+    const isBookingBuyer = canBookingBuyerViewTrip(trip, req.user);
 
     if (!isAdmin) {
-      if (transporterId) {
+      if (transporterId && trip.transporterId?._id?.toString() === transporterId) {
         // Check permission for company users
         if (req.user.userType === 'company-user' && !hasPermission(req.user, 'viewTrips')) {
           return res.status(403).json({
@@ -719,11 +741,11 @@ const getTripById = async (req, res, next) => {
             message: 'Access denied. You do not have permission to view trips.',
           });
         }
-
-        if (trip.transporterId._id.toString() !== transporterId) {
+      } else if (isBookingBuyer) {
+        if (req.user.userType === 'company-user' && !hasPermission(req.user, 'viewTrips')) {
           return res.status(403).json({
             success: false,
-            message: 'Access denied. You do not have permission to view this trip.',
+            message: 'Access denied. You do not have permission to view trips.',
           });
         }
       } else if (req.user?.userType === 'customer') {
@@ -750,7 +772,9 @@ const getTripById = async (req, res, next) => {
     }
 
     const data =
-      req.user?.userType === 'customer'
+      isBookingBuyer
+        ? buildBookingBuyerTripResponse(trip, req.user)
+        : req.user?.userType === 'customer'
         ? getTripVisibilityResponse(trip, {
             actor: req.user,
             accessType: 'direct',
