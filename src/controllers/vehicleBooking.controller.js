@@ -1,3 +1,5 @@
+const mongoose = require('mongoose')
+const Notification = require('../models/Notification')
 const VehicleBooking = require('../models/VehicleBooking')
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
 const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
@@ -11,6 +13,7 @@ const {
   VehicleBookingAudit,
   BOOKING_AUDIT_ACTIONS
 } = require('../models/VehicleBookingAudit')
+const { getTransporterActorId } = require('../utils/transporterActor')
 
 /**
  * Create a booking request
@@ -18,11 +21,11 @@ const {
  */
 const createBooking = async (req, res, next) => {
   try {
-    const buyerId = req.user?.id
+    const buyerId = getTransporterActorId(req.user)
     if (!buyerId) {
       return res.status(403).json({
         success: false,
-        message: 'Only transporters can create bookings'
+        message: 'Only transporter accounts can create bookings'
       })
     }
 
@@ -76,14 +79,28 @@ const createBooking = async (req, res, next) => {
         .json({ success: false, message: 'You cannot book your own vehicle' })
     }
 
-    // Check if buyer already has a pending/confirmed booking for this post
     const existingBooking = await VehicleBooking.findOne({
       postId,
       buyerId,
-      status: { $in: ['REQUESTED', 'NEGOTIATING', 'CONFIRMED'] }
+      status: { $in: ['DRAFT', 'REQUESTED', 'NEGOTIATING', 'CONFIRMED'] }
     })
 
     if (existingBooking) {
+      if (
+        existingBooking.status === 'DRAFT' &&
+        existingBooking.assignmentId.toString() === assignmentId.toString()
+      ) {
+        const populatedBooking = await VehicleBooking.findById(existingBooking._id)
+          .populate('buyerId', 'name mobile company')
+          .populate('sellerId', 'name mobile company')
+          .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+          .lean()
+        return res.status(200).json({
+          success: true,
+          message: 'Booking inquiry already exists',
+          data: { booking: populatedBooking }
+        })
+      }
       return res.status(400).json({
         success: false,
         message: 'You already have an active booking for this post'
@@ -146,7 +163,13 @@ const createBooking = async (req, res, next) => {
 const getBooking = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can view bookings'
+      })
+    }
 
     const booking = await VehicleBooking.findById(id)
       .populate('buyerId', 'name mobile company')
@@ -172,13 +195,6 @@ const getBooking = async (req, res, next) => {
       })
     }
 
-    // Get all messages for this booking
-    const messages = await TransporterMessage.find({ bookingId: id })
-      .populate('senderId', 'name mobile')
-      .sort({ createdAt: 1 })
-      .lean()
-
-    // Mark unread messages as read for the current user
     await TransporterMessage.updateMany(
       {
         bookingId: id,
@@ -191,14 +207,17 @@ const getBooking = async (req, res, next) => {
       }
     )
 
+    const messages = await TransporterMessage.find({ bookingId: id })
+      .populate('senderId', 'name mobile')
+      .sort({ createdAt: 1 })
+      .lean()
+
     return res.status(200).json({
       success: true,
       data: {
         booking,
         messages,
-        unreadCount: messages.filter(
-          m => m.receiverId.toString() === userId && m.status !== 'READ'
-        ).length
+        unreadCount: 0
       }
     })
   } catch (error) {
@@ -212,7 +231,14 @@ const getBooking = async (req, res, next) => {
  */
 const getMyBookings = async (req, res, next) => {
   try {
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can list bookings'
+      })
+    }
+
     const { status, role } = req.query // role: 'buyer' or 'seller'
 
     const query = {}
@@ -245,7 +271,7 @@ const getMyBookings = async (req, res, next) => {
       {
         $match: {
           bookingId: { $in: bookingIds },
-          receiverId: mongoose.Types.ObjectId(userId),
+          receiverId: new mongoose.Types.ObjectId(userId),
           status: { $ne: 'READ' }
         }
       },
@@ -287,7 +313,13 @@ const getMyBookings = async (req, res, next) => {
 const proposePriceOffer = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can propose prices'
+      })
+    }
     const { proposedPrice, message: messageText } = req.body
 
     if (!proposedPrice || proposedPrice <= 0) {
@@ -362,14 +394,42 @@ const proposePriceOffer = async (req, res, next) => {
       .populate('vehicleId', 'vehicleNumber vehicleType')
       .lean()
 
-    // Emit socket event
     try {
       const io = getIO()
       const recipientId = isBuyer ? booking.sellerId : booking.buyerId
+      const populatedMsg = await TransporterMessage.findById(message._id)
+        .populate('senderId', 'name mobile company')
+        .populate('receiverId', 'name mobile')
+        .lean()
+      const chatPayload = {
+        bookingId: id,
+        message: populatedMsg,
+        senderId: userId,
+        timestamp: new Date()
+      }
+      io.to(`chat:${id}`).emit('chat:message:new', chatPayload)
+      io.to(`transporter:${recipientId}`).emit('chat:message:new', chatPayload)
+      io.to(`transporter:${recipientId}`).emit('message:new', chatPayload)
       io.to(`transporter:${recipientId}`).emit('booking:price-proposed', {
         booking: populatedBooking,
-        message: message.toObject ? message.toObject() : message
+        message: populatedMsg
       })
+
+      try {
+        await Notification.create({
+          userId: recipientId,
+          userType: 'TRANSPORTER',
+          type: 'MARKETPLACE_MESSAGE',
+          title: 'Price proposal',
+          message: `New offer: ₹${proposedPrice}`,
+          data: { bookingId: id.toString(), kind: 'price_proposal' },
+        })
+      } catch (notifyErr) {
+        console.warn(
+          'Marketplace notification skipped:',
+          notifyErr.message || notifyErr
+        )
+      }
     } catch (err) {
       console.warn(
         'Socket emit failed (booking:price-proposed):',
@@ -394,7 +454,13 @@ const proposePriceOffer = async (req, res, next) => {
 const acceptBooking = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can accept bookings'
+      })
+    }
 
     const booking = await VehicleBooking.findById(id)
     if (!booking) {
@@ -527,7 +593,13 @@ const acceptBooking = async (req, res, next) => {
 const rejectBooking = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can reject bookings'
+      })
+    }
     const { reason } = req.body
 
     const booking = await VehicleBooking.findById(id)
@@ -611,7 +683,13 @@ const rejectBooking = async (req, res, next) => {
 const cancelBooking = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can cancel bookings'
+      })
+    }
     const { reason } = req.body
 
     const booking = await VehicleBooking.findById(id)
@@ -691,7 +769,13 @@ const cancelBooking = async (req, res, next) => {
  */
 const getBookingStats = async (req, res, next) => {
   try {
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can view booking stats'
+      })
+    }
 
     const [
       totalAsNeeded,
@@ -736,7 +820,13 @@ const getBookingStats = async (req, res, next) => {
 const submitBooking = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user?.id
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can submit bookings'
+      })
+    }
 
     const booking = await VehicleBooking.findById(id)
     if (!booking) {
@@ -816,10 +906,119 @@ const submitBooking = async (req, res, next) => {
   }
 }
 
+/**
+ * Marketplace chat list (WhatsApp-style): bookings + last message + unread
+ * GET /api/vehicle-bookings/conversations
+ */
+const getConversations = async (req, res, next) => {
+  try {
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can list conversations'
+      })
+    }
+
+    const bookings = await VehicleBooking.find({
+      $or: [{ buyerId: userId }, { sellerId: userId }]
+    })
+      .populate('buyerId', 'name mobile company')
+      .populate('sellerId', 'name mobile company')
+      .populate('vehicleId', 'vehicleNumber vehicleType')
+      .populate('postId', 'origin destination availableFrom availableTo')
+      .lean()
+
+    const ids = bookings.map(b => b._id)
+    if (ids.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'Conversations retrieved',
+        data: { conversations: [], total: 0 }
+      })
+    }
+
+    const lastByBooking = await TransporterMessage.aggregate([
+      { $match: { bookingId: { $in: ids } } },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: '$bookingId',
+          lastMessageId: { $first: '$_id' }
+        }
+      }
+    ])
+    const lastIds = lastByBooking.map(x => x.lastMessageId).filter(Boolean)
+    const lastMsgs = lastIds.length
+      ? await TransporterMessage.find({ _id: { $in: lastIds } })
+          .populate('senderId', 'name mobile company')
+          .populate('receiverId', 'name mobile')
+          .lean()
+      : []
+    const lastMap = {}
+    for (const m of lastMsgs) {
+      lastMap[m.bookingId.toString()] = m
+    }
+
+    const unreadAgg = await TransporterMessage.aggregate([
+      {
+        $match: {
+          bookingId: { $in: ids },
+          receiverId: new mongoose.Types.ObjectId(userId),
+          status: { $ne: 'READ' }
+        }
+      },
+      { $group: { _id: '$bookingId', count: { $sum: 1 } } }
+    ])
+    const unreadMap = unreadAgg.reduce((acc, u) => {
+      acc[u._id.toString()] = u.count
+      return acc
+    }, {})
+
+    const conversations = bookings.map(b => {
+      const bid = b._id.toString()
+      const buyerRef = b.buyerId
+      const buyerKey =
+        buyerRef && typeof buyerRef === 'object' && buyerRef._id
+          ? buyerRef._id.toString()
+          : buyerRef?.toString?.() ?? `${buyerRef}`
+      const isBuyer = buyerKey === userId
+      const counterparty = isBuyer ? b.sellerId : b.buyerId
+      const lastMessage = lastMap[bid] || null
+      const uAt = b.updatedAt ? new Date(b.updatedAt).getTime() : 0
+      const mAt = lastMessage?.createdAt
+        ? new Date(lastMessage.createdAt).getTime()
+        : 0
+      const lastActivityAt = new Date(Math.max(uAt, mAt))
+
+      return {
+        booking: b,
+        lastMessage,
+        unreadCount: unreadMap[bid] || 0,
+        counterparty,
+        lastActivityAt
+      }
+    })
+
+    conversations.sort(
+      (a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime()
+    )
+
+    return res.status(200).json({
+      success: true,
+      message: 'Conversations retrieved',
+      data: { conversations, total: conversations.length }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   createBooking,
   getBooking,
   getMyBookings,
+  getConversations,
   proposePriceOffer,
   acceptBooking,
   rejectBooking,

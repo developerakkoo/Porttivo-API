@@ -5,6 +5,7 @@ const {
   createBooking,
   getBooking,
   getMyBookings,
+  getConversations,
   proposePriceOffer,
   acceptBooking,
   rejectBooking,
@@ -29,6 +30,13 @@ router.post('/', createBooking);
  * @access  Private (Transporter only)
  */
 router.get('/my-bookings', getMyBookings);
+
+/**
+ * @route   GET /api/vehicle-bookings/conversations
+ * @desc    Chat list: bookings with last message and unread counts
+ * @access  Private (Transporter only)
+ */
+router.get('/conversations', getConversations);
 
 /**
  * @route   GET /api/vehicle-bookings/stats

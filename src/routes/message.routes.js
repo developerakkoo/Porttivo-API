@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth.middleware');
 const {
   sendMessage,
   getConversation,
+  markBookingReadAll,
   markAsRead,
   getUnreadCount,
   deleteMessage,
@@ -26,6 +27,13 @@ router.post('/', sendMessage);
  * @access  Private (Transporter only)
  */
 router.get('/unread-count', getUnreadCount);
+
+/**
+ * @route   POST /api/messages/booking/:bookingId/read-all
+ * @desc    Mark all messages in booking as read for current user
+ * @access  Private (Transporter only)
+ */
+router.post('/booking/:bookingId/read-all', markBookingReadAll);
 
 /**
  * @route   GET /api/messages/booking/:bookingId

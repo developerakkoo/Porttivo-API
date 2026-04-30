@@ -29,6 +29,7 @@ const notificationSchema = new mongoose.Schema(
         'WALLET',
         'SYSTEM',
         'FRAUD_ALERT',
+        'MARKETPLACE_MESSAGE',
         'OTHER',
       ],
       required: [true, 'Notification type is required'],

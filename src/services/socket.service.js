@@ -20,6 +20,8 @@ const {
 } = require('./tripLifecycle.service')
 
 const TransporterMessage = require('../models/TransporterMessage')
+const Notification = require('../models/Notification')
+const { getTransporterActorId } = require('../utils/transporterActor')
 let io = null
 
 const getTripVehicleSelector = trip => {
@@ -47,15 +49,7 @@ const getTripVehicleRoom = trip => {
 }
 
 /** Transporter id for socket user (company users act as their transporter). */
-const getTransporterScopeId = user => {
-  if (!user) return null
-  if (user.userType === 'transporter')
-    return user.id?.toString?.() ?? `${user.id}`
-  if (user.userType === 'company-user' && user.transporterId) {
-    return user.transporterId.toString?.() ?? `${user.transporterId}`
-  }
-  return null
-}
+const getTransporterScopeId = getTransporterActorId
 
 const emitToTripAudience = (eventName, payload, options = {}) => {
   if (!io || !payload?.trip) {
@@ -736,6 +730,11 @@ const initializeSocketIO = httpServer => {
           return socket.emit('error', { message: 'bookingId required' })
         }
 
+        const actorId = getTransporterScopeId(socket.user)
+        if (!actorId) {
+          return socket.emit('error', { message: 'Access denied' })
+        }
+
         const VehicleBooking = require('../models/VehicleBooking')
 
         const booking = await VehicleBooking.findById(bookingId)
@@ -744,28 +743,24 @@ const initializeSocketIO = httpServer => {
           return socket.emit('error', { message: 'Booking not found' })
         }
 
-        // ✅ CORRECT ACCESS CHECK (based on your schema)
         const isAllowed =
-          booking.buyerId.toString() === socket.user.id ||
-          booking.sellerId.toString() === socket.user.id
+          booking.buyerId.toString() === actorId ||
+          booking.sellerId.toString() === actorId
 
         if (!isAllowed) {
           return socket.emit('error', { message: 'Access denied' })
         }
 
-        // ✅ JOIN ROOM
         socket.join(`chat:${bookingId}`)
-        // 🔥 notify other user in room
         socket.to(`chat:${bookingId}`).emit('chat:user:joined', {
-          userId: socket.user.id
+          userId: actorId
         })
 
-        // ✅ AUTO MARK DELIVERED
         await TransporterMessage.updateMany(
           {
             bookingId,
             status: 'SENT',
-            senderId: { $ne: socket.user.id }
+            senderId: { $ne: actorId }
           },
           { status: 'DELIVERED' }
         )
@@ -783,7 +778,11 @@ const initializeSocketIO = httpServer => {
       try {
         const { bookingId, content, messageType, proposedPrice } = data
 
-        // 🔥 CHECK USER JOINED ROOM
+        const actorId = getTransporterScopeId(socket.user)
+        if (!actorId) {
+          return socket.emit('error', { message: 'Access denied' })
+        }
+
         if (!socket.rooms.has(`chat:${bookingId}`)) {
           return socket.emit('error', {
             message: 'Join chat first before sending message'
@@ -807,36 +806,62 @@ const initializeSocketIO = httpServer => {
           return socket.emit('error', { message: 'Booking not found' })
         }
 
-        // ✅ ACCESS CHECK
         const isAllowed =
-          booking.buyerId.toString() === socket.user.id ||
-          booking.sellerId.toString() === socket.user.id
+          booking.buyerId.toString() === actorId ||
+          booking.sellerId.toString() === actorId
 
         if (!isAllowed) {
           return socket.emit('error', { message: 'Access denied' })
         }
 
-        // ✅ CREATE MESSAGE (USE SAME MODEL)
-        const message = await TransporterMessage.create({
+        const receiverId =
+          booking.buyerId.toString() === actorId
+            ? booking.sellerId
+            : booking.buyerId
+
+        const createdMsg = await TransporterMessage.create({
           bookingId,
-          senderId: socket.user.id,
-          receiverId:
-            booking.buyerId.toString() === socket.user.id
-              ? booking.sellerId
-              : booking.buyerId, // optional but good
+          senderId: actorId,
+          receiverId,
           content,
           messageType: messageType || 'TEXT',
           proposedPrice: proposedPrice || null,
           status: 'SENT'
         })
 
-        // ✅ EMIT TO ROOM
-        io.to(`chat:${bookingId}`).emit('chat:message:new', {
+        const populatedMessage = await TransporterMessage.findById(
+          createdMsg._id
+        )
+          .populate('senderId', 'name mobile company')
+          .populate('receiverId', 'name mobile')
+          .lean()
+
+        const payload = {
           bookingId,
-          message,
-          senderId: socket.user.id,
+          message: populatedMessage,
+          senderId: actorId,
           timestamp: new Date()
-        })
+        }
+
+        io.to(`chat:${bookingId}`).emit('chat:message:new', payload)
+        io.to(`transporter:${receiverId}`).emit('chat:message:new', payload)
+        io.to(`transporter:${receiverId}`).emit('message:new', payload)
+
+        try {
+          await Notification.create({
+            userId: receiverId,
+            userType: 'TRANSPORTER',
+            type: 'MARKETPLACE_MESSAGE',
+            title: 'Marketplace message',
+            message: String(content || '').slice(0, 200),
+            data: { bookingId: bookingId.toString() },
+          })
+        } catch (notifyErr) {
+          console.warn(
+            'Marketplace notification skipped:',
+            notifyErr.message || notifyErr
+          )
+        }
       } catch (err) {
         socket.emit('error', { message: err.message })
       }
@@ -866,6 +891,29 @@ const initializeSocketIO = httpServer => {
     // ================= MESSAGE READ =================
     socket.on('chat:message:read', async ({ messageId }) => {
       try {
+        const actorId = getTransporterScopeId(socket.user)
+        if (!actorId) {
+          return socket.emit('error', { message: 'Access denied' })
+        }
+
+        const existing = await TransporterMessage.findById(messageId)
+        if (!existing) {
+          return socket.emit('error', { message: 'Message not found' })
+        }
+        if (existing.receiverId.toString() !== actorId) {
+          return socket.emit('error', { message: 'Access denied' })
+        }
+
+        const VehicleBooking = require('../models/VehicleBooking')
+        const booking = await VehicleBooking.findById(existing.bookingId)
+        if (
+          !booking ||
+          (booking.buyerId.toString() !== actorId &&
+            booking.sellerId.toString() !== actorId)
+        ) {
+          return socket.emit('error', { message: 'Access denied' })
+        }
+
         const message = await TransporterMessage.findByIdAndUpdate(
           messageId,
           {
@@ -875,14 +923,17 @@ const initializeSocketIO = httpServer => {
           { new: true }
         )
 
-        if (!message) {
-          return socket.emit('error', { message: 'Message not found' })
-        }
-
-        io.to(`chat:${message.bookingId}`).emit('chat:message:read', {
+        const readPayload = {
+          bookingId: message.bookingId,
           messageId,
           readAt: message.readAt
-        })
+        }
+        io.to(`chat:${message.bookingId}`).emit('chat:message:read', readPayload)
+        io.to(`transporter:${message.senderId}`).emit(
+          'chat:message:read',
+          readPayload
+        )
+        io.to(`transporter:${message.senderId}`).emit('message:read', readPayload)
       } catch (err) {
         socket.emit('error', { message: err.message })
       }
@@ -890,19 +941,21 @@ const initializeSocketIO = httpServer => {
 
     // ================= TYPING =================
     socket.on('chat:typing', ({ bookingId }) => {
-      // ✅ check user is in room
       if (!socket.rooms.has(`chat:${bookingId}`)) return
+      const actorId = getTransporterScopeId(socket.user)
+      if (!actorId) return
 
       socket.to(`chat:${bookingId}`).emit('chat:typing', {
-        senderId: socket.user.id
+        senderId: actorId
       })
     })
 
     socket.on('chat:leave', ({ bookingId }) => {
       socket.leave(`chat:${bookingId}`)
+      const actorId = getTransporterScopeId(socket.user)
 
       socket.to(`chat:${bookingId}`).emit('chat:user:left', {
-        userId: socket.user.id
+        userId: actorId || socket.user.id
       })
     })
 
