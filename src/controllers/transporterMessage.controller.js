@@ -4,6 +4,7 @@ const Notification = require('../models/Notification');
 const { getIO } = require('../services/socket.service');
 const mongoose = require('mongoose');
 const { getTransporterActorId } = require('../utils/transporterActor');
+const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPayload');
 
 /**
  * Send a message in booking conversation
@@ -53,12 +54,11 @@ const sendMessage = async (req, res, next) => {
 
     try {
       const io = getIO();
-      const payload = {
+      const payload = buildChatMessageSocketPayload(
         bookingId,
-        message: populatedMessage,
-        senderId,
-        timestamp: new Date(),
-      };
+        populatedMessage,
+        senderId
+      );
       io.to(`chat:${bookingId}`).emit('chat:message:new', payload);
       io.to(`transporter:${receiverId}`).emit('chat:message:new', payload);
       io.to(`transporter:${receiverId}`).emit('message:new', payload);
@@ -100,7 +100,7 @@ const getConversation = async (req, res, next) => {
     if (!userId) {
       return res.status(403).json({ success: false, message: 'Only transporter accounts can view messages' });
     }
-    const { page = 1, limit = 50 } = req.query;
+    const { page = 1, limit = 50, afterCreatedAt, afterMessageId } = req.query;
 
     // Validate booking exists and user is participant
     const booking = await VehicleBooking.findById(bookingId);
@@ -115,7 +115,6 @@ const getConversation = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'You do not have access to this booking' });
     }
 
-    const skip = (Number(page) - 1) * Number(limit);
     const otherPartyId = isBuyer ? booking.sellerId : booking.buyerId;
 
     await TransporterMessage.updateMany(
@@ -130,13 +129,52 @@ const getConversation = async (req, res, next) => {
       }
     );
 
-    const messages = await TransporterMessage.find({ bookingId })
-      .populate('senderId', 'name mobile company')
-      .populate('receiverId', 'name mobile')
-      .sort({ createdAt: 1 })
-      .skip(skip)
-      .limit(Number(limit))
-      .lean();
+    const messageFilter = { bookingId };
+    let incremental = false;
+    const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
+
+    if (afterMessageId && mongoose.Types.ObjectId.isValid(afterMessageId)) {
+      const anchor = await TransporterMessage.findById(afterMessageId)
+        .select('bookingId createdAt')
+        .lean();
+      if (!anchor || anchor.bookingId.toString() !== bookingId) {
+        return res.status(400).json({
+          success: false,
+          message: 'afterMessageId does not belong to this booking',
+        });
+      }
+      messageFilter.createdAt = { $gt: anchor.createdAt };
+      incremental = true;
+    } else if (afterCreatedAt) {
+      const d = new Date(afterCreatedAt);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid afterCreatedAt',
+        });
+      }
+      messageFilter.createdAt = { $gt: d };
+      incremental = true;
+    }
+
+    let messages;
+    if (incremental) {
+      messages = await TransporterMessage.find(messageFilter)
+        .populate('senderId', 'name mobile company')
+        .populate('receiverId', 'name mobile')
+        .sort({ createdAt: 1 })
+        .limit(lim)
+        .lean();
+    } else {
+      const skip = (Number(page) - 1) * lim;
+      messages = await TransporterMessage.find(messageFilter)
+        .populate('senderId', 'name mobile company')
+        .populate('receiverId', 'name mobile')
+        .sort({ createdAt: 1 })
+        .skip(skip)
+        .limit(lim)
+        .lean();
+    }
 
     const total = await TransporterMessage.countDocuments({ bookingId });
 
@@ -150,12 +188,15 @@ const getConversation = async (req, res, next) => {
       success: true,
       data: {
         messages,
-        pagination: {
-          page: Number(page),
-          limit: Number(limit),
-          total,
-          pages: Math.ceil(total / Number(limit)),
-        },
+        incremental,
+        pagination: incremental
+          ? null
+          : {
+              page: Number(page),
+              limit: lim,
+              total,
+              pages: Math.ceil(total / lim),
+            },
         unreadCount,
         otherParty: {
           id: otherPartyId,

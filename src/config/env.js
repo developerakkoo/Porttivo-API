@@ -2,6 +2,8 @@ require('dotenv').config();
 
 module.exports = {
   port: process.env.PORT || 3000,
+  /** Engine.IO path; must match Flutter `SOCKET_IO_PATH` / nginx when using a subpath (e.g. `/api/socket.io`). */
+  socketIoPath: process.env.SOCKET_IO_PATH || '/socket.io',
   mongodbUri: process.env.MONGODB_URI || 'mongodb+srv://shubhamshelke6103_db:shubhamshelke@cluster0.23riiuz.mongodb.net/porttivo?appName=Cluster0',
   jwtSecret: process.env.JWT_SECRET || 'default-secret-key',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',

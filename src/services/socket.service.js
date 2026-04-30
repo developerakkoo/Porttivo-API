@@ -22,6 +22,8 @@ const {
 const TransporterMessage = require('../models/TransporterMessage')
 const Notification = require('../models/Notification')
 const { getTransporterActorId } = require('../utils/transporterActor')
+const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPayload')
+const env = require('../config/env')
 let io = null
 
 const getTripVehicleSelector = trip => {
@@ -50,6 +52,38 @@ const getTripVehicleRoom = trip => {
 
 /** Transporter id for socket user (company users act as their transporter). */
 const getTransporterScopeId = getTransporterActorId
+
+/**
+ * Structured logs for transporter / company-user socket lifecycle (debugging connectivity).
+ */
+const logTransporterSocketLifecycle = (event, socket, extra = {}) => {
+  const u = socket.user
+  if (
+    !u ||
+    (u.userType !== 'transporter' && u.userType !== 'company-user')
+  ) {
+    return
+  }
+  const transport = socket.conn?.transport?.name
+  const xf = socket.handshake.headers['x-forwarded-for']
+  const clientIp =
+    (typeof xf === 'string' && xf.split(',')[0]?.trim()) ||
+    socket.handshake.address ||
+    null
+  const ua = socket.handshake.headers['user-agent']
+  const row = {
+    event,
+    socketId: socket.id,
+    userType: u.userType,
+    jwtUserId: u.id,
+    transporterScopeId: getTransporterScopeId(u),
+    transport: transport || null,
+    clientIp,
+    userAgent: ua ? String(ua).slice(0, 160) : null,
+    ...extra
+  }
+  console.log('[Socket/transporter]', JSON.stringify(row))
+}
 
 const emitToTripAudience = (eventName, payload, options = {}) => {
   if (!io || !payload?.trip) {
@@ -97,6 +131,7 @@ const emitToTripAudience = (eventName, payload, options = {}) => {
  */
 const initializeSocketIO = httpServer => {
   io = new Server(httpServer, {
+    path: env.socketIoPath,
     cors: {
       origin: '*', // Configure based on your frontend URL
       methods: ['GET', 'POST'],
@@ -197,6 +232,13 @@ const initializeSocketIO = httpServer => {
     } else if (socket.user.userType === 'admin') {
       socket.join(`admin:${socket.user.id}`)
       socket.join('admin:all')
+    }
+
+    if (
+      socket.user.userType === 'transporter' ||
+      socket.user.userType === 'company-user'
+    ) {
+      logTransporterSocketLifecycle('connected', socket)
     }
 
     // Handle room joins
@@ -826,7 +868,7 @@ const initializeSocketIO = httpServer => {
           content,
           messageType: messageType || 'TEXT',
           proposedPrice: proposedPrice || null,
-          status: 'SENT'
+          status: 'DELIVERED'
         })
 
         const populatedMessage = await TransporterMessage.findById(
@@ -836,12 +878,11 @@ const initializeSocketIO = httpServer => {
           .populate('receiverId', 'name mobile')
           .lean()
 
-        const payload = {
+        const payload = buildChatMessageSocketPayload(
           bookingId,
-          message: populatedMessage,
-          senderId: actorId,
-          timestamp: new Date()
-        }
+          populatedMessage,
+          actorId
+        )
 
         io.to(`chat:${bookingId}`).emit('chat:message:new', payload)
         io.to(`transporter:${receiverId}`).emit('chat:message:new', payload)
@@ -960,8 +1001,11 @@ const initializeSocketIO = httpServer => {
     })
 
     // Disconnection handler
-    socket.on('disconnect', () => {
-      console.log(`Socket disconnected: ${socket.id}`)
+    socket.on('disconnect', reason => {
+      console.log(`Socket disconnected: ${socket.id} (${reason})`)
+      logTransporterSocketLifecycle('disconnected', socket, {
+        reason: reason || null
+      })
       // 🔥 USER OFFLINE EVENT
       const transporterScopeId = getTransporterScopeId(socket.user)
       if (transporterScopeId) {

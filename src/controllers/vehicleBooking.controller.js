@@ -14,6 +14,7 @@ const {
   BOOKING_AUDIT_ACTIONS
 } = require('../models/VehicleBookingAudit')
 const { getTransporterActorId } = require('../utils/transporterActor')
+const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPayload')
 
 /**
  * Create a booking request
@@ -408,12 +409,11 @@ const proposePriceOffer = async (req, res, next) => {
         .populate('senderId', 'name mobile company')
         .populate('receiverId', 'name mobile')
         .lean()
-      const chatPayload = {
-        bookingId: id,
-        message: populatedMsg,
-        senderId: userId,
-        timestamp: new Date()
-      }
+      const chatPayload = buildChatMessageSocketPayload(
+        id,
+        populatedMsg,
+        userId
+      )
       io.to(`chat:${id}`).emit('chat:message:new', chatPayload)
       io.to(`transporter:${recipientId}`).emit('chat:message:new', chatPayload)
       io.to(`transporter:${recipientId}`).emit('message:new', chatPayload)
