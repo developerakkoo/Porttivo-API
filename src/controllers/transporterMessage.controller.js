@@ -5,6 +5,9 @@ const { getIO } = require('../services/socket.service');
 const mongoose = require('mongoose');
 const { getTransporterActorId } = require('../utils/transporterActor');
 const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPayload');
+const {
+  buildMarketplaceMessageNotificationFields
+} = require('../utils/marketplaceNotification');
 
 /**
  * Send a message in booking conversation
@@ -67,13 +70,17 @@ const sendMessage = async (req, res, next) => {
     }
 
     try {
+      const notif = buildMarketplaceMessageNotificationFields({
+        bookingId,
+        populatedMessageLean: populatedMessage
+      });
       await Notification.create({
         userId: receiverId,
         userType: 'TRANSPORTER',
         type: 'MARKETPLACE_MESSAGE',
-        title: 'Marketplace message',
-        message: (content || '').trim().slice(0, 200),
-        data: { bookingId: bookingId.toString() },
+        title: notif.title,
+        message: notif.message,
+        data: notif.data
       });
     } catch (err) {
       console.warn('Marketplace notification skipped:', err.message || err);

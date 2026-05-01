@@ -15,6 +15,47 @@ const {
 } = require('../models/VehicleBookingAudit')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPayload')
+const {
+  buildMarketplaceMessageNotificationFields
+} = require('../utils/marketplaceNotification')
+
+function geoFieldToLabel(v) {
+  if (v == null) return null
+  if (typeof v === 'string') return v
+  if (typeof v === 'object') {
+    if (v.formattedAddress) return String(v.formattedAddress)
+    if (v.address) return String(v.address)
+    if (Array.isArray(v.coordinates) && v.coordinates.length >= 2) {
+      return `${v.coordinates[1]}, ${v.coordinates[0]}`
+    }
+  }
+  return null
+}
+
+/**
+ * Return assignment + slot to the marketplace post when booking ends without confirmation.
+ * Idempotent: if assignment already deleted, does not increment slots.
+ */
+async function releaseBookingAssignmentResources(booking) {
+  const assignmentId = booking.assignmentId
+  if (!assignmentId) return
+
+  const deleted = await VehicleRouteAssignment.findByIdAndDelete(assignmentId)
+  if (!deleted) return
+
+  const post = await VehicleRouteAvailability.findById(booking.postId)
+  if (!post) return
+
+  const qty = post.quantity != null ? post.quantity : 1
+  const cur = post.slotsLeft != null ? post.slotsLeft : 0
+  post.slotsLeft = Math.min(qty, cur + 1)
+
+  if (post.status === 'fulfilled' && post.slotsLeft > 0) {
+    post.status = 'active'
+  }
+
+  await post.save()
+}
 
 /**
  * Create a booking request
@@ -368,6 +409,8 @@ const proposePriceOffer = async (req, res, next) => {
       proposedPrice,
       proposedAt: new Date()
     }
+    booking.proposalAcknowledgedBy = null
+    booking.proposalAcknowledgedAt = null
     booking.negotiationRound = (booking.negotiationRound || 0) + 1
     booking.status = 'NEGOTIATING'
 
@@ -423,13 +466,17 @@ const proposePriceOffer = async (req, res, next) => {
       })
 
       try {
+        const notif = buildMarketplaceMessageNotificationFields({
+          bookingId: id,
+          populatedMessageLean: populatedMsg
+        })
         await Notification.create({
           userId: recipientId,
           userType: 'TRANSPORTER',
           type: 'MARKETPLACE_MESSAGE',
-          title: 'Price proposal',
-          message: `New offer: ₹${proposedPrice}`,
-          data: { bookingId: id.toString(), kind: 'price_proposal' },
+          title: notif.title,
+          message: notif.message,
+          data: notif.data
         })
       } catch (notifyErr) {
         console.warn(
@@ -448,6 +495,187 @@ const proposePriceOffer = async (req, res, next) => {
       success: true,
       message: 'Price proposal sent successfully',
       data: { booking: populatedBooking, message }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Receiver accepts the latest numeric proposal (required before seller can confirm if seller made the last offer).
+ * PUT /api/vehicle-bookings/:id/accept-proposal
+ */
+const acceptProposal = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can accept proposals'
+      })
+    }
+
+    const booking = await VehicleBooking.findById(id)
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      })
+    }
+
+    const isBuyer = booking.buyerId.toString() === userId
+    const isSeller = booking.sellerId.toString() === userId
+    if (!isBuyer && !isSeller) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this booking'
+      })
+    }
+
+    if (!['REQUESTED', 'NEGOTIATING'].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot accept a proposal for booking in ${booking.status} status`
+      })
+    }
+
+    const proposedBy = booking.lastPriceProposal?.proposedBy?.toString()
+    const price = booking.lastPriceProposal?.proposedPrice
+    if (!proposedBy || price == null) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending price proposal to accept'
+      })
+    }
+    if (proposedBy === userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot accept your own price proposal'
+      })
+    }
+
+    booking.proposalAcknowledgedBy = userId
+    booking.proposalAcknowledgedAt = new Date()
+    await booking.save()
+
+    await VehicleBookingAudit.logAction({
+      bookingId: id,
+      action: BOOKING_AUDIT_ACTIONS.PRICE_ACCEPTED,
+      performedBy: userId,
+      details: { proposedPrice: price, proposedBy }
+    })
+
+    const populatedBooking = await VehicleBooking.findById(id)
+      .populate('buyerId', 'name mobile company')
+      .populate('sellerId', 'name mobile company')
+      .populate('vehicleId', 'vehicleNumber vehicleType')
+      .lean()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Price offer accepted',
+      data: { booking: populatedBooking }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Receiver declines the latest proposal (non-terminal; clears pending offer).
+ * PUT /api/vehicle-bookings/:id/decline-proposal
+ */
+const declineProposal = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can decline proposals'
+      })
+    }
+
+    const booking = await VehicleBooking.findById(id)
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      })
+    }
+
+    const isBuyer = booking.buyerId.toString() === userId
+    const isSeller = booking.sellerId.toString() === userId
+    if (!isBuyer && !isSeller) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this booking'
+      })
+    }
+
+    if (!['REQUESTED', 'NEGOTIATING'].includes(booking.status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot decline a proposal for booking in ${booking.status} status`
+      })
+    }
+
+    const proposedBy = booking.lastPriceProposal?.proposedBy?.toString()
+    const price = booking.lastPriceProposal?.proposedPrice
+    if (!proposedBy || price == null) {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending price proposal to decline'
+      })
+    }
+    if (proposedBy === userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot decline your own price proposal'
+      })
+    }
+
+    const receiverId =
+      booking.buyerId.toString() === userId
+        ? booking.sellerId
+        : booking.buyerId
+
+    booking.lastPriceProposal = {
+      proposedBy: null,
+      proposedPrice: null,
+      proposedAt: null
+    }
+    booking.proposalAcknowledgedBy = null
+    booking.proposalAcknowledgedAt = null
+    await booking.save()
+
+    await TransporterMessage.create({
+      bookingId: id,
+      senderId: userId,
+      receiverId,
+      messageType: 'TEXT',
+      content: 'Declined the latest price offer.',
+      status: 'DELIVERED'
+    })
+
+    await VehicleBookingAudit.logAction({
+      bookingId: id,
+      action: BOOKING_AUDIT_ACTIONS.STATUS_CHANGED,
+      performedBy: userId,
+      details: { event: 'PROPOSAL_DECLINED', previousPrice: price }
+    })
+
+    const populatedBooking = await VehicleBooking.findById(id)
+      .populate('buyerId', 'name mobile company')
+      .populate('sellerId', 'name mobile company')
+      .populate('vehicleId', 'vehicleNumber vehicleType')
+      .lean()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Offer declined',
+      data: { booking: populatedBooking }
     })
   } catch (error) {
     next(error)
@@ -491,6 +719,17 @@ const acceptBooking = async (req, res, next) => {
         success: false,
         message: `Cannot accept booking in ${booking.status} status`
       })
+    }
+
+    const lastProposedBy = booking.lastPriceProposal?.proposedBy?.toString()
+    if (lastProposedBy === booking.sellerId.toString()) {
+      if (booking.proposalAcknowledgedBy?.toString() !== booking.buyerId.toString()) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'The buyer must accept your latest price offer before you can confirm this booking.'
+        })
+      }
     }
 
     // 🔒 CHECK: vehicle still available (prevents double booking)
@@ -540,6 +779,9 @@ const acceptBooking = async (req, res, next) => {
 
     // ✅ SINGLE SAVE (important)
     await booking.save()
+
+    // Listing capacity is decremented when a vehicle is assigned to the post (addVehicleToPost).
+    // When the last slot is taken, status becomes `fulfilled` there; search also requires slotsLeft > 0.
 
     // 💬 confirmation message
     const confirmMessage = await TransporterMessage.create({
@@ -632,6 +874,8 @@ const rejectBooking = async (req, res, next) => {
       })
     }
 
+    await releaseBookingAssignmentResources(booking)
+
     booking.status = 'REJECTED'
     booking.rejectedAt = new Date()
     booking.rejectReason = reason || 'No reason provided'
@@ -722,6 +966,8 @@ const cancelBooking = async (req, res, next) => {
         message: `Cannot cancel booking in ${booking.status} status`
       })
     }
+
+    await releaseBookingAssignmentResources(booking)
 
     const previousStatus = booking.status
     booking.status = 'CANCELLED'
@@ -998,8 +1244,21 @@ const getConversations = async (req, res, next) => {
         : 0
       const lastActivityAt = new Date(Math.max(uAt, mAt))
 
+      const post = b.postId
+      const bookingForList =
+        post && typeof post === 'object'
+          ? {
+              ...b,
+              postId: {
+                ...post,
+                originLabel: geoFieldToLabel(post.origin),
+                destinationLabel: geoFieldToLabel(post.destination)
+              }
+            }
+          : b
+
       return {
-        booking: b,
+        booking: bookingForList,
         lastMessage,
         unreadCount: unreadMap[bid] || 0,
         counterparty,
@@ -1027,6 +1286,8 @@ module.exports = {
   getMyBookings,
   getConversations,
   proposePriceOffer,
+  acceptProposal,
+  declineProposal,
   acceptBooking,
   rejectBooking,
   cancelBooking,

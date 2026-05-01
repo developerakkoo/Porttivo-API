@@ -23,6 +23,9 @@ const TransporterMessage = require('../models/TransporterMessage')
 const Notification = require('../models/Notification')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPayload')
+const {
+  buildMarketplaceMessageNotificationFields
+} = require('../utils/marketplaceNotification')
 const env = require('../config/env')
 let io = null
 
@@ -889,13 +892,18 @@ const initializeSocketIO = httpServer => {
         io.to(`transporter:${receiverId}`).emit('message:new', payload)
 
         try {
+          const notif = buildMarketplaceMessageNotificationFields({
+            bookingId,
+            populatedMessageLean: populatedMessage,
+            contentOverride: content
+          })
           await Notification.create({
             userId: receiverId,
             userType: 'TRANSPORTER',
             type: 'MARKETPLACE_MESSAGE',
-            title: 'Marketplace message',
-            message: String(content || '').slice(0, 200),
-            data: { bookingId: bookingId.toString() },
+            title: notif.title,
+            message: notif.message,
+            data: notif.data
           })
         } catch (notifyErr) {
           console.warn(
@@ -991,6 +999,55 @@ const initializeSocketIO = httpServer => {
       })
     })
 
+    // Thread presence (peer opened / closed this chat screen)
+    socket.on('chat:thread:join', async ({ bookingId }) => {
+      try {
+        const actorId = getTransporterScopeId(socket.user)
+        if (!actorId) {
+          return socket.emit('error', { message: 'Access denied' })
+        }
+        if (!bookingId) {
+          return socket.emit('error', { message: 'bookingId required' })
+        }
+        const VehicleBooking = require('../models/VehicleBooking')
+        const booking = await VehicleBooking.findById(bookingId)
+        if (!booking) {
+          return socket.emit('error', { message: 'Booking not found' })
+        }
+        const allowed =
+          booking.buyerId.toString() === actorId ||
+          booking.sellerId.toString() === actorId
+        if (!allowed) {
+          return socket.emit('error', { message: 'Access denied' })
+        }
+        if (!socket.rooms.has(`chat:${bookingId}`)) {
+          socket.join(`chat:${bookingId}`)
+        }
+        socket.to(`chat:${bookingId}`).emit('chat:peer:presence', {
+          bookingId: bookingId.toString(),
+          userId: actorId,
+          state: 'active'
+        })
+      } catch (e) {
+        socket.emit('error', { message: e.message })
+      }
+    })
+
+    socket.on('chat:thread:leave', ({ bookingId }) => {
+      try {
+        const actorId = getTransporterScopeId(socket.user)
+        if (!actorId || !bookingId) return
+        if (!socket.rooms.has(`chat:${bookingId}`)) return
+        socket.to(`chat:${bookingId}`).emit('chat:peer:presence', {
+          bookingId: bookingId.toString(),
+          userId: actorId,
+          state: 'away'
+        })
+      } catch (e) {
+        socket.emit('error', { message: e.message })
+      }
+    })
+
     socket.on('chat:leave', ({ bookingId }) => {
       socket.leave(`chat:${bookingId}`)
       const actorId = getTransporterScopeId(socket.user)
@@ -998,6 +1055,21 @@ const initializeSocketIO = httpServer => {
       socket.to(`chat:${bookingId}`).emit('chat:user:left', {
         userId: actorId || socket.user.id
       })
+    })
+
+    socket.on('disconnecting', () => {
+      const actorId = getTransporterScopeId(socket.user)
+      if (!actorId) return
+      for (const room of socket.rooms) {
+        if (room.startsWith('chat:')) {
+          const bookingId = room.slice('chat:'.length)
+          socket.to(room).emit('chat:peer:presence', {
+            bookingId,
+            userId: actorId,
+            state: 'away'
+          })
+        }
+      }
     })
 
     // Disconnection handler

@@ -78,6 +78,17 @@ const vehicleBookingSchema = new mongoose.Schema(
       },
     },
 
+    /** Set when the *receiver* of the latest proposal agrees to that price (buyer must ack seller offers before seller confirms). */
+    proposalAcknowledgedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Transporter',
+      default: null,
+    },
+    proposalAcknowledgedAt: {
+      type: Date,
+      default: null,
+    },
+
     // Trip Integration
     tripId: {
       type: mongoose.Schema.Types.ObjectId,

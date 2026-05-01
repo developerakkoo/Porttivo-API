@@ -7,6 +7,8 @@ const {
   getMyBookings,
   getConversations,
   proposePriceOffer,
+  acceptProposal,
+  declineProposal,
   acceptBooking,
   rejectBooking,
   cancelBooking,
@@ -65,6 +67,20 @@ router.get('/:id', getBooking);
  * @access  Private (Transporter only - buyer or seller)
  */
 router.put('/:id/propose-price', proposePriceOffer);
+
+/**
+ * @route   PUT /api/vehicle-bookings/:id/accept-proposal
+ * @desc    Receiver accepts the latest price proposal (records agreement to that number)
+ * @access  Private (Transporter — buyer or seller, not the proposer)
+ */
+router.put('/:id/accept-proposal', acceptProposal);
+
+/**
+ * @route   PUT /api/vehicle-bookings/:id/decline-proposal
+ * @desc    Receiver declines the latest price proposal (non-terminal)
+ * @access  Private (Transporter — buyer or seller, not the proposer)
+ */
+router.put('/:id/decline-proposal', declineProposal);
 
 /**
  * @route   PUT /api/vehicle-bookings/:id/accept

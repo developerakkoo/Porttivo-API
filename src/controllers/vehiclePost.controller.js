@@ -210,7 +210,7 @@ const searchAvailability = async (req, res, next) => {
       limit = 20
     } = req.query
 
-    const query = { status: 'active' }
+    const query = { status: 'active', slotsLeft: { $gt: 0 } }
 
     // escape user input for safe regex construction
     const escapeRegex = s => (s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -829,6 +829,11 @@ const addVehicleToPost = async (req, res, next) => {
         success: false,
         message: 'No slots available or post not active'
       })
+
+    if (post.slotsLeft === 0) {
+      post.status = 'fulfilled'
+      await post.save()
+    }
 
     // Create assignment (unique constraint will prevent duplicate vehicle for same post)
     try {

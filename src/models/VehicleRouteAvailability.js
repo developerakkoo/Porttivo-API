@@ -97,7 +97,7 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['active', 'cancelled', 'expired'],
+      enum: ['active', 'cancelled', 'expired', 'fulfilled'],
       default: 'active',
       index: true,
     },
