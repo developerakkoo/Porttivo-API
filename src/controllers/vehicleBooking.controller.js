@@ -803,12 +803,14 @@ const acceptBooking = async (req, res, next) => {
     if (trip) {
       try {
         const io = getIO()
+        const payload = { trip, bookingId: booking._id }
         io.to(`transporter:${booking.buyerId}`).emit(
           'trip:created:from-booking',
-          {
-            trip,
-            bookingId: booking._id
-          }
+          payload
+        )
+        io.to(`transporter:${booking.sellerId}`).emit(
+          'trip:created:from-booking',
+          payload
         )
       } catch (err) {
         console.warn('Socket emit failed (trip:created:from-booking)')
@@ -862,12 +864,14 @@ const acceptBooking = async (req, res, next) => {
 
       try {
         const io = getIO()
+        const payload = { trip, bookingId: booking._id }
         io.to(`transporter:${booking.buyerId}`).emit(
           'trip:created:from-booking',
-          {
-            trip,
-            bookingId: booking._id
-          }
+          payload
+        )
+        io.to(`transporter:${booking.sellerId}`).emit(
+          'trip:created:from-booking',
+          payload
         )
       } catch (err) {
         console.warn('Socket emit failed (trip:created:from-booking)')

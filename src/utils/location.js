@@ -95,7 +95,11 @@ const normalizeLocationInput = value => {
   }
 }
 
-const validateLocationInput = (value, label, { required = false } = {}) => {
+const validateLocationInput = (
+  value,
+  label,
+  { required = false, requireCoordinates = false } = {}
+) => {
   const location = normalizeLocationInput(value)
 
   if (
@@ -116,6 +120,24 @@ const validateLocationInput = (value, label, { required = false } = {}) => {
 
   if (Array.isArray(location.coordinates) && location.coordinates.length > 0) {
     const [longitude, latitude] = location.coordinates
+    if (
+      !Number.isFinite(longitude) ||
+      !Number.isFinite(latitude) ||
+      longitude < -180 ||
+      longitude > 180 ||
+      latitude < -90 ||
+      latitude > 90
+    ) {
+      return `${label}.coordinates must be [longitude, latitude]`
+    }
+  }
+
+  if (requireCoordinates) {
+    const coords = location.coordinates
+    if (!Array.isArray(coords) || coords.length !== 2) {
+      return `${label} must include coordinates as [longitude, latitude]`
+    }
+    const [longitude, latitude] = coords
     if (
       !Number.isFinite(longitude) ||
       !Number.isFinite(latitude) ||

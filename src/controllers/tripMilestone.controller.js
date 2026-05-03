@@ -1,4 +1,5 @@
 const Trip = require('../models/Trip')
+const { canTransporterPartyViewTripExecution } = require('../services/tripAccess.service')
 const {
   getBackendMeaning,
   getDriverLabel,
@@ -303,7 +304,6 @@ const getCurrentMilestone = async (req, res, next) => {
       })
     }
 
-    // Check access for drivers
     if (userType === 'driver') {
       if (!trip.driverId || trip.driverId.toString() !== userId) {
         return res.status(403).json({
@@ -311,14 +311,27 @@ const getCurrentMilestone = async (req, res, next) => {
           message: 'Access denied. This trip is not assigned to you.'
         })
       }
-    } else if (userType === 'transporter') {
-      if (trip.transporterId.toString() !== userId) {
+    } else if (userType === 'admin') {
+      // allowed
+    } else if (userType === 'customer') {
+      if (!trip.customerId || trip.customerId.toString() !== userId) {
         return res.status(403).json({
           success: false,
-          message:
-            'Access denied. You do not have permission to view this trip.'
+          message: 'Access denied. You do not have permission to view this trip.'
         })
       }
+    } else if (userType === 'transporter' || userType === 'company-user') {
+      if (!canTransporterPartyViewTripExecution(req.user, trip)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this trip.'
+        })
+      }
+    } else {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied.'
+      })
     }
 
     // Get current milestone
@@ -375,14 +388,8 @@ const getTripTimeline = async (req, res, next) => {
       })
     }
 
-    // Check access: transporter, customer (own trip), or admin
-    if (userType === 'transporter') {
-      if (trip.transporterId?.toString() !== userId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. You do not have permission to view this trip.'
-        })
-      }
+    if (userType === 'admin') {
+      // allowed
     } else if (userType === 'customer') {
       if (trip.customerId?.toString() !== userId) {
         return res.status(403).json({
@@ -390,7 +397,14 @@ const getTripTimeline = async (req, res, next) => {
           message: 'Access denied. You do not have permission to view this trip.'
         })
       }
-    } else if (userType !== 'admin') {
+    } else if (userType === 'transporter' || userType === 'company-user') {
+      if (!canTransporterPartyViewTripExecution(req.user, trip)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this trip.'
+        })
+      }
+    } else {
       return res.status(403).json({
         success: false,
         message: 'Access denied. Only transporters, customers, and admins can view trip timeline.'

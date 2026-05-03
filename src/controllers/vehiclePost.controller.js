@@ -39,13 +39,16 @@ const createAvailability = async (req, res, next) => {
     }
 
     const originError = validateLocationInput(origin, 'origin', {
-      required: true
+      required: true,
+      requireCoordinates: true
     })
     if (originError) {
       return res.status(400).json({ success: false, message: originError })
     }
 
-    const destinationError = validateLocationInput(destination, 'destination')
+    const destinationError = validateLocationInput(destination, 'destination', {
+      requireCoordinates: true
+    })
     if (destinationError) {
       return res.status(400).json({ success: false, message: destinationError })
     }
@@ -615,7 +618,8 @@ const updateAvailability = async (req, res, next) => {
     if (origin !== undefined) {
       const normalizedOrigin = normalizeLocationInput(origin)
       const originError = validateLocationInput(normalizedOrigin, 'origin', {
-        required: true
+        required: true,
+        requireCoordinates: true
       })
       if (originError) {
         return res.status(400).json({ success: false, message: originError })
@@ -626,7 +630,8 @@ const updateAvailability = async (req, res, next) => {
       const normalizedDestination = normalizeLocationInput(destination)
       const destinationError = validateLocationInput(
         normalizedDestination,
-        'destination'
+        'destination',
+        { requireCoordinates: true }
       )
       if (destinationError) {
         return res

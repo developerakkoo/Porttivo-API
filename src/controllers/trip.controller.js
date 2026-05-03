@@ -19,6 +19,12 @@ const {
 } = require('../services/socket.service');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 const {
+  canBookingBuyerViewTrip,
+  getMarketplaceTripMetaForUser,
+  getMarketplaceTripMetaForViewerId,
+  transporterPartyScopeCondition,
+} = require('../services/tripAccess.service');
+const {
   sendTripCreatedConfirmation,
   sendBookingAcceptedTemplate,
   sendDriverVehicleAssignedTemplate,
@@ -248,7 +254,7 @@ const serializeTrip = (trip, options = {}) => {
 
   const idStr = tripData._id != null ? String(tripData._id) : undefined;
 
-  return {
+  const base = {
     ...tripData,
     ...(idStr ? { id: idStr } : {}),
     pickupLocation: serializeLocation(tripData.pickupLocation),
@@ -270,9 +276,32 @@ const serializeTrip = (trip, options = {}) => {
         : null,
     currentMilestone,
   };
+
+  if (options.viewerTransporterId) {
+    const meta = getMarketplaceTripMetaForViewerId(trip, options.viewerTransporterId);
+    if (meta) {
+      return { ...base, ...meta };
+    }
+  }
+
+  return base;
 };
 
 const serializeTrips = (trips, options = {}) => trips.map((trip) => serializeTrip(trip, options));
+
+const sanitizeSerializedTripForMarketplaceBuyer = (serialized) => {
+  if (!serialized || typeof serialized !== 'object') return serialized;
+  const next = { ...serialized };
+  delete next.audit;
+  delete next.shareToken;
+  delete next.shareTokenExpiry;
+  if (next.shareConfig && typeof next.shareConfig === 'object') {
+    const clone = { ...next.shareConfig };
+    delete clone.token;
+    next.shareConfig = Object.keys(clone).length ? clone : undefined;
+  }
+  return next;
+};
 
 const getTripVisibilityResponse = (trip, context = {}) => {
   if (context.includeCurrentMilestone && trip?.getCurrentMilestone) {
@@ -283,27 +312,6 @@ const getTripVisibilityResponse = (trip, context = {}) => {
 
   return buildVisibleTrip(trip, context);
 };
-
-const canBookingBuyerViewTrip = (trip, user) => {
-  if (!trip?.isFromBooking || !user?.id) {
-    return false;
-  }
-
-  const bookingBuyerId =
-    trip.customerId?._id?.toString?.() || trip.customerId?.toString?.();
-
-  return bookingBuyerId === user.id;
-};
-
-const buildBookingBuyerTripResponse = (trip, user) =>
-  getTripVisibilityResponse(trip, {
-    actor: {
-      id: user.id,
-      userType: 'customer',
-    },
-    accessType: 'direct',
-    includeCurrentMilestone: true,
-  });
 
 const getDefaultPhotoRules = async () => {
   const config = await SystemConfig.findOne({ key: 'TRIP_RULES' }).select('milestoneRules');
@@ -641,10 +649,10 @@ const getTrips = async (req, res, next) => {
     }
     const { status, vehicleId, driverId, tripType, transporterId: queryTransporterId, customerId: queryCustomerId, page = 1, limit = 20, startDate, endDate } = req.query;
 
-    // Build query - admins can see all, others see only their transporter's trips
+    // Build query - admins can see all; transporters see trips they execute OR marketplace trips they booked
     const query = {};
     if (!isAdmin) {
-      query.transporterId = transporterId;
+      query.$and = [transporterPartyScopeCondition(transporterId)];
     } else {
       if (queryTransporterId) query.transporterId = queryTransporterId;
       if (queryCustomerId) query.customerId = queryCustomerId;
@@ -689,7 +697,7 @@ const getTrips = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: serializeTrips(trips),
+      data: serializeTrips(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -771,16 +779,24 @@ const getTripById = async (req, res, next) => {
       }
     }
 
-    const data =
-      isBookingBuyer
-        ? buildBookingBuyerTripResponse(trip, req.user)
-        : req.user?.userType === 'customer'
-        ? getTripVisibilityResponse(trip, {
-            actor: req.user,
-            accessType: 'direct',
-            includeCurrentMilestone: true,
-          })
-        : serializeTrip(trip, { includeCurrentMilestone: true });
+    const data = (() => {
+      if (isBookingBuyer) {
+        const raw = serializeTrip(trip, { includeCurrentMilestone: true });
+        const meta = getMarketplaceTripMetaForUser(trip, req.user);
+        const sanitized = sanitizeSerializedTripForMarketplaceBuyer(raw);
+        return meta ? { ...sanitized, ...meta } : sanitized;
+      }
+      if (req.user?.userType === 'customer') {
+        return getTripVisibilityResponse(trip, {
+          actor: req.user,
+          accessType: 'direct',
+          includeCurrentMilestone: true,
+        });
+      }
+      const raw = serializeTrip(trip, { includeCurrentMilestone: true });
+      const meta = getMarketplaceTripMetaForUser(trip, req.user);
+      return meta ? { ...raw, ...meta } : raw;
+    })();
 
     res.json({
       success: true,
@@ -1207,18 +1223,21 @@ const searchTrips = async (req, res, next) => {
       });
     }
 
+    const searchTerm = (q || containerNumber || reference).trim();
+    const searchClause = {
+      $or: [
+        { containerNumber: { $regex: searchTerm.toUpperCase(), $options: 'i' } },
+        { reference: { $regex: searchTerm, $options: 'i' } },
+      ],
+    };
+
     // Build query - admins can search all trips
     const query = {};
     if (!isAdmin) {
-      query.transporterId = transporterId;
+      query.$and = [transporterPartyScopeCondition(transporterId), searchClause];
+    } else {
+      query.$or = searchClause.$or;
     }
-    
-    // Build search criteria - support both 'q' and individual params
-    const searchTerm = (q || containerNumber || reference).trim();
-    query.$or = [
-      { containerNumber: { $regex: searchTerm.toUpperCase(), $options: 'i' } },
-      { reference: { $regex: searchTerm, $options: 'i' } },
-    ];
 
     // Pagination
     const pageNum = parseInt(page);
@@ -1236,7 +1255,7 @@ const searchTrips = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: serializeTrips(trips),
+      data: serializeTrips(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -1279,7 +1298,7 @@ const getActiveTrips = async (req, res, next) => {
     // Build query - admins can see all or filter by transporterId
     const query = { status: TRIP_STATUS.ACTIVE };
     if (!isAdmin) {
-      query.transporterId = transporterId;
+      query.$and = [transporterPartyScopeCondition(transporterId)];
     } else if (queryTransporterId) {
       query.transporterId = queryTransporterId;
     }
@@ -1293,7 +1312,7 @@ const getActiveTrips = async (req, res, next) => {
       success: true,
       message: 'Active trips retrieved successfully',
       data: {
-        trips: serializeTrips(activeTrips),
+        trips: serializeTrips(activeTrips, isAdmin ? {} : { viewerTransporterId: transporterId }),
         count: activeTrips.length,
       },
     });
@@ -1336,7 +1355,7 @@ const getPendingPODTrips = async (req, res, next) => {
     };
     
     if (!isAdmin) {
-      query.transporterId = transporterId;
+      query.$and = [transporterPartyScopeCondition(transporterId)];
     }
 
     // Pagination
@@ -1358,7 +1377,7 @@ const getPendingPODTrips = async (req, res, next) => {
       success: true,
       message: 'Pending POD trips retrieved successfully',
       data: {
-        trips: serializeTrips(trips),
+        trips: serializeTrips(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -1411,7 +1430,7 @@ const getTripsByStatus = async (req, res, next) => {
     // Build query - admins can see all or filter by transporterId
     const query = { status };
     if (!isAdmin) {
-      query.transporterId = transporterId;
+      query.$and = [transporterPartyScopeCondition(transporterId)];
     } else if (queryTransporterId) {
       query.transporterId = queryTransporterId;
     }
@@ -1432,7 +1451,7 @@ const getTripsByStatus = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: serializeTrips(trips),
+      data: serializeTrips(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
       pagination: {
         page: pageNum,
         limit: limitNum,
