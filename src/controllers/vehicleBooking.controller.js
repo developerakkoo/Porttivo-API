@@ -33,8 +33,9 @@ function geoFieldToLabel(v) {
 }
 
 /**
- * Return assignment + slot to the marketplace post when booking ends without confirmation.
- * Idempotent: if assignment already deleted, does not increment slots.
+ * Release the marketplace assignment when a booking ends without confirmation.
+ * Slot capacity is only consumed on confirmed bookings, so we do not adjust
+ * slotsLeft here.
  */
 async function releaseBookingAssignmentResources(booking) {
   const assignmentId = booking.assignmentId
@@ -42,19 +43,32 @@ async function releaseBookingAssignmentResources(booking) {
 
   const deleted = await VehicleRouteAssignment.findByIdAndDelete(assignmentId)
   if (!deleted) return
+}
 
-  const post = await VehicleRouteAvailability.findById(booking.postId)
-  if (!post) return
+async function consumeConfirmedBookingSlot(postId, session) {
+  const post = await VehicleRouteAvailability.findOneAndUpdate(
+    {
+      _id: postId,
+      status: { $in: ['active', 'fulfilled'] },
+      slotsLeft: { $gt: 0 }
+    },
+    { $inc: { slotsLeft: -1 } },
+    { new: true, session }
+  )
 
-  const qty = post.quantity != null ? post.quantity : 1
-  const cur = post.slotsLeft != null ? post.slotsLeft : 0
-  post.slotsLeft = Math.min(qty, cur + 1)
-
-  if (post.status === 'fulfilled' && post.slotsLeft > 0) {
-    post.status = 'active'
+  if (!post) {
+    throw new Error('No slots available on this post')
   }
 
-  await post.save()
+  if (post.slotsLeft === 0 && post.status !== 'fulfilled') {
+    post.status = 'fulfilled'
+    await post.save({ session })
+  } else if (post.slotsLeft > 0 && post.status === 'fulfilled') {
+    post.status = 'active'
+    await post.save({ session })
+  }
+
+  return post
 }
 
 /**
@@ -733,6 +747,96 @@ const acceptBooking = async (req, res, next) => {
     }
 
     // 🔒 CHECK: vehicle still available (prevents double booking)
+    {
+    // New confirmation flow: consume capacity only when the booking is formally
+    // confirmed, not when a vehicle is merely attached to the post.
+    const finalPrice =
+      booking.lastPriceProposal?.proposedPrice || booking.estimatedPrice
+
+    const session = await mongoose.startSession()
+    session.startTransaction()
+
+    let trip = null
+    let populatedBooking = null
+
+    try {
+      const assignmentExists = await VehicleRouteAssignment.findById(
+        booking.assignmentId
+      ).session(session)
+
+      if (!assignmentExists) {
+        throw new Error('Vehicle already booked by another user')
+      }
+
+      booking.agreedPrice = finalPrice
+      booking.status = 'CONFIRMED'
+      booking.acceptedAt = new Date()
+      booking.confirmedAt = new Date()
+
+      await consumeConfirmedBookingSlot(booking.postId, session)
+
+      if (!booking.tripId) {
+        trip = await createTripFromBooking(booking, { session })
+      }
+
+      await VehicleRouteAssignment.findByIdAndDelete(booking.assignmentId).session(
+        session
+      )
+
+      await booking.save({ session })
+
+      populatedBooking = await VehicleBooking.findById(id)
+        .populate('buyerId', 'name mobile company')
+        .populate('sellerId', 'name mobile company')
+        .populate('vehicleId', 'vehicleNumber vehicleType')
+        .lean()
+
+      await session.commitTransaction()
+    } catch (error) {
+      await session.abortTransaction()
+      session.endSession()
+      throw error
+    }
+
+    session.endSession()
+
+    if (trip) {
+      try {
+        const io = getIO()
+        io.to(`transporter:${booking.buyerId}`).emit(
+          'trip:created:from-booking',
+          {
+            trip,
+            bookingId: booking._id
+          }
+        )
+      } catch (err) {
+        console.warn('Socket emit failed (trip:created:from-booking)')
+      }
+    }
+
+    try {
+      const io = getIO()
+
+      io.to(`transporter:${booking.buyerId}`).emit('booking:confirmed', {
+        booking: populatedBooking
+      })
+
+      io.to(`transporter:${booking.sellerId}`).emit('booking:confirmed', {
+        booking: populatedBooking
+      })
+    } catch (err) {
+      console.warn('Socket emit failed (booking:confirmed)')
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Booking confirmed successfully',
+      data: { booking: populatedBooking }
+    })
+
+    }
+
     const assignmentExists = await VehicleRouteAssignment.findById(
       booking.assignmentId
     )

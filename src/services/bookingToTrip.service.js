@@ -3,14 +3,18 @@ const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
 const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
 const { TRIP_STATUS } = require('../utils/tripState')
 
-const createTripFromBooking = async booking => {
+const createTripFromBooking = async (booking, options = {}) => {
   if (!booking) {
     throw new Error('Booking is required')
   }
 
+  const { session = null } = options
+
   // ✅ Idempotency
   if (booking.tripId) {
-    const existingTrip = await Trip.findById(booking.tripId)
+    const existingTripQuery = Trip.findById(booking.tripId)
+    if (session) existingTripQuery.session(session)
+    const existingTrip = await existingTripQuery
     if (existingTrip) return existingTrip
   }
 
@@ -20,10 +24,13 @@ const createTripFromBooking = async booking => {
   }
 
   // ✅ Load data
-  const [post, assignment] = await Promise.all([
-    VehicleRouteAvailability.findById(booking.postId),
-    VehicleRouteAssignment.findById(booking.assignmentId)
-  ])
+  const postQuery = VehicleRouteAvailability.findById(booking.postId)
+  const assignmentQuery = VehicleRouteAssignment.findById(booking.assignmentId)
+  if (session) {
+    postQuery.session(session)
+    assignmentQuery.session(session)
+  }
+  const [post, assignment] = await Promise.all([postQuery, assignmentQuery])
 
   if (!post) throw new Error('VehicleRouteAvailability not found')
   if (!assignment) throw new Error('VehicleRouteAssignment not found')
@@ -87,22 +94,33 @@ const createTripFromBooking = async booking => {
     }
   }
 
-  const session = await Trip.startSession()
-  session.startTransaction()
-
   try {
-    const [trip] = await Trip.create([tripPayload], { session })
+    if (session) {
+      const [trip] = await Trip.create([tripPayload], { session })
+      booking.tripId = trip._id
+      await booking.save({ session })
+      return trip
+    }
 
-    booking.tripId = trip._id
-    await booking.save({ session })
+    const tripSession = await Trip.startSession()
+    tripSession.startTransaction()
 
-    await session.commitTransaction()
-    session.endSession()
+    try {
+      const [trip] = await Trip.create([tripPayload], { session: tripSession })
 
-    return trip
+      booking.tripId = trip._id
+      await booking.save({ session: tripSession })
+
+      await tripSession.commitTransaction()
+      tripSession.endSession()
+
+      return trip
+    } catch (error) {
+      await tripSession.abortTransaction()
+      tripSession.endSession()
+      throw error
+    }
   } catch (error) {
-    await session.abortTransaction()
-    session.endSession()
     throw error
   }
 }

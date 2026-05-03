@@ -1,6 +1,7 @@
 const Vehicle = require('../models/Vehicle')
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
 const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
+const VehicleBooking = require('../models/VehicleBooking')
 const { getIO } = require('../services/socket.service')
 const {
   normalizeLocationInput,
@@ -669,12 +670,19 @@ const updateAvailability = async (req, res, next) => {
 
     await post.save()
 
-    // Recompute slotsLeft based on assignments if quantity changed
+    // Recompute slotsLeft based on confirmed bookings if quantity changed.
+    // Assigned-but-unconfirmed vehicles do not consume listing capacity.
     try {
-      const assignedCount = await VehicleRouteAssignment.countDocuments({
-        postId: post._id
+      const confirmedCount = await VehicleBooking.countDocuments({
+        postId: post._id,
+        status: 'CONFIRMED'
       })
-      post.slotsLeft = Math.max(0, post.quantity - assignedCount)
+      post.slotsLeft = Math.max(0, post.quantity - confirmedCount)
+      if (post.slotsLeft > 0 && post.status === 'fulfilled') {
+        post.status = 'active'
+      } else if (post.slotsLeft === 0 && post.status === 'active') {
+        post.status = 'fulfilled'
+      }
       await post.save()
     } catch (e) {
       // non-fatal
@@ -844,22 +852,21 @@ const addVehicleToPost = async (req, res, next) => {
         .status(403)
         .json({ success: false, message: 'You do not own this vehicle' })
 
-    // Atomically decrement slotsLeft if available
-    const post = await VehicleRouteAvailability.findOneAndUpdate(
-      { _id: id, status: 'active', slotsLeft: { $gt: 0 } },
-      { $inc: { slotsLeft: -1 } },
-      { new: true }
-    )
-
-    if (!post)
+    const post = await VehicleRouteAvailability.findById(id)
+    if (!post || post.status !== 'active')
       return res.status(400).json({
         success: false,
         message: 'No slots available or post not active'
       })
 
-    if (post.slotsLeft === 0) {
-      post.status = 'fulfilled'
-      await post.save()
+    const assignedCount = await VehicleRouteAssignment.countDocuments({
+      postId: post._id
+    })
+    if (assignedCount >= post.quantity) {
+      return res.status(400).json({
+        success: false,
+        message: 'No vehicle slots available on this post'
+      })
     }
 
     // Create assignment (unique constraint will prevent duplicate vehicle for same post)
@@ -910,13 +917,6 @@ const addVehicleToPost = async (req, res, next) => {
         data: { assignment }
       })
     } catch (err) {
-      // duplicate assignment or other DB error - restore slot
-      try {
-        await VehicleRouteAvailability.findByIdAndUpdate(id, {
-          $inc: { slotsLeft: 1 }
-        })
-      } catch (e) {}
-
       // If duplicate key, inform client
       if (err.code === 11000)
         return res.status(400).json({
