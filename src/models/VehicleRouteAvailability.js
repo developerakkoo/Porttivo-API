@@ -58,15 +58,13 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
     origin: {
       type: locationSchema,
       required: true,
-      set: normalizeLocationInput,
-      index: '2dsphere' // for geo queries
+      set: normalizeLocationInput
     },
 
     destination: {
       type: locationSchema,
       default: null,
-      set: normalizeLocationInput,
-      index: '2dsphere'
+      set: normalizeLocationInput
     },
 
     quantity: {
@@ -110,12 +108,6 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
   },
   { timestamps: true }
 )
-
-// 🔥 Compound index (geo + date)
-vehicleRouteAvailabilitySchema.index({
-  'origin.coordinates': '2dsphere',
-  availableFrom: 1,
-})
 
 module.exports = mongoose.model(
   'VehicleRouteAvailability',

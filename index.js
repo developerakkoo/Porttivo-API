@@ -30,6 +30,7 @@ const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
 const messageRoutes = require('./src/routes/message.routes');
 const { getCustomerDetails } = require('./src/controllers/admin.controller');
 const { authenticate } = require('./src/middleware/auth.middleware');
+const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability');
 
 function requireAdminUser(req, res, next) {
   if (req.user?.userType !== 'admin') {
@@ -127,6 +128,16 @@ const startServer = async () => {
   try {
     // Connect to MongoDB
     await connectDB();
+
+    try {
+      await VehicleRouteAvailability.syncIndexes();
+      console.log('VehicleRouteAvailability indexes synced');
+    } catch (indexError) {
+      console.warn(
+        'VehicleRouteAvailability index sync skipped:',
+        indexError.message || indexError
+      );
+    }
 
     // Start HTTP server (Socket.IO is attached to it)
     // Listen on 0.0.0.0 to make it accessible over WiFi network
