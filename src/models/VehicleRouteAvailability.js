@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const { normalizeLocationInput } = require('../utils/location')
 
 // 🔥 Reusable location schema (GeoJSON)
 const locationSchema = new mongoose.Schema(
@@ -10,10 +11,13 @@ const locationSchema = new mongoose.Schema(
     },
     coordinates: {
       type: [Number], // [longitude, latitude]
-      required: true,
+      default: [],
       validate: {
         validator: function (val) {
-          return Array.isArray(val) && val.length === 2
+          if (!Array.isArray(val)) return false
+          if (val.length === 0) return true
+          if (val.length !== 2) return false
+          return val.every(Number.isFinite)
         },
         message: 'coordinates must be [longitude, latitude]'
       }
@@ -54,12 +58,14 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
     origin: {
       type: locationSchema,
       required: true,
+      set: normalizeLocationInput,
       index: '2dsphere' // for geo queries
     },
 
     destination: {
       type: locationSchema,
       default: null,
+      set: normalizeLocationInput,
       index: '2dsphere'
     },
 

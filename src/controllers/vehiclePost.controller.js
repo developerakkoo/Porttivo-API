@@ -2,6 +2,10 @@ const Vehicle = require('../models/Vehicle')
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
 const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
 const { getIO } = require('../services/socket.service')
+const {
+  normalizeLocationInput,
+  validateLocationInput
+} = require('../utils/location')
 
 // Create a new vehicle availability post
 const createAvailability = async (req, res, next) => {
@@ -31,6 +35,18 @@ const createAvailability = async (req, res, next) => {
       return res
         .status(400)
         .json({ success: false, message: 'Origin is required' })
+    }
+
+    const originError = validateLocationInput(origin, 'origin', {
+      required: true
+    })
+    if (originError) {
+      return res.status(400).json({ success: false, message: originError })
+    }
+
+    const destinationError = validateLocationInput(destination, 'destination')
+    if (destinationError) {
+      return res.status(400).json({ success: false, message: destinationError })
     }
 
     // vehicleType is required and must exist in VehicleType collection
@@ -112,17 +128,8 @@ const createAvailability = async (req, res, next) => {
       transporterId,
       vehicleId: vehicleId || null,
       vehicleType,
-      origin: {
-        formattedAddress: origin.formattedAddress,
-        coordinates: origin.coordinates
-      },
-
-      destination: destination
-        ? {
-            formattedAddress: destination.formattedAddress,
-            coordinates: destination.coordinates
-          }
-        : null,
+      origin: normalizeLocationInput(origin),
+      destination: normalizeLocationInput(destination),
       quantity: quantity ? Number(quantity) : 1,
       slotsLeft: quantity ? Number(quantity) : 1,
       pricePerVehicle:
@@ -604,9 +611,29 @@ const updateAvailability = async (req, res, next) => {
       post.vehicleType = vehicleType
     }
     if (vehicleId !== undefined) post.vehicleId = vehicleId || null
-    if (origin !== undefined) post.origin = origin?.trim() || post.origin
-    if (destination !== undefined)
-      post.destination = destination?.trim() || null
+    if (origin !== undefined) {
+      const normalizedOrigin = normalizeLocationInput(origin)
+      const originError = validateLocationInput(normalizedOrigin, 'origin', {
+        required: true
+      })
+      if (originError) {
+        return res.status(400).json({ success: false, message: originError })
+      }
+      post.origin = normalizedOrigin
+    }
+    if (destination !== undefined) {
+      const normalizedDestination = normalizeLocationInput(destination)
+      const destinationError = validateLocationInput(
+        normalizedDestination,
+        'destination'
+      )
+      if (destinationError) {
+        return res
+          .status(400)
+          .json({ success: false, message: destinationError })
+      }
+      post.destination = normalizedDestination
+    }
     if (quantity !== undefined)
       post.quantity = Number(quantity) || post.quantity
     if (note !== undefined) post.note = note || null
