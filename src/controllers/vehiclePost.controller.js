@@ -1,7 +1,9 @@
+const mongoose = require('mongoose')
 const Vehicle = require('../models/Vehicle')
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
 const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
 const VehicleBooking = require('../models/VehicleBooking')
+const { getTransporterId } = require('../middleware/permission.middleware')
 const { getIO } = require('../services/socket.service')
 const {
   normalizeLocationInput,
@@ -11,11 +13,11 @@ const {
 // Create a new vehicle availability post
 const createAvailability = async (req, res, next) => {
   try {
-    const transporterId = req.user?.id
+    const transporterId = getTransporterId(req.user)
     if (!transporterId) {
       return res.status(403).json({
         success: false,
-        message: 'Only transporters can post availability'
+        message: 'Only transporters and authorized company users can post availability'
       })
     }
 
@@ -395,11 +397,11 @@ const searchAvailability = async (req, res, next) => {
 // Get posts for authenticated transporter
 const getMyPosts = async (req, res, next) => {
   try {
-    const transporterId = req.user?.id
+    const transporterId = getTransporterId(req.user)
     if (!transporterId)
       return res.status(403).json({
         success: false,
-        message: 'Only transporters can access their posts'
+        message: 'Only transporters and authorized company users can access their posts'
       })
 
     const posts = await VehicleRouteAvailability.find({ transporterId })
@@ -488,10 +490,11 @@ const getMyPosts = async (req, res, next) => {
 const getById = async (req, res, next) => {
   try {
     const { id } = req.params
-    const userId = req.user?.id
-    if (!userId) {
+    if (!req.user?.id) {
       return res.status(403).json({ success: false, message: 'Unauthorized' })
     }
+
+    const viewerTransporterId = getTransporterId(req.user)
 
     const post = await VehicleRouteAvailability.findById(id)
       .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
@@ -504,7 +507,8 @@ const getById = async (req, res, next) => {
 
     const ownerId =
       post.transporterId?._id?.toString() || post.transporterId?.toString()
-    const isOwner = ownerId === userId
+    const isOwner =
+      viewerTransporterId != null && ownerId === viewerTransporterId
 
     if (post.status !== 'active' && !isOwner) {
       return res.status(404).json({ success: false, message: 'Post not found' })
@@ -574,11 +578,14 @@ const getById = async (req, res, next) => {
 // Update a post (owner only)
 const updateAvailability = async (req, res, next) => {
   try {
-    const transporterId = req.user?.id
+    const transporterId = getTransporterId(req.user)
     if (!transporterId)
       return res
         .status(403)
-        .json({ success: false, message: 'Only transporters can update posts' })
+        .json({
+          success: false,
+          message: 'Only transporters and authorized company users can update posts'
+        })
 
     const { id } = req.params
     const {
@@ -756,7 +763,13 @@ const updateAvailability = async (req, res, next) => {
 // Cancel a post (owner only)
 const cancelPost = async (req, res, next) => {
   try {
-    const transporterId = req.user?.id
+    const transporterId = getTransporterId(req.user)
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporters and authorized company users can cancel posts'
+      })
+    }
     const { id } = req.params
 
     const post = await VehicleRouteAvailability.findById(id)
@@ -829,68 +842,132 @@ const cancelPost = async (req, res, next) => {
   }
 }
 
-// Add a vehicle to a post (transporters adding their vehicle to an available post)
+// Add one or more vehicles to a post (listing owner only; batch in a transaction)
 const addVehicleToPost = async (req, res, next) => {
   try {
-    const transporterId = req.user?.id
-    if (!transporterId)
-      return res
-        .status(403)
-        .json({ success: false, message: 'Only transporters can add vehicles' })
+    const viewerId = getTransporterId(req.user)
+    if (!viewerId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporters and authorized company users can add vehicles'
+      })
+    }
 
-    const { id } = req.params // post id
-    const { vehicleId, price, note } = req.body
+    const { id } = req.params
+    const { vehicleId, vehicleIds, price, note } = req.body
 
-    if (!vehicleId)
-      return res
-        .status(400)
-        .json({ success: false, message: 'vehicleId is required' })
-
-    // validate vehicle belongs to transporter
-    const vehicle = await Vehicle.findById(vehicleId)
-    if (!vehicle)
-      return res
-        .status(404)
-        .json({ success: false, message: 'Vehicle not found' })
-    if (vehicle.transporterId.toString() !== transporterId)
-      return res
-        .status(403)
-        .json({ success: false, message: 'You do not own this vehicle' })
-
-    const post = await VehicleRouteAvailability.findById(id)
-    if (!post || post.status !== 'active')
+    const rawList = []
+    if (vehicleId != null && String(vehicleId).trim() !== '') {
+      rawList.push(String(vehicleId).trim())
+    }
+    if (Array.isArray(vehicleIds)) {
+      for (const v of vehicleIds) {
+        if (v != null && String(v).trim() !== '') {
+          rawList.push(String(v).trim())
+        }
+      }
+    }
+    const uniqueIds = [...new Set(rawList)]
+    if (uniqueIds.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No slots available or post not active'
+        message: 'vehicleId or a non-empty vehicleIds array is required'
       })
+    }
+
+    const post = await VehicleRouteAvailability.findById(id)
+    if (!post || post.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        message: 'Post not found or not active'
+      })
+    }
+
+    if (post.transporterId.toString() !== viewerId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the listing owner can add vehicles to this post'
+      })
+    }
 
     const assignedCount = await VehicleRouteAssignment.countDocuments({
       postId: post._id
     })
-    if (assignedCount >= post.quantity) {
+    const slotsRemaining = post.quantity - assignedCount
+    if (slotsRemaining < uniqueIds.length) {
       return res.status(400).json({
         success: false,
-        message: 'No vehicle slots available on this post'
+        message: `Only ${slotsRemaining} slot(s) remaining on this post (${assignedCount} of ${post.quantity} vehicles already listed)`
       })
     }
 
-    // Create assignment (unique constraint will prevent duplicate vehicle for same post)
-    try {
-      const assignment = await VehicleRouteAssignment.create({
-        postId: post._id,
-        vehicleId,
-        transporterId,
-        price:
-          price === undefined
-            ? post.pricePerVehicle === undefined ||
-              post.pricePerVehicle === null
-              ? null
-              : Number(post.pricePerVehicle)
-            : Number(price),
-        note: note || null
-      })
+    const existingAssignments = await VehicleRouteAssignment.find({
+      postId: post._id
+    })
+      .select('vehicleId')
+      .lean()
+    const existingVehicleIds = new Set(
+      existingAssignments.map(a => a.vehicleId.toString())
+    )
+    for (const vid of uniqueIds) {
+      if (existingVehicleIds.has(vid)) {
+        return res.status(400).json({
+          success: false,
+          message: 'One or more vehicles are already on this post'
+        })
+      }
+    }
 
-      // Populate response and emit update
+    const vehicles = await Vehicle.find({ _id: { $in: uniqueIds } })
+    if (vehicles.length !== uniqueIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'One or more vehicles were not found'
+      })
+    }
+
+    for (const v of vehicles) {
+      if (v.transporterId.toString() !== viewerId) {
+        return res.status(403).json({
+          success: false,
+          message: 'You do not own one or more of the selected vehicles'
+        })
+      }
+      if (v.status !== 'active') {
+        return res.status(400).json({
+          success: false,
+          message: `Vehicle ${v.vehicleNumber || v._id} is not active`
+        })
+      }
+      if (v.vehicleType && v.vehicleType !== post.vehicleType) {
+        return res.status(400).json({
+          success: false,
+          message: `Vehicle type must match listing (${post.vehicleType})`
+        })
+      }
+    }
+
+    const priceVal =
+      price === undefined
+        ? post.pricePerVehicle === undefined || post.pricePerVehicle === null
+          ? null
+          : Number(post.pricePerVehicle)
+        : Number(price)
+
+    const session = await mongoose.startSession()
+    session.startTransaction()
+    try {
+      const docs = uniqueIds.map(vId => ({
+        postId: post._id,
+        vehicleId: vId,
+        transporterId: viewerId,
+        price: priceVal,
+        note: note || null
+      }))
+      const created = await VehicleRouteAssignment.insertMany(docs, { session })
+      await session.commitTransaction()
+      session.endSession()
+
       const populated = await VehicleRouteAvailability.findById(post._id)
         .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
         .populate('transporterId', 'name company mobile status')
@@ -916,18 +993,29 @@ const addVehicleToPost = async (req, res, next) => {
         io.emit('vehiclePost:updated', { post: response })
       } catch (e) {}
 
+      const message =
+        uniqueIds.length === 1
+          ? 'Vehicle added to post'
+          : 'Vehicles added to post'
+
       return res.status(201).json({
         success: true,
-        message: 'Vehicle added to post',
-        data: { assignment }
+        message,
+        data: {
+          assignments: created,
+          added: created.length,
+          assignment: created.length === 1 ? created[0] : undefined
+        }
       })
     } catch (err) {
-      // If duplicate key, inform client
-      if (err.code === 11000)
+      await session.abortTransaction()
+      session.endSession()
+      if (err.code === 11000) {
         return res.status(400).json({
           success: false,
-          message: 'This vehicle is already added to the post'
+          message: 'One or more vehicles are already on this post'
         })
+      }
       throw err
     }
   } catch (error) {
