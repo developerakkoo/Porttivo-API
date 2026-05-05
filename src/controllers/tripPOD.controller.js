@@ -1,4 +1,5 @@
 const Trip = require('../models/Trip')
+const VehicleBooking = require('../models/VehicleBooking')
 const path = require('path')
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState')
 const {
@@ -295,7 +296,7 @@ const approvePOD = async (req, res, next) => {
     }
     await trip.save()
 
-    if (trip.bookingId) {
+    if (trip.isFromBooking && trip.bookingId) {
       await VehicleBooking.findByIdAndUpdate(trip.bookingId, {
         status: 'COMPLETED',
         completedAt: new Date()
