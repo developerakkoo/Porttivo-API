@@ -126,6 +126,7 @@ const createBooking = async (req, res, next) => {
       })
     }
 
+    // buyerId/sellerId are always Transporter document ids (actor scope matches getTransporterActorId).
     const sellerId = assignment.transporterId
 
     // Buyer cannot book their own vehicle
@@ -1281,8 +1282,12 @@ const getConversations = async (req, res, next) => {
       })
     }
 
+    const userObjectId = new mongoose.Types.ObjectId(userId)
     const bookings = await VehicleBooking.find({
-      $or: [{ buyerId: userId }, { sellerId: userId }]
+      $and: [
+        { $or: [{ buyerId: userId }, { sellerId: userId }] },
+        { $nor: [{ inboxHiddenBy: userObjectId }] },
+      ],
     })
       .populate('buyerId', 'name mobile company')
       .populate('sellerId', 'name mobile company')
@@ -1388,11 +1393,60 @@ const getConversations = async (req, res, next) => {
   }
 }
 
+/**
+ * Hide booking thread from current user's chats list only (does not cancel booking).
+ * PATCH /api/vehicle-bookings/:id/hide-from-inbox
+ */
+const hideBookingFromInbox = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const userId = getTransporterActorId(req.user)
+    if (!userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can update conversations'
+      })
+    }
+
+    const booking = await VehicleBooking.findById(id)
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      })
+    }
+
+    if (
+      booking.buyerId.toString() !== userId &&
+      booking.sellerId.toString() !== userId
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this booking'
+      })
+    }
+
+    const actorOid = new mongoose.Types.ObjectId(userId)
+    await VehicleBooking.updateOne(
+      { _id: id },
+      { $addToSet: { inboxHiddenBy: actorOid } }
+    )
+
+    return res.status(200).json({
+      success: true,
+      message: 'Conversation removed from your inbox'
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   createBooking,
   getBooking,
   getMyBookings,
   getConversations,
+  hideBookingFromInbox,
   proposePriceOffer,
   acceptProposal,
   declineProposal,

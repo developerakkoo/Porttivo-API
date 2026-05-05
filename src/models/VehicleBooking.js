@@ -139,6 +139,12 @@ const vehicleBookingSchema = new mongoose.Schema(
       type: [String],
       default: [],
     },
+
+    /** Transporter ids who hid this thread from marketplace chats list (booking unchanged). */
+    inboxHiddenBy: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Transporter' }],
+      default: [],
+    },
   },
   { timestamps: true }
 );

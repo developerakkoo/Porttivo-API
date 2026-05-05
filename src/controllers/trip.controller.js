@@ -5,7 +5,11 @@ const Customer = require('../models/Customer');
 const Transporter = require('../models/Transporter');
 const Notification = require('../models/Notification');
 const SystemConfig = require('../models/SystemConfig');
-const { checkVehicleHasActiveTrip } = require('../utils/vehicleValidation');
+const {
+  checkVehicleHasActiveTrip,
+  normalizeIndianVehicleRegistration,
+  isValidIndianVehicleRegistration,
+} = require('../utils/vehicleValidation');
 const {
   emitTripCreated,
   emitTripCreatedForCustomer,
@@ -69,7 +73,7 @@ const normalizeHiredVehicle = (hiredVehicle) => {
   }
 
   return {
-    vehicleNumber: hiredVehicle.vehicleNumber?.trim().toUpperCase() || '',
+    vehicleNumber: normalizeIndianVehicleRegistration(hiredVehicle.vehicleNumber || ''),
     trailerType: hiredVehicle.trailerType?.trim() || null,
   };
 };
@@ -83,6 +87,9 @@ const validateVehicleAssignmentInput = ({ vehicleId, hiredVehicle }) => {
     const normalized = normalizeHiredVehicle(hiredVehicle);
     if (!normalized.vehicleNumber) {
       return 'hiredVehicle.vehicleNumber is required';
+    }
+    if (!isValidIndianVehicleRegistration(normalized.vehicleNumber)) {
+      return 'hiredVehicle.vehicleNumber must be a valid 10-character Indian registration (e.g. MH12AB3434)';
     }
   }
 

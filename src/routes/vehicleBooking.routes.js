@@ -14,6 +14,7 @@ const {
   cancelBooking,
   submitBooking,
   getBookingStats,
+  hideBookingFromInbox,
 } = require('../controllers/vehicleBooking.controller');
 
 // All endpoints require authentication
@@ -39,6 +40,13 @@ router.get('/my-bookings', getMyBookings);
  * @access  Private (Transporter only)
  */
 router.get('/conversations', getConversations);
+
+/**
+ * @route   PATCH /api/vehicle-bookings/:id/hide-from-inbox
+ * @desc    Remove thread from this user's chat list (booking unchanged)
+ * @access  Private (buyer or seller on booking)
+ */
+router.patch('/:id/hide-from-inbox', hideBookingFromInbox);
 
 /**
  * @route   GET /api/vehicle-bookings/stats

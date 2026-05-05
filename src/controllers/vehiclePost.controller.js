@@ -9,6 +9,7 @@ const {
   normalizeLocationInput,
   validateLocationInput
 } = require('../utils/location')
+const { parseOptionalPricePerVehicle } = require('../utils/vehiclePostPrice.util')
 
 // Create a new vehicle availability post
 const createAvailability = async (req, res, next) => {
@@ -130,6 +131,14 @@ const createAvailability = async (req, res, next) => {
       }
     }
 
+    const priceResultCreate = parseOptionalPricePerVehicle(pricePerVehicle)
+    if (!priceResultCreate.ok) {
+      return res.status(400).json({
+        success: false,
+        message: priceResultCreate.message
+      })
+    }
+
     const post = await VehicleRouteAvailability.create({
       transporterId,
       vehicleId: vehicleId || null,
@@ -138,8 +147,7 @@ const createAvailability = async (req, res, next) => {
       destination: normalizeLocationInput(destination),
       quantity: quantity ? Number(quantity) : 1,
       slotsLeft: quantity ? Number(quantity) : 1,
-      pricePerVehicle:
-        pricePerVehicle === undefined ? null : Number(pricePerVehicle),
+      pricePerVehicle: priceResultCreate.value,
       availableFrom: fromDate,
       availableTo: toDate,
       note: note || null,
@@ -598,7 +606,8 @@ const updateAvailability = async (req, res, next) => {
       durationDays,
       quantity,
       note,
-      status
+      status,
+      pricePerVehicle
     } = req.body
 
     const post = await VehicleRouteAvailability.findById(id)
@@ -651,6 +660,16 @@ const updateAvailability = async (req, res, next) => {
       post.quantity = Number(quantity) || post.quantity
     if (note !== undefined) post.note = note || null
     if (status !== undefined) post.status = status
+    if (Object.prototype.hasOwnProperty.call(req.body, 'pricePerVehicle')) {
+      const priceResultUpdate = parseOptionalPricePerVehicle(pricePerVehicle)
+      if (!priceResultUpdate.ok) {
+        return res.status(400).json({
+          success: false,
+          message: priceResultUpdate.message
+        })
+      }
+      post.pricePerVehicle = priceResultUpdate.value
+    }
 
     // Dates
     if (availableFrom) {

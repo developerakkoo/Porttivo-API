@@ -2,6 +2,46 @@ const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
 const { TRIP_STATUS } = require('./tripState');
 
+/** Indian vehicle registration (standard): 2 letters + 2 digits + 2 letters + 4 digits (10 chars), e.g. MH12AB3434 */
+const INDIAN_VEHICLE_REGISTRATION_RE = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
+
+/**
+ * Normalize Indian registration: remove whitespace, uppercase.
+ * @param {string|null|undefined} raw
+ * @returns {string}
+ */
+const normalizeIndianVehicleRegistration = (raw) => {
+  if (raw == null || typeof raw !== 'string') return '';
+  return raw.replace(/\s+/g, '').trim().toUpperCase();
+};
+
+/**
+ * @param {string} normalized - output of normalizeIndianVehicleRegistration
+ * @returns {boolean}
+ */
+const isValidIndianVehicleRegistration = (normalized) =>
+  typeof normalized === 'string' &&
+  normalized.length === 10 &&
+  INDIAN_VEHICLE_REGISTRATION_RE.test(normalized);
+
+/**
+ * @param {string|null|undefined} raw
+ * @returns {{ normalized: string }|{ error: string }}
+ */
+const validateIndianVehicleRegistrationFormat = (raw) => {
+  const normalized = normalizeIndianVehicleRegistration(raw);
+  if (!normalized) {
+    return { error: 'Vehicle number is required' };
+  }
+  if (!isValidIndianVehicleRegistration(normalized)) {
+    return {
+      error:
+        'Invalid vehicle registration. Use 10 characters: 2 letters (state), 2 digits, 2 letters, 4 digits (e.g. MH12AB3434).',
+    };
+  }
+  return { normalized };
+};
+
 /**
  * Check if vehicle has active trip
  * @param {String|Object} vehicleSelector - Vehicle ID or query selector
@@ -145,7 +185,7 @@ const validateVehicleForTrip = async (vehicleId) => {
  */
 const canCreateAsOwn = async (vehicleNumber) => {
   try {
-    const cleanedNumber = vehicleNumber.trim().toUpperCase();
+    const cleanedNumber = normalizeIndianVehicleRegistration(vehicleNumber);
     const existingOwn = await Vehicle.findOne({
       vehicleNumber: cleanedNumber,
       ownerType: 'OWN',
@@ -193,6 +233,9 @@ const canCreateAsHired = async (vehicleNumber, transporterId) => {
 };
 
 module.exports = {
+  normalizeIndianVehicleRegistration,
+  isValidIndianVehicleRegistration,
+  validateIndianVehicleRegistrationFormat,
   checkVehicleHasActiveTrip,
   checkVehicleHasTripHistory,
   getQueuedTripsCount,

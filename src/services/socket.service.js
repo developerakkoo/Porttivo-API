@@ -56,6 +56,11 @@ const getTripVehicleRoom = trip => {
 /** Transporter id for socket user (company users act as their transporter). */
 const getTransporterScopeId = getTransporterActorId
 
+/** Distinct codes for marketplace chat `error` events (client logging / support). */
+function emitMarketplaceChatError(socket, code, message) {
+  socket.emit('error', { code, message })
+}
+
 /**
  * Structured logs for transporter / company-user socket lifecycle (debugging connectivity).
  */
@@ -777,7 +782,11 @@ const initializeSocketIO = httpServer => {
 
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_NO_ACTOR',
+            'Chat requires a transporter or company-user account.'
+          )
         }
 
         const VehicleBooking = require('../models/VehicleBooking')
@@ -793,7 +802,11 @@ const initializeSocketIO = httpServer => {
           booking.sellerId.toString() === actorId
 
         if (!isAllowed) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_JOIN_DENIED',
+            'You are not a participant in this booking.'
+          )
         }
 
         socket.join(`chat:${bookingId}`)
@@ -825,7 +838,11 @@ const initializeSocketIO = httpServer => {
 
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_NO_ACTOR',
+            'Chat requires a transporter or company-user account.'
+          )
         }
 
         if (!socket.rooms.has(`chat:${bookingId}`)) {
@@ -856,7 +873,11 @@ const initializeSocketIO = httpServer => {
           booking.sellerId.toString() === actorId
 
         if (!isAllowed) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_SEND_DENIED',
+            'You are not a participant in this booking.'
+          )
         }
 
         const receiverId =
@@ -942,7 +963,11 @@ const initializeSocketIO = httpServer => {
       try {
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_NO_ACTOR',
+            'Chat requires a transporter or company-user account.'
+          )
         }
 
         const existing = await TransporterMessage.findById(messageId)
@@ -950,7 +975,11 @@ const initializeSocketIO = httpServer => {
           return socket.emit('error', { message: 'Message not found' })
         }
         if (existing.receiverId.toString() !== actorId) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_MARK_READ_NOT_RECEIVER',
+            'Only the message recipient can mark as read.'
+          )
         }
 
         const VehicleBooking = require('../models/VehicleBooking')
@@ -960,7 +989,11 @@ const initializeSocketIO = httpServer => {
           (booking.buyerId.toString() !== actorId &&
             booking.sellerId.toString() !== actorId)
         ) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_MARK_READ_BOOKING',
+            'You cannot mark messages read for this booking.'
+          )
         }
 
         const message = await TransporterMessage.findByIdAndUpdate(
@@ -1004,7 +1037,11 @@ const initializeSocketIO = httpServer => {
       try {
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_NO_ACTOR',
+            'Chat requires a transporter or company-user account.'
+          )
         }
         if (!bookingId) {
           return socket.emit('error', { message: 'bookingId required' })
@@ -1018,7 +1055,11 @@ const initializeSocketIO = httpServer => {
           booking.buyerId.toString() === actorId ||
           booking.sellerId.toString() === actorId
         if (!allowed) {
-          return socket.emit('error', { message: 'Access denied' })
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_THREAD_JOIN_DENIED',
+            'You are not a participant in this booking.'
+          )
         }
         if (!socket.rooms.has(`chat:${bookingId}`)) {
           socket.join(`chat:${bookingId}`)

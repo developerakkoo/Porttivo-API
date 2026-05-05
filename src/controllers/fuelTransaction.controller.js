@@ -6,6 +6,10 @@ const { generateQRCode, validateQRCode, generateTransactionId } = require('../se
 const { runFraudChecks } = require('../services/fraudDetection.service');
 const { upload } = require('../middleware/upload.middleware');
 const { getOrCreateWallet, debitWallet, creditWallet } = require('../services/walletLedger.service');
+const {
+  validateIndianVehicleRegistrationFormat,
+  normalizeIndianVehicleRegistration,
+} = require('../utils/vehicleValidation');
 
 const DEFAULT_CASHBACK_RATE = 2;
 
@@ -43,6 +47,15 @@ const generateQR = async (req, res, next) => {
         message: 'Vehicle number, amount, and GPS location (latitude, longitude) are required',
       });
     }
+
+    const vnResult = validateIndianVehicleRegistrationFormat(vehicleNumber);
+    if (vnResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: vnResult.error,
+      });
+    }
+    const normalizedVehicleNumber = vnResult.normalized;
 
     // Validate amount
     if (amount <= 0) {
@@ -84,7 +97,7 @@ const generateQR = async (req, res, next) => {
 
     // Validate vehicle (optional - check if vehicle exists)
     const vehicle = await Vehicle.findOne({
-      vehicleNumber: vehicleNumber.toUpperCase(),
+      vehicleNumber: normalizedVehicleNumber,
     });
 
     // Generate transaction ID
@@ -97,7 +110,7 @@ const generateQR = async (req, res, next) => {
       transporterId: fuelCard.transporterId,
       transactionType: 'PORTTIVO_CARD',
       fuelCardId: fuelCard._id,
-      vehicleNumber: vehicleNumber.toUpperCase(),
+      vehicleNumber: normalizedVehicleNumber,
       amount,
       location: {
         latitude,
@@ -116,7 +129,7 @@ const generateQR = async (req, res, next) => {
       driverId,
       fuelCardId: fuelCard._id.toString(),
       amount,
-      vehicleNumber: vehicleNumber.toUpperCase(),
+      vehicleNumber: normalizedVehicleNumber,
     });
 
     transaction.qrCode = qrData.qrCode;
@@ -575,7 +588,7 @@ const getTransactions = async (req, res, next) => {
       query.pumpOwnerId = pumpOwnerId;
     }
     if (vehicleNumber) {
-      query.vehicleNumber = vehicleNumber.toUpperCase();
+      query.vehicleNumber = normalizeIndianVehicleRegistration(vehicleNumber);
     }
     if (transactionType) {
       query.transactionType = transactionType;
@@ -862,6 +875,15 @@ const submitCashReceipt = async (req, res, next) => {
       });
     }
 
+    const cashVnResult = validateIndianVehicleRegistrationFormat(vehicleNumber);
+    if (cashVnResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: cashVnResult.error,
+      });
+    }
+    const normalizedVehicleNumber = cashVnResult.normalized;
+
     const driver = await Driver.findById(req.user.id).select('transporterId');
     if (!driver) {
       return res.status(404).json({
@@ -882,7 +904,7 @@ const submitCashReceipt = async (req, res, next) => {
       transporterId: driver.transporterId || null,
       tripId: tripId || null,
       pumpOwnerId: pumpOwnerId || null,
-      vehicleNumber: vehicleNumber.toUpperCase(),
+      vehicleNumber: normalizedVehicleNumber,
       amount,
       qrCode: null,
       qrCodeExpiry: null,

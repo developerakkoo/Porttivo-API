@@ -1,6 +1,6 @@
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
-const { checkVehicleHasTripHistory } = require('../utils/vehicleValidation');
+const { checkVehicleHasTripHistory, validateIndianVehicleRegistrationFormat } = require('../utils/vehicleValidation');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 
 /**
@@ -135,7 +135,14 @@ const createVehicle = async (req, res, next) => {
       });
     }
 
-    const cleanedVehicleNumber = vehicleNumber.trim().toUpperCase();
+    const formatResult = validateIndianVehicleRegistrationFormat(vehicleNumber);
+    if (formatResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: formatResult.error,
+      });
+    }
+    const cleanedVehicleNumber = formatResult.normalized;
     const finalOwnerType = ownerType || 'OWN';
     if (!['OWN', 'HIRED'].includes(finalOwnerType)) {
       return res.status(400).json({
