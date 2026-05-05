@@ -26,6 +26,7 @@ const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPaylo
 const {
   buildMarketplaceMessageNotificationFields
 } = require('../utils/marketplaceNotification')
+const { canTransporterPartyViewTripExecution } = require('./tripAccess.service')
 const env = require('../config/env')
 let io = null
 
@@ -341,7 +342,7 @@ const initializeSocketIO = httpServer => {
         if (!tid) return
 
         const trip = await Trip.findById(tid).select(
-          'transporterId driverId customerId'
+          'transporterId driverId customerId bookingId isFromBooking'
         )
         if (!trip) {
           console.warn(`Socket ${socket.id} join:trip denied — trip not found`)
@@ -378,16 +379,19 @@ const initializeSocketIO = httpServer => {
           return
         }
 
-        const scopeId = getTransporterScopeId(socket.user)
-        if (!scopeId) return
-        if (trip.transporterId && trip.transporterId.toString() === scopeId) {
-          socket.join(`trip:${tid}`)
-          console.log(`Socket ${socket.id} joined trip:${tid}`)
-        } else {
-          console.warn(
-            `Socket ${socket.id} join:trip denied — wrong transporter`
-          )
+        if (ut === 'transporter' || ut === 'company-user') {
+          if (await canTransporterPartyViewTripExecution(socket.user, trip)) {
+            socket.join(`trip:${tid}`)
+            console.log(`Socket ${socket.id} joined trip:${tid}`)
+          } else {
+            console.warn(
+              `Socket ${socket.id} join:trip denied — not a party on this trip`
+            )
+          }
+          return
         }
+
+        console.warn(`Socket ${socket.id} join:trip denied — unsupported user type`)
       } catch (err) {
         console.error('join:trip error', err)
       }

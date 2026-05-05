@@ -548,6 +548,19 @@ const acceptProposal = async (req, res, next) => {
       })
     }
 
+    if (booking.proposalAcknowledgedBy?.toString() === userId) {
+      const populatedBookingEarly = await VehicleBooking.findById(id)
+        .populate('buyerId', 'name mobile company')
+        .populate('sellerId', 'name mobile company')
+        .populate('vehicleId', 'vehicleNumber vehicleType')
+        .lean()
+      return res.status(200).json({
+        success: true,
+        message: 'Price offer already accepted',
+        data: { booking: populatedBookingEarly }
+      })
+    }
+
     if (!['REQUESTED', 'NEGOTIATING'].includes(booking.status)) {
       return res.status(400).json({
         success: false,
@@ -580,6 +593,50 @@ const acceptProposal = async (req, res, next) => {
       performedBy: userId,
       details: { proposedPrice: price, proposedBy }
     })
+
+    const receiverId = isBuyer ? booking.sellerId : booking.buyerId
+    const systemContent = isSeller
+      ? 'Offer accepted. The other party can confirm the booking to create the trip.'
+      : 'Offer accepted. You can confirm the booking now to create the trip.'
+
+    try {
+      const sysMessage = await TransporterMessage.create({
+        bookingId: id,
+        senderId: userId,
+        receiverId,
+        messageType: 'SYSTEM',
+        content: systemContent,
+        proposedPrice: null,
+        status: 'DELIVERED'
+      })
+      const io = getIO()
+      const populatedMsg = await TransporterMessage.findById(sysMessage._id)
+        .populate('senderId', 'name mobile company')
+        .populate('receiverId', 'name mobile')
+        .lean()
+      const chatPayload = buildChatMessageSocketPayload(id, populatedMsg, userId)
+      io.to(`chat:${id}`).emit('chat:message:new', chatPayload)
+      io.to(`transporter:${receiverId}`).emit('chat:message:new', chatPayload)
+      io.to(`transporter:${receiverId}`).emit('message:new', chatPayload)
+      try {
+        const notif = buildMarketplaceMessageNotificationFields({
+          bookingId: id,
+          populatedMessageLean: populatedMsg
+        })
+        await Notification.create({
+          userId: receiverId,
+          userType: 'TRANSPORTER',
+          type: 'MARKETPLACE_MESSAGE',
+          title: notif.title,
+          message: notif.message,
+          data: notif.data
+        })
+      } catch (notifErr) {
+        console.warn('Marketplace accept notification skipped:', notifErr.message || notifErr)
+      }
+    } catch (chatErr) {
+      console.warn('Offer-accepted chat message failed:', chatErr.message || chatErr)
+    }
 
     const populatedBooking = await VehicleBooking.findById(id)
       .populate('buyerId', 'name mobile company')

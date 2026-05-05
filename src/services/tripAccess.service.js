@@ -1,4 +1,5 @@
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
+const VehicleBooking = require('../models/VehicleBooking');
 
 const MARKETPLACE_CAPABILITIES_SELLER = {
   assignVehicle: true,
@@ -34,23 +35,27 @@ const isTripSeller = (trip, user) => {
   return sellerId === viewer;
 };
 
-const isTripBuyer = (trip, user) => {
+const isTripBuyer = async (trip, user) => {
   if (!isMarketplaceBookingTrip(trip)) return false;
   const viewer = getTransporterId(user);
   if (!viewer) return false;
-  const buyerId = trip.customerId?._id?.toString?.() || trip.customerId?.toString?.();
+  let buyerId = trip.customerId?._id?.toString?.() || trip.customerId?.toString?.();
+  if (!buyerId && trip.bookingId) {
+    const b = await VehicleBooking.findById(trip.bookingId).select('buyerId').lean();
+    buyerId = b?.buyerId?.toString?.() ?? null;
+  }
   return buyerId === viewer;
 };
 
 /** Booking counterparty (buyer transporter); uses org id for company-users. */
-const canBookingBuyerViewTrip = (trip, user) => isTripBuyer(trip, user);
+const canBookingBuyerViewTrip = async (trip, user) => isTripBuyer(trip, user);
 
-const getMarketplaceTripMetaForUser = (trip, user) => {
+const getMarketplaceTripMetaForUser = async (trip, user) => {
   if (!isMarketplaceBookingTrip(trip)) return null;
   if (isTripSeller(trip, user)) {
     return { marketplaceRole: 'seller', capabilities: { ...MARKETPLACE_CAPABILITIES_SELLER } };
   }
-  if (isTripBuyer(trip, user)) {
+  if (await isTripBuyer(trip, user)) {
     return { marketplaceRole: 'buyer', capabilities: { ...MARKETPLACE_CAPABILITIES_BUYER } };
   }
   return null;
@@ -82,7 +87,7 @@ const transporterPartyScopeCondition = (viewerTransporterId) => ({
  * True if this transporter org may view trip execution details (milestones, timeline)
  * for trips they sell or marketplace trips they bought.
  */
-const canTransporterPartyViewTripExecution = (user, trip) => {
+const canTransporterPartyViewTripExecution = async (user, trip) => {
   if (!user || !trip) return false;
   if (user.userType === 'admin') return true;
 
@@ -97,7 +102,7 @@ const canTransporterPartyViewTripExecution = (user, trip) => {
     return true;
   }
 
-  return isTripBuyer(trip, user);
+  return await isTripBuyer(trip, user);
 };
 
 module.exports = {

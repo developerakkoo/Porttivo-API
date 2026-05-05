@@ -321,7 +321,7 @@ const getCurrentMilestone = async (req, res, next) => {
         })
       }
     } else if (userType === 'transporter' || userType === 'company-user') {
-      if (!canTransporterPartyViewTripExecution(req.user, trip)) {
+      if (!(await canTransporterPartyViewTripExecution(req.user, trip))) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You do not have permission to view this trip.'
@@ -398,7 +398,7 @@ const getTripTimeline = async (req, res, next) => {
         })
       }
     } else if (userType === 'transporter' || userType === 'company-user') {
-      if (!canTransporterPartyViewTripExecution(req.user, trip)) {
+      if (!(await canTransporterPartyViewTripExecution(req.user, trip))) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You do not have permission to view this trip.'

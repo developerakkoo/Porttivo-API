@@ -731,10 +731,18 @@ const getTripById = async (req, res, next) => {
       .populate('vehicleId', 'vehicleNumber trailerType status')
       .populate('driverId', 'name mobile status')
       .populate('transporterId', 'name company')
-      .populate('customerId', 'name mobile email isRegistered')
       .populate('acceptedTransporterId', 'name company mobile')
       .populate('assignments.vehicleId', 'vehicleNumber trailerType')
       .populate('assignments.driverId', 'name mobile');
+
+    if (trip && trip.isFromBooking && trip.customerId) {
+      await trip.populate({ path: 'customerId', model: 'Transporter', select: 'name company mobile' });
+    } else if (trip && trip.customerId) {
+      await trip.populate({
+        path: 'customerId',
+        select: 'name mobile email isRegistered',
+      });
+    }
 
     if (!trip) {
       return res.status(404).json({
@@ -745,7 +753,7 @@ const getTripById = async (req, res, next) => {
 
     // Check access - admins can see all trips
     const isAdmin = req.user.userType === 'admin';
-    const isBookingBuyer = canBookingBuyerViewTrip(trip, req.user);
+    const isBookingBuyer = await canBookingBuyerViewTrip(trip, req.user);
 
     if (!isAdmin) {
       if (transporterId && trip.transporterId?._id?.toString() === transporterId) {
@@ -786,10 +794,10 @@ const getTripById = async (req, res, next) => {
       }
     }
 
-    const data = (() => {
+    const data = await (async () => {
       if (isBookingBuyer) {
         const raw = serializeTrip(trip, { includeCurrentMilestone: true });
-        const meta = getMarketplaceTripMetaForUser(trip, req.user);
+        const meta = await getMarketplaceTripMetaForUser(trip, req.user);
         const sanitized = sanitizeSerializedTripForMarketplaceBuyer(raw);
         return meta ? { ...sanitized, ...meta } : sanitized;
       }
@@ -801,7 +809,7 @@ const getTripById = async (req, res, next) => {
         });
       }
       const raw = serializeTrip(trip, { includeCurrentMilestone: true });
-      const meta = getMarketplaceTripMetaForUser(trip, req.user);
+      const meta = await getMarketplaceTripMetaForUser(trip, req.user);
       return meta ? { ...raw, ...meta } : raw;
     })();
 
