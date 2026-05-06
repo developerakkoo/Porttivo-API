@@ -73,6 +73,16 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
       default: []
     },
 
+    /**
+     * Per-stop vehicle quotas; index aligns with [destination, ...destinations]
+     * after filtering empty addresses, or length 1 when no destinations (open route).
+     * Sum equals `quantity`.
+     */
+    destinationQuantities: {
+      type: [Number],
+      default: []
+    },
+
     quantity: {
       type: Number,
       default: 1,

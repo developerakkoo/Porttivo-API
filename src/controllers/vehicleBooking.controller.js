@@ -240,6 +240,7 @@ const getBooking = async (req, res, next) => {
       .populate('sellerId', 'name mobile company')
       .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
       .populate('postId', 'origin destination availableFrom availableTo')
+      .populate('tripId', 'status closedAt closedReason')
       .lean()
 
     if (!booking) {
@@ -1350,6 +1351,7 @@ const getConversations = async (req, res, next) => {
       .populate('sellerId', 'name mobile company')
       .populate('vehicleId', 'vehicleNumber vehicleType')
       .populate('postId', 'origin destination availableFrom availableTo')
+      .populate('tripId', 'status closedAt closedReason')
       .lean()
 
     const ids = bookings.map(b => b._id)

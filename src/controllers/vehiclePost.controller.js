@@ -10,6 +10,16 @@ const {
   validateLocationInput
 } = require('../utils/location')
 const { parseOptionalPricePerVehicle } = require('../utils/vehiclePostPrice.util')
+const {
+  canonicalDestinationStopCount,
+  getDestinationQuantitiesResolved,
+  parseDestinationQuantitiesInput,
+  countAssignmentsPerStop,
+  effectiveServedStopIndexes,
+  validateServedStopIndexes,
+  normalizeServedStopIndexesInput,
+  stopLabelForIndex
+} = require('../utils/vehiclePostDestinationQuotas')
 
 const MAX_DESTINATION_STOPS = 10
 const MAX_FORMATTED_ADDRESS_LEN = 500
@@ -31,7 +41,28 @@ function postDestinationApiFields(p) {
   return {
     destination: p.destination ?? null,
     destinations: Array.isArray(p.destinations) ? p.destinations : [],
-    destinationsAll: all
+    destinationsAll: all,
+    destinationQuantities: getDestinationQuantitiesResolved(p)
+  }
+}
+
+function mapAssignmentForApi(a, post) {
+  const n = canonicalDestinationStopCount(post.destination, post.destinations)
+  const served = effectiveServedStopIndexes(a, n)
+  return {
+    id: a._id,
+    vehicleId: a.vehicleId?._id || a.vehicleId,
+    vehicleNumber: a.vehicleId?.vehicleNumber || null,
+    price: a.price === undefined || a.price === null ? null : a.price,
+    servedStopIndexes: served,
+    transporter: a.transporterId
+      ? {
+          id: a.transporterId._id || a.transporterId,
+          name: a.transporterId.name || null,
+          mobile: a.transporterId.mobile || null
+        }
+      : null,
+    createdAt: a.createdAt
   }
 }
 
@@ -271,6 +302,16 @@ const createAvailability = async (req, res, next) => {
       })
     }
 
+    const numStops = canonicalDestinationStopCount(
+      destParsed.primary,
+      destParsed.additional
+    )
+    const dqParsed = parseDestinationQuantitiesInput(req.body, numStops, quantity)
+    if (!dqParsed.ok) {
+      return res.status(400).json({ success: false, message: dqParsed.message })
+    }
+    const totalQty = dqParsed.quantities.reduce((a, b) => a + b, 0)
+
     const post = await VehicleRouteAvailability.create({
       transporterId,
       vehicleId: vehicleId || null,
@@ -278,8 +319,9 @@ const createAvailability = async (req, res, next) => {
       origin: normalizeLocationInput(origin),
       destination: destParsed.primary,
       destinations: destParsed.additional,
-      quantity: quantity ? Number(quantity) : 1,
-      slotsLeft: quantity ? Number(quantity) : 1,
+      destinationQuantities: dqParsed.quantities,
+      quantity: totalQty,
+      slotsLeft: totalQty,
       pricePerVehicle: priceResultCreate.value,
       availableFrom: fromDate,
       availableTo: toDate,
@@ -510,20 +552,9 @@ const searchAvailability = async (req, res, next) => {
       availableFrom: p.availableFrom,
       availableTo: p.availableTo,
       note: p.note,
-      availableVehicles: (assignmentsByPost[p._id] || []).map(a => ({
-        id: a._id,
-        vehicleId: a.vehicleId?._id || a.vehicleId,
-        vehicleNumber: a.vehicleId?.vehicleNumber || null,
-        price: a.price === undefined || a.price === null ? null : a.price,
-        transporter: a.transporterId
-          ? {
-              id: a.transporterId._id || a.transporterId,
-              name: a.transporterId.name || null,
-              mobile: a.transporterId.mobile || null
-            }
-          : null,
-        createdAt: a.createdAt
-      })),
+      availableVehicles: (assignmentsByPost[p._id] || []).map(a =>
+        mapAssignmentForApi(a, p)
+      ),
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
       lastEdited: p.updatedAt
@@ -611,20 +642,9 @@ const getMyPosts = async (req, res, next) => {
       availableFrom: p.availableFrom,
       availableTo: p.availableTo,
       note: p.note,
-      availableVehicles: (myAssignmentsByPost[p._id] || []).map(a => ({
-        id: a._id,
-        vehicleId: a.vehicleId?._id || a.vehicleId,
-        vehicleNumber: a.vehicleId?.vehicleNumber || null,
-        price: a.price === undefined || a.price === null ? null : a.price,
-        transporter: a.transporterId
-          ? {
-              id: a.transporterId._id || a.transporterId,
-              name: a.transporterId.name || null,
-              mobile: a.transporterId.mobile || null
-            }
-          : null,
-        createdAt: a.createdAt
-      })),
+      availableVehicles: (myAssignmentsByPost[p._id] || []).map(a =>
+        mapAssignmentForApi(a, p)
+      ),
       status: p.status,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -704,20 +724,7 @@ const getById = async (req, res, next) => {
       availableFrom: p.availableFrom,
       availableTo: p.availableTo,
       note: p.note,
-      availableVehicles: postAssignments.map(a => ({
-        id: a._id,
-        vehicleId: a.vehicleId?._id || a.vehicleId,
-        vehicleNumber: a.vehicleId?.vehicleNumber || null,
-        price: a.price === undefined || a.price === null ? null : a.price,
-        transporter: a.transporterId
-          ? {
-              id: a.transporterId._id || a.transporterId,
-              name: a.transporterId.name || null,
-              mobile: a.transporterId.mobile || null
-            }
-          : null,
-        createdAt: a.createdAt
-      })),
+      availableVehicles: postAssignments.map(a => mapAssignmentForApi(a, p)),
       status: p.status,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -804,8 +811,75 @@ const updateAvailability = async (req, res, next) => {
       post.destination = destUpdate.primary
       post.destinations = destUpdate.additional
     }
-    if (quantity !== undefined)
-      post.quantity = Number(quantity) || post.quantity
+    const numStops = canonicalDestinationStopCount(
+      post.destination,
+      post.destinations
+    )
+    const hasDQ = Object.prototype.hasOwnProperty.call(
+      req.body,
+      'destinationQuantities'
+    )
+    const destinationsWereUpdated = !destUpdate.skip && !destUpdate.error
+
+    let newQuantities = null
+    if (hasDQ) {
+      const r = parseDestinationQuantitiesInput(
+        req.body,
+        numStops,
+        req.body.quantity
+      )
+      if (!r.ok) {
+        return res.status(400).json({ success: false, message: r.message })
+      }
+      newQuantities = r.quantities
+    } else if (destinationsWereUpdated) {
+      const r = parseDestinationQuantitiesInput(
+        {},
+        numStops,
+        req.body.quantity !== undefined ? req.body.quantity : post.quantity
+      )
+      if (!r.ok) {
+        return res.status(400).json({ success: false, message: r.message })
+      }
+      newQuantities = r.quantities
+    } else if (quantity !== undefined) {
+      if (numStops === 1) {
+        newQuantities = [Math.max(1, Number(quantity) || 1)]
+      } else {
+        return res.status(400).json({
+          success: false,
+          message:
+            'For multi-stop listings provide destinationQuantities when changing quantity'
+        })
+      }
+    }
+
+    if (newQuantities) {
+      const existingAssignments = await VehicleRouteAssignment.find({
+        postId: post._id
+      }).lean()
+      const counts = countAssignmentsPerStop(
+        existingAssignments,
+        numStops,
+        a => effectiveServedStopIndexes(a, numStops)
+      )
+      for (let i = 0; i < numStops; i++) {
+        if (counts[i] > newQuantities[i]) {
+          return res.status(400).json({
+            success: false,
+            message: `Cannot set quota for "${stopLabelForIndex(
+              post,
+              i
+            )}" to ${newQuantities[i]}: ${
+              counts[i]
+            } vehicle(s) already serve this stop`
+          })
+        }
+      }
+      post.destinationQuantities = newQuantities
+      post.quantity = newQuantities.reduce((a, b) => a + b, 0)
+    }
+
     if (note !== undefined) post.note = note || null
     if (status !== undefined) post.status = status
     if (Object.prototype.hasOwnProperty.call(req.body, 'pricePerVehicle')) {
@@ -1068,11 +1142,38 @@ const addVehicleToPost = async (req, res, next) => {
       })
     }
 
+    const numStops = canonicalDestinationStopCount(
+      post.destination,
+      post.destinations
+    )
+    const quotas = getDestinationQuantitiesResolved(post)
+
+    let servedIndexes
+    if (Object.prototype.hasOwnProperty.call(req.body, 'servedStopIndexes')) {
+      servedIndexes = normalizeServedStopIndexesInput(
+        req.body.servedStopIndexes,
+        numStops
+      )
+      if (!servedIndexes) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid servedStopIndexes (use integers 0–${numStops - 1})`
+        })
+      }
+    } else {
+      servedIndexes = normalizeServedStopIndexesInput(null, numStops)
+    }
+    const idxErr = validateServedStopIndexes(servedIndexes, numStops)
+    if (idxErr) {
+      return res.status(400).json({
+        success: false,
+        message: idxErr
+      })
+    }
+
     const existingAssignments = await VehicleRouteAssignment.find({
       postId: post._id
-    })
-      .select('vehicleId')
-      .lean()
+    }).lean()
     const existingVehicleIds = new Set(
       existingAssignments.map(a => a.vehicleId.toString())
     )
@@ -1081,6 +1182,25 @@ const addVehicleToPost = async (req, res, next) => {
         return res.status(400).json({
           success: false,
           message: 'One or more vehicles are already on this post'
+        })
+      }
+    }
+
+    const perStopCounts = countAssignmentsPerStop(
+      existingAssignments,
+      numStops,
+      a => effectiveServedStopIndexes(a, numStops)
+    )
+    const k = uniqueIds.length
+    for (const i of servedIndexes) {
+      if (perStopCounts[i] + k > quotas[i]) {
+        const rem = Math.max(0, quotas[i] - perStopCounts[i])
+        return res.status(400).json({
+          success: false,
+          message: `Stop "${stopLabelForIndex(
+            post,
+            i
+          )}" quota full: quota ${quotas[i]}, ${perStopCounts[i]} already assigned (${rem} remaining; adding ${k})`
         })
       }
     }
@@ -1129,7 +1249,8 @@ const addVehicleToPost = async (req, res, next) => {
         vehicleId: vId,
         transporterId: viewerId,
         price: priceVal,
-        note: note || null
+        note: note || null,
+        servedStopIndexes
       }))
       const created = await VehicleRouteAssignment.insertMany(docs, { session })
       await session.commitTransaction()

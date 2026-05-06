@@ -26,6 +26,12 @@ const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPaylo
 const {
   buildMarketplaceMessageNotificationFields
 } = require('../utils/marketplaceNotification')
+const {
+  MAX_CHAT_ATTACHMENTS,
+  normalizeAttachmentsInput,
+  bookingAllowsParticipantChat,
+  effectiveChatMessageType
+} = require('../utils/marketplaceChatAttachments')
 const { canTransporterPartyViewTripExecution } = require('./tripAccess.service')
 const env = require('../config/env')
 let io = null
@@ -838,7 +844,13 @@ const initializeSocketIO = httpServer => {
     // ================= SEND MESSAGE =================
     socket.on('chat:message:send', async data => {
       try {
-        const { bookingId, content, messageType, proposedPrice } = data
+        const {
+          bookingId,
+          content,
+          messageType,
+          proposedPrice,
+          attachments: attachmentsRaw
+        } = data || {}
 
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
@@ -855,13 +867,10 @@ const initializeSocketIO = httpServer => {
           })
         }
 
-        if (!bookingId || !content) {
+        if (!bookingId) {
           return socket.emit('error', {
-            message: 'bookingId and content required'
+            message: 'bookingId required'
           })
-        }
-        if (content.length > 2000) {
-          return socket.emit('error', { message: 'Message too long' })
         }
 
         const VehicleBooking = require('../models/VehicleBooking')
@@ -870,6 +879,14 @@ const initializeSocketIO = httpServer => {
 
         if (!booking) {
           return socket.emit('error', { message: 'Booking not found' })
+        }
+
+        if (!bookingAllowsParticipantChat(booking)) {
+          return emitMarketplaceChatError(
+            socket,
+            'MP_CHAT_BOOKING_CLOSED',
+            'Chat is closed for this booking.'
+          )
         }
 
         const isAllowed =
@@ -884,19 +901,60 @@ const initializeSocketIO = httpServer => {
           )
         }
 
+        const attachments = normalizeAttachmentsInput(attachmentsRaw)
+        if (attachments.length > MAX_CHAT_ATTACHMENTS) {
+          return socket.emit('error', {
+            message: `At most ${MAX_CHAT_ATTACHMENTS} attachments`
+          })
+        }
+
+        const contentStr = content != null ? String(content) : ''
+        const contentTrim = contentStr.trim()
+        if (!contentTrim && attachments.length === 0) {
+          return socket.emit('error', {
+            message: 'content or attachments required'
+          })
+        }
+
+        if (attachments.length > 0 && contentTrim.length > 2000) {
+          return socket.emit('error', { message: 'Caption too long' })
+        }
+
+        if (attachments.length === 0 && contentTrim.length > 2000) {
+          return socket.emit('error', { message: 'Message too long' })
+        }
+
+        if (
+          attachments.length > 0 &&
+          proposedPrice != null &&
+          proposedPrice !== ''
+        ) {
+          return socket.emit('error', {
+            message: 'Attachments cannot be combined with price proposals'
+          })
+        }
+
         const receiverId =
           booking.buyerId.toString() === actorId
             ? booking.sellerId
             : booking.buyerId
 
+        const effectiveType = effectiveChatMessageType(
+          contentTrim,
+          attachments,
+          messageType,
+          proposedPrice
+        )
+
         const createdMsg = await TransporterMessage.create({
           bookingId,
           senderId: actorId,
           receiverId,
-          content,
-          messageType: messageType || 'TEXT',
+          content: contentTrim,
+          messageType: effectiveType,
           proposedPrice: proposedPrice || null,
-          status: 'DELIVERED'
+          status: 'DELIVERED',
+          attachments
         })
 
         const populatedMessage = await TransporterMessage.findById(
@@ -920,7 +978,7 @@ const initializeSocketIO = httpServer => {
           const notif = buildMarketplaceMessageNotificationFields({
             bookingId,
             populatedMessageLean: populatedMessage,
-            contentOverride: content
+            contentOverride: contentTrim
           })
           await Notification.create({
             userId: receiverId,

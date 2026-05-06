@@ -17,6 +17,9 @@ const {
   sendTripClosedWithoutPODTemplate,
 } = require('../services/wati.service');
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState');
+const {
+  completeMarketplaceBookingAfterTripClosed,
+} = require('../utils/marketplaceBookingComplete');
 
 const toAuditUserType = (userType) => {
   switch (userType) {
@@ -476,6 +479,8 @@ const closeTripWithoutPOD = async (req, res, next) => {
     await trip.populate('customerId', 'name mobile');
 
     emitTripClosedWithoutPOD(trip);
+
+    await completeMarketplaceBookingAfterTripClosed(trip);
 
     if (trip.customerId?.mobile) {
       await triggerWatiTemplate(

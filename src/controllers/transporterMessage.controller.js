@@ -8,6 +8,12 @@ const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPaylo
 const {
   buildMarketplaceMessageNotificationFields
 } = require('../utils/marketplaceNotification');
+const {
+  MAX_CHAT_ATTACHMENTS,
+  normalizeAttachmentsInput,
+  bookingAllowsParticipantChat,
+  effectiveChatMessageType
+} = require('../utils/marketplaceChatAttachments');
 
 /**
  * Send a message in booking conversation
@@ -20,15 +26,19 @@ const sendMessage = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Only transporter accounts can send messages' });
     }
 
-    const { bookingId, content, messageType, proposedPrice } = req.body;
+    const { bookingId, content, messageType, proposedPrice, attachments: attachmentsRaw } = req.body;
 
-    if (!bookingId || !content || !content.trim()) {
-      return res.status(400).json({ success: false, message: 'bookingId and content are required' });
+    if (!bookingId) {
+      return res.status(400).json({ success: false, message: 'bookingId is required' });
     }
 
     const booking = await VehicleBooking.findById(bookingId);
     if (!booking) {
       return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    if (!bookingAllowsParticipantChat(booking)) {
+      return res.status(403).json({ success: false, message: 'Chat is closed for this booking' });
     }
 
     const isBuyer = booking.buyerId.toString() === senderId;
@@ -38,16 +48,50 @@ const sendMessage = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'You do not have access to this booking' });
     }
 
+    const attachments = normalizeAttachmentsInput(attachmentsRaw);
+    if (attachments.length > MAX_CHAT_ATTACHMENTS) {
+      return res.status(400).json({
+        success: false,
+        message: `At most ${MAX_CHAT_ATTACHMENTS} attachments per message`,
+      });
+    }
+
+    const contentTrim = content != null ? String(content).trim() : '';
+    if (!contentTrim && attachments.length === 0) {
+      return res.status(400).json({ success: false, message: 'content or attachments required' });
+    }
+
+    if (attachments.length > 0 && contentTrim.length > 2000) {
+      return res.status(400).json({ success: false, message: 'Caption too long (max 2000)' });
+    }
+
+    if (attachments.length > 0 && proposedPrice != null && proposedPrice !== '') {
+      return res.status(400).json({ success: false, message: 'Attachments cannot be combined with price proposals' });
+    }
+
+    const textForLengthCheck = attachments.length > 0 ? contentTrim : contentTrim;
+    if (attachments.length === 0 && textForLengthCheck.length > 2000) {
+      return res.status(400).json({ success: false, message: 'Message too long' });
+    }
+
     const receiverId = isBuyer ? booking.sellerId : booking.buyerId;
+
+    const effectiveType = effectiveChatMessageType(
+      contentTrim,
+      attachments,
+      messageType,
+      proposedPrice
+    );
 
     const message = await TransporterMessage.create({
       bookingId,
       senderId,
       receiverId,
-      content: content.trim(),
-      messageType: messageType || 'TEXT',
+      content: attachments.length > 0 ? contentTrim : contentTrim,
+      messageType: effectiveType,
       proposedPrice: proposedPrice != null ? proposedPrice : null,
       status: 'DELIVERED',
+      attachments,
     });
 
     const populatedMessage = await TransporterMessage.findById(message._id)
@@ -90,6 +134,50 @@ const sendMessage = async (req, res, next) => {
       success: true,
       message: 'Message sent successfully',
       data: { message: populatedMessage },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * POST /api/messages/upload — multipart field "files" (max 5), form field bookingId
+ */
+const uploadChatAttachments = async (req, res, next) => {
+  try {
+    const senderId = getTransporterActorId(req.user);
+    if (!senderId) {
+      return res.status(403).json({ success: false, message: 'Only transporter accounts can upload' });
+    }
+    const bookingId = req.body.bookingId;
+    if (!bookingId) {
+      return res.status(400).json({ success: false, message: 'bookingId is required' });
+    }
+    const booking = await VehicleBooking.findById(bookingId);
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+    if (!bookingAllowsParticipantChat(booking)) {
+      return res.status(403).json({ success: false, message: 'Chat is closed for this booking' });
+    }
+    const isBuyer = booking.buyerId.toString() === senderId;
+    const isSeller = booking.sellerId.toString() === senderId;
+    if (!isBuyer && !isSeller) {
+      return res.status(403).json({ success: false, message: 'You do not have access to this booking' });
+    }
+    const files = req.files || [];
+    if (!Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({ success: false, message: 'No files uploaded' });
+    }
+    const attachments = files.map((f) => ({
+      url: `/uploads/chat/${f.filename}`,
+      mimeType: f.mimetype,
+      originalName: f.originalname || null,
+      sizeBytes: f.size != null ? f.size : null,
+    }));
+    return res.status(200).json({
+      success: true,
+      data: { attachments },
     });
   } catch (error) {
     next(error);
@@ -461,6 +549,7 @@ const searchMessages = async (req, res, next) => {
 
 module.exports = {
   sendMessage,
+  uploadChatAttachments,
   getConversation,
   markBookingReadAll,
   markAsRead,

@@ -27,6 +27,15 @@ const vehicleRouteAssignmentSchema = new mongoose.Schema(
       min: 0,
     },
     note: { type: String, default: null },
+
+    /**
+     * Which destination stop indices (0 = primary) this vehicle serves on the listing.
+     * Omitted on legacy rows => treated as all stops when reading.
+     */
+    servedStopIndexes: {
+      type: [Number],
+      default: undefined,
+    },
   },
   { timestamps: true }
 );

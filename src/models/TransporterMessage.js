@@ -27,14 +27,23 @@ const transporterMessageSchema = new mongoose.Schema(
     // Message Content
     messageType: {
       type: String,
-      enum: ['TEXT', 'PRICE_PROPOSAL', 'PRICE_COUNTER', 'ACCEPTED', 'REJECTED', 'SYSTEM'],
+      enum: [
+        'TEXT',
+        'PRICE_PROPOSAL',
+        'PRICE_COUNTER',
+        'ACCEPTED',
+        'REJECTED',
+        'SYSTEM',
+        'ATTACHMENT'
+      ],
       default: 'TEXT',
       index: true,
     },
     content: {
       type: String,
-      required: true,
+      required: false,
       trim: true,
+      default: ''
     },
 
     // Price proposal (if applicable)
@@ -56,12 +65,8 @@ const transporterMessageSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Metadata
-    attachments: [
-      {
-        type: String, // URL to file
-      },
-    ],
+    // Metadata: array of { url, mimeType, originalName?, sizeBytes? } or legacy URL strings
+    attachments: [{ type: mongoose.Schema.Types.Mixed }],
   },
   { timestamps: true }
 );

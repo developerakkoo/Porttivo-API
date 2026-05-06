@@ -1,5 +1,5 @@
 const Trip = require('../models/Trip')
-const VehicleBooking = require('../models/VehicleBooking')
+const { completeMarketplaceBookingAfterTripClosed } = require('../utils/marketplaceBookingComplete')
 const path = require('path')
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState')
 const {
@@ -296,12 +296,7 @@ const approvePOD = async (req, res, next) => {
     }
     await trip.save()
 
-    if (trip.isFromBooking && trip.bookingId) {
-      await VehicleBooking.findByIdAndUpdate(trip.bookingId, {
-        status: 'COMPLETED',
-        completedAt: new Date()
-      })
-    }
+    await completeMarketplaceBookingAfterTripClosed(trip)
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType')

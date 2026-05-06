@@ -22,10 +22,15 @@ function senderIdStringFromPopulated(populatedMessageLean) {
   return ''
 }
 
-function buildMarketplaceMessagePreview(messageType, content, proposedPrice) {
+function buildMarketplaceMessagePreview(messageType, content, proposedPrice, attachments) {
   const mt = (messageType || 'TEXT').toString().toUpperCase()
   if (mt === 'PRICE_PROPOSAL' && proposedPrice != null && proposedPrice !== '') {
     return `Proposed ₹${proposedPrice}`.slice(0, 200)
+  }
+  const attCount = Array.isArray(attachments) ? attachments.length : 0
+  if (mt === 'ATTACHMENT' || attCount > 0) {
+    if (attCount > 1) return `${attCount} attachments`.slice(0, 200)
+    return 'Attachment'.slice(0, 200)
   }
   const c = (content || '').toString().trim()
   return c.slice(0, 200)
@@ -50,10 +55,12 @@ function buildMarketplaceMessageNotificationFields({
     contentOverride != null
       ? contentOverride
       : (populatedMessageLean?.content ?? '')
+  const attachments = populatedMessageLean?.attachments
   const preview = buildMarketplaceMessagePreview(
     msgType,
     content,
-    proposedPrice
+    proposedPrice,
+    attachments
   )
   const bid =
     bookingId != null && bookingId.toString

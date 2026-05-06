@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const {
   sendMessage,
+  uploadChatAttachments,
   getConversation,
   markBookingReadAll,
   markAsRead,
@@ -11,8 +12,23 @@ const {
   searchMessages,
 } = require('../controllers/transporterMessage.controller');
 
+const {
+  uploadChatFiles,
+  handleMulterError,
+} = require('../middleware/upload.middleware');
+
 // All endpoints require authentication
 router.use(authenticate);
+
+/**
+ * @route   POST /api/messages/upload
+ */
+router.post(
+  '/upload',
+  uploadChatFiles,
+  handleMulterError,
+  uploadChatAttachments
+);
 
 /**
  * @route   POST /api/messages

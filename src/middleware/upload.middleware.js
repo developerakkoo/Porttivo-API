@@ -7,6 +7,7 @@ const uploadDirs = {
   pod: path.join(__dirname, '../../uploads/pod'),
   milestones: path.join(__dirname, '../../uploads/milestones'),
   receipts: path.join(__dirname, '../../uploads/receipts'),
+  chat: path.join(__dirname, '../../uploads/chat'),
 };
 
 Object.values(uploadDirs).forEach((dir) => {
@@ -86,13 +87,49 @@ const uploadMilestonePhotos = upload.fields([
 // Middleware for receipt upload (single file)
 const uploadReceipt = upload.single('receipt');
 
+const chatAllowedMimes = [
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+];
+
+const chatFileFilter = (req, file, cb) => {
+  if (chatAllowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error(
+        'Invalid file type. Allowed: JPEG, PNG, WebP images and PDF.'
+      ),
+      false
+    );
+  }
+};
+
+const chatStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDirs.chat),
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname) || '';
+    cb(null, `chat_${uniqueSuffix}${ext}`);
+  },
+});
+
+const uploadChatFiles = multer({
+  storage: chatStorage,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: chatFileFilter,
+}).array('files', 5);
+
 // Error handler for multer errors
 const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
-        message: 'File too large. Maximum size is 5MB.',
+        message: 'File too large for this upload.',
       });
     }
     return res.status(400).json({
@@ -115,5 +152,6 @@ module.exports = {
   uploadMilestonePhotos,
   uploadReceipt,
   upload,
+  uploadChatFiles,
   handleMulterError,
 };
