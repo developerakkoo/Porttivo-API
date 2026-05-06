@@ -67,6 +67,12 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
       set: normalizeLocationInput
     },
 
+    /** Additional destination stops after [destination] (first stop). */
+    destinations: {
+      type: [locationSchema],
+      default: []
+    },
+
     quantity: {
       type: Number,
       default: 1,

@@ -11,6 +11,128 @@ const {
 } = require('../utils/location')
 const { parseOptionalPricePerVehicle } = require('../utils/vehiclePostPrice.util')
 
+const MAX_DESTINATION_STOPS = 10
+const MAX_FORMATTED_ADDRESS_LEN = 500
+
+function buildDestinationsAll(p) {
+  const primary = p.destination || null
+  const rest = Array.isArray(p.destinations) ? p.destinations : []
+  return [primary, ...rest].filter(
+    x =>
+      x &&
+      String(x.formattedAddress ?? x.address ?? '')
+        .trim()
+        .length > 0
+  )
+}
+
+function postDestinationApiFields(p) {
+  const all = buildDestinationsAll(p)
+  return {
+    destination: p.destination ?? null,
+    destinations: Array.isArray(p.destinations) ? p.destinations : [],
+    destinationsAll: all
+  }
+}
+
+/**
+ * @returns {{ primary: object|null, additional: object[], error: string|null }}
+ */
+function parseDestinationStopsFromBody(legacyDestination, destinationsInput) {
+  let rawList = []
+  if (Array.isArray(destinationsInput) && destinationsInput.length > 0) {
+    rawList = destinationsInput
+  } else if (legacyDestination != null && legacyDestination !== '') {
+    rawList = [legacyDestination]
+  }
+  if (rawList.length > MAX_DESTINATION_STOPS) {
+    return {
+      primary: null,
+      additional: [],
+      error: `At most ${MAX_DESTINATION_STOPS} destinations allowed`
+    }
+  }
+  const normalized = []
+  for (let i = 0; i < rawList.length; i++) {
+    const n = normalizeLocationInput(rawList[i])
+    const err = validateLocationInput(n, 'destination', {
+      required: true,
+      requireCoordinates: false
+    })
+    if (err) {
+      return {
+        primary: null,
+        additional: [],
+        error: `destination ${i + 1}: ${err}`
+      }
+    }
+    const addr = String(n.formattedAddress || '').trim()
+    if (addr.length > MAX_FORMATTED_ADDRESS_LEN) {
+      return {
+        primary: null,
+        additional: [],
+        error: `destination ${i + 1}: address too long (max ${MAX_FORMATTED_ADDRESS_LEN})`
+      }
+    }
+    normalized.push(n)
+  }
+  return {
+    primary: normalized[0] || null,
+    additional: normalized.slice(1),
+    error: null
+  }
+}
+
+/** For PUT: only run when body includes destination and/or destinations keys. */
+function parseDestinationStopsForUpdate(reqBody) {
+  const hasDestinationsKey = Object.prototype.hasOwnProperty.call(
+    reqBody,
+    'destinations'
+  )
+  const hasDestinationKey = Object.prototype.hasOwnProperty.call(
+    reqBody,
+    'destination'
+  )
+  if (!hasDestinationsKey && !hasDestinationKey) return { skip: true }
+  if (hasDestinationsKey) {
+    const arr = reqBody.destinations
+    if (!Array.isArray(arr)) {
+      return {
+        skip: false,
+        primary: null,
+        additional: [],
+        error: 'destinations must be an array'
+      }
+    }
+    if (arr.length > 0) {
+      return { skip: false, ...parseDestinationStopsFromBody(null, arr) }
+    }
+    if (
+      hasDestinationKey &&
+      reqBody.destination != null &&
+      reqBody.destination !== ''
+    ) {
+      return {
+        skip: false,
+        ...parseDestinationStopsFromBody(reqBody.destination, [])
+      }
+    }
+    return { skip: false, primary: null, additional: [], error: null }
+  }
+  if (reqBody.destination == null || reqBody.destination === '') {
+    return {
+      skip: false,
+      primary: null,
+      additional: [],
+      error: null
+    }
+  }
+  return {
+    skip: false,
+    ...parseDestinationStopsFromBody(reqBody.destination, [])
+  }
+}
+
 // Create a new vehicle availability post
 const createAvailability = async (req, res, next) => {
   try {
@@ -43,17 +165,27 @@ const createAvailability = async (req, res, next) => {
 
     const originError = validateLocationInput(origin, 'origin', {
       required: true,
-      requireCoordinates: true
+      requireCoordinates: false
     })
     if (originError) {
       return res.status(400).json({ success: false, message: originError })
     }
+    const originAddr = String(
+      normalizeLocationInput(origin).formattedAddress || ''
+    ).trim()
+    if (originAddr.length > MAX_FORMATTED_ADDRESS_LEN) {
+      return res.status(400).json({
+        success: false,
+        message: `origin address too long (max ${MAX_FORMATTED_ADDRESS_LEN})`
+      })
+    }
 
-    const destinationError = validateLocationInput(destination, 'destination', {
-      requireCoordinates: true
-    })
-    if (destinationError) {
-      return res.status(400).json({ success: false, message: destinationError })
+    const destParsed = parseDestinationStopsFromBody(
+      destination,
+      req.body.destinations
+    )
+    if (destParsed.error) {
+      return res.status(400).json({ success: false, message: destParsed.error })
     }
 
     // vehicleType is required and must exist in VehicleType collection
@@ -144,7 +276,8 @@ const createAvailability = async (req, res, next) => {
       vehicleId: vehicleId || null,
       vehicleType,
       origin: normalizeLocationInput(origin),
-      destination: normalizeLocationInput(destination),
+      destination: destParsed.primary,
+      destinations: destParsed.additional,
       quantity: quantity ? Number(quantity) : 1,
       slotsLeft: quantity ? Number(quantity) : 1,
       pricePerVehicle: priceResultCreate.value,
@@ -182,7 +315,7 @@ const createAvailability = async (req, res, next) => {
         : null,
       vehicleType: populated.vehicleType,
       origin: populated.origin,
-      destination: populated.destination,
+      ...postDestinationApiFields(populated),
       quantity: populated.quantity,
       slotsLeft: populated.slotsLeft,
       pricePerVehicle: populated.pricePerVehicle || null,
@@ -247,7 +380,14 @@ const searchAvailability = async (req, res, next) => {
       extraAnd.push({
         $or: [
           { 'origin.formattedAddress': { $regex: pattern, $options: 'i' } },
-          { 'destination.formattedAddress': { $regex: pattern, $options: 'i' } }
+          { 'destination.formattedAddress': { $regex: pattern, $options: 'i' } },
+          {
+            destinations: {
+              $elemMatch: {
+                formattedAddress: { $regex: pattern, $options: 'i' }
+              }
+            }
+          }
         ]
       })
     }
@@ -262,7 +402,14 @@ const searchAvailability = async (req, res, next) => {
           {
             'destination.formattedAddress': { $regex: pattern, $options: 'i' }
           },
-          { 'origin.formattedAddress': { $regex: pattern, $options: 'i' } }
+          { 'origin.formattedAddress': { $regex: pattern, $options: 'i' } },
+          {
+            destinations: {
+              $elemMatch: {
+                formattedAddress: { $regex: pattern, $options: 'i' }
+              }
+            }
+          }
         ]
       })
     }
@@ -356,7 +503,7 @@ const searchAvailability = async (req, res, next) => {
       vehicleNumber: p.vehicleId ? p.vehicleId.vehicleNumber : null,
       vehicleType: p.vehicleType,
       origin: p.origin,
-      destination: p.destination,
+      ...postDestinationApiFields(p),
       quantity: p.quantity,
       slotsLeft: p.slotsLeft,
       pricePerVehicle: p.pricePerVehicle || null,
@@ -457,7 +604,7 @@ const getMyPosts = async (req, res, next) => {
         : null,
       vehicleType: p.vehicleType,
       origin: p.origin,
-      destination: p.destination,
+      ...postDestinationApiFields(p),
       quantity: p.quantity,
       slotsLeft: p.slotsLeft,
       pricePerVehicle: p.pricePerVehicle || null,
@@ -550,7 +697,7 @@ const getById = async (req, res, next) => {
         : null,
       vehicleType: p.vehicleType,
       origin: p.origin,
-      destination: p.destination,
+      ...postDestinationApiFields(p),
       quantity: p.quantity,
       slotsLeft: p.slotsLeft,
       pricePerVehicle: p.pricePerVehicle || null,
@@ -635,26 +782,27 @@ const updateAvailability = async (req, res, next) => {
       const normalizedOrigin = normalizeLocationInput(origin)
       const originError = validateLocationInput(normalizedOrigin, 'origin', {
         required: true,
-        requireCoordinates: true
+        requireCoordinates: false
       })
       if (originError) {
         return res.status(400).json({ success: false, message: originError })
       }
+      const oAddr = String(normalizedOrigin.formattedAddress || '').trim()
+      if (oAddr.length > MAX_FORMATTED_ADDRESS_LEN) {
+        return res.status(400).json({
+          success: false,
+          message: `origin address too long (max ${MAX_FORMATTED_ADDRESS_LEN})`
+        })
+      }
       post.origin = normalizedOrigin
     }
-    if (destination !== undefined) {
-      const normalizedDestination = normalizeLocationInput(destination)
-      const destinationError = validateLocationInput(
-        normalizedDestination,
-        'destination',
-        { requireCoordinates: true }
-      )
-      if (destinationError) {
-        return res
-          .status(400)
-          .json({ success: false, message: destinationError })
+    const destUpdate = parseDestinationStopsForUpdate(req.body)
+    if (!destUpdate.skip) {
+      if (destUpdate.error) {
+        return res.status(400).json({ success: false, message: destUpdate.error })
       }
-      post.destination = normalizedDestination
+      post.destination = destUpdate.primary
+      post.destinations = destUpdate.additional
     }
     if (quantity !== undefined)
       post.quantity = Number(quantity) || post.quantity
@@ -746,7 +894,7 @@ const updateAvailability = async (req, res, next) => {
         : null,
       vehicleType: populated.vehicleType,
       origin: populated.origin,
-      destination: populated.destination,
+      ...postDestinationApiFields(populated),
       quantity: populated.quantity,
       slotsLeft: populated.slotsLeft,
       pricePerVehicle: populated.pricePerVehicle || null,
@@ -828,7 +976,7 @@ const cancelPost = async (req, res, next) => {
         : null,
       vehicleType: populated.vehicleType,
       origin: populated.origin,
-      destination: populated.destination,
+      ...postDestinationApiFields(populated),
       quantity: populated.quantity,
       slotsLeft: populated.slotsLeft,
       pricePerVehicle: populated.pricePerVehicle || null,
@@ -996,7 +1144,7 @@ const addVehicleToPost = async (req, res, next) => {
         id: populated._id,
         vehicleType: populated.vehicleType,
         origin: populated.origin,
-        destination: populated.destination,
+        ...postDestinationApiFields(populated),
         quantity: populated.quantity,
         slotsLeft: populated.slotsLeft,
         availableFrom: populated.availableFrom,
