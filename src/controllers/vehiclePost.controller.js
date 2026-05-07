@@ -20,9 +20,16 @@ const {
   normalizeServedStopIndexesInput,
   stopLabelForIndex
 } = require('../utils/vehiclePostDestinationQuotas')
+const { liveAssignmentFilter } = require('../utils/liveVehicleAssignment')
 
 const MAX_DESTINATION_STOPS = 10
 const MAX_FORMATTED_ADDRESS_LEN = 500
+
+async function countLiveAssignments(postId) {
+  return VehicleRouteAssignment.countDocuments(
+    liveAssignmentFilter({ postId })
+  )
+}
 
 function buildDestinationsAll(p) {
   const primary = p.destination || null
@@ -326,7 +333,7 @@ const createAvailability = async (req, res, next) => {
       availableFrom: fromDate,
       availableTo: toDate,
       note: note || null,
-      status: 'active'
+      status: 'draft'
     })
 
     // Populate transporter and vehicle for frontend-friendly response
@@ -386,7 +393,8 @@ const createAvailability = async (req, res, next) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Vehicle availability posted',
+      message:
+        'Listing saved as draft. Add at least one fleet vehicle to publish it to the marketplace.',
       data: { post: response }
     })
   } catch (error) {
@@ -410,14 +418,20 @@ const searchAvailability = async (req, res, next) => {
 
     // escape user input for safe regex construction
     const escapeRegex = s => (s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const normalizeSearchAddress = s => {
+      if (s == null) return ''
+      const str = typeof s === 'string' ? s : String(s)
+      return str.trim().replace(/\s+/g, ' ')
+    }
 
     // Build flexible matching: when searching by origin or destination, allow
     // matches against either field so posts are visible to all transporters.
     // Use string-based $regex + $options so the query serializes cleanly.
     const extraAnd = []
 
-    if (origin && origin.trim() !== '') {
-      const pattern = escapeRegex(origin.trim())
+    const originNorm = normalizeSearchAddress(origin)
+    if (originNorm !== '') {
+      const pattern = escapeRegex(originNorm)
 
       extraAnd.push({
         $or: [
@@ -436,8 +450,9 @@ const searchAvailability = async (req, res, next) => {
 
     if (vehicleType) extraAnd.push({ vehicleType })
 
-    if (destination && destination.trim() !== '') {
-      const pattern = escapeRegex(destination.trim())
+    const destinationNorm = normalizeSearchAddress(destination)
+    if (destinationNorm !== '') {
+      const pattern = escapeRegex(destinationNorm)
 
       extraAnd.push({
         $or: [
@@ -490,8 +505,8 @@ const searchAvailability = async (req, res, next) => {
         req.user?.id,
         'patterns:',
         {
-          origin: origin ? escapeRegex(origin.trim()) : null,
-          destination: destination ? escapeRegex(destination.trim()) : null,
+          origin: originNorm ? escapeRegex(originNorm) : null,
+          destination: destinationNorm ? escapeRegex(destinationNorm) : null,
           date: date || null
         }
       )
@@ -515,9 +530,9 @@ const searchAvailability = async (req, res, next) => {
     const postIds = posts.map(p => p._id)
     let assignmentsByPost = {}
     if (postIds.length) {
-      const assignments = await VehicleRouteAssignment.find({
-        postId: { $in: postIds }
-      })
+      const assignments = await VehicleRouteAssignment.find(
+        liveAssignmentFilter({ postId: { $in: postIds } })
+      )
         .populate('vehicleId', 'vehicleNumber vehicleType')
         .populate('transporterId', 'name company mobile')
         .lean()
@@ -600,9 +615,9 @@ const getMyPosts = async (req, res, next) => {
     const myPostIds = posts.map(p => p._id)
     let myAssignmentsByPost = {}
     if (myPostIds.length) {
-      const myAssignments = await VehicleRouteAssignment.find({
-        postId: { $in: myPostIds }
-      })
+      const myAssignments = await VehicleRouteAssignment.find(
+        liveAssignmentFilter({ postId: { $in: myPostIds } })
+      )
         .populate('vehicleId', 'vehicleNumber vehicleType')
         .populate('transporterId', 'name company mobile')
         .lean()
@@ -691,7 +706,9 @@ const getById = async (req, res, next) => {
 
     const p = post
     // load assignments for this post
-    const postAssignments = await VehicleRouteAssignment.find({ postId: p._id })
+    const postAssignments = await VehicleRouteAssignment.find(
+      liveAssignmentFilter({ postId: p._id })
+    )
       .populate('vehicleId', 'vehicleNumber vehicleType')
       .populate('transporterId', 'name company mobile')
       .lean()
@@ -855,9 +872,9 @@ const updateAvailability = async (req, res, next) => {
     }
 
     if (newQuantities) {
-      const existingAssignments = await VehicleRouteAssignment.find({
-        postId: post._id
-      }).lean()
+      const existingAssignments = await VehicleRouteAssignment.find(
+        liveAssignmentFilter({ postId: post._id })
+      ).lean()
       const counts = countAssignmentsPerStop(
         existingAssignments,
         numStops,
@@ -881,7 +898,17 @@ const updateAvailability = async (req, res, next) => {
     }
 
     if (note !== undefined) post.note = note || null
-    if (status !== undefined) post.status = status
+    if (status !== undefined) {
+      const next = status
+      if (next === 'active' && (await countLiveAssignments(post._id)) < 1) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Attach at least one fleet vehicle before setting this listing to active.'
+        })
+      }
+      post.status = status
+    }
     if (Object.prototype.hasOwnProperty.call(req.body, 'pricePerVehicle')) {
       const priceResultUpdate = parseOptionalPricePerVehicle(pricePerVehicle)
       if (!priceResultUpdate.ok) {
@@ -930,11 +957,18 @@ const updateAvailability = async (req, res, next) => {
         postId: post._id,
         status: 'CONFIRMED'
       })
+      const liveAssign = await countLiveAssignments(post._id)
       post.slotsLeft = Math.max(0, post.quantity - confirmedCount)
-      if (post.slotsLeft > 0 && post.status === 'fulfilled') {
-        post.status = 'active'
-      } else if (post.slotsLeft === 0 && post.status === 'active') {
-        post.status = 'fulfilled'
+      if (post.slotsLeft === 0) {
+        if (post.status === 'active') {
+          post.status = 'fulfilled'
+        }
+      } else {
+        if (post.status === 'fulfilled') {
+          post.status = liveAssign > 0 ? 'active' : 'draft'
+        } else if (post.status === 'active' && liveAssign === 0) {
+          post.status = 'draft'
+        }
       }
       await post.save()
     } catch (e) {
@@ -1117,10 +1151,10 @@ const addVehicleToPost = async (req, res, next) => {
     }
 
     const post = await VehicleRouteAvailability.findById(id)
-    if (!post || post.status !== 'active') {
+    if (!post || !['draft', 'active'].includes(post.status)) {
       return res.status(400).json({
         success: false,
-        message: 'Post not found or not active'
+        message: 'Post not found or cannot accept vehicles in its current state'
       })
     }
 
@@ -1131,9 +1165,9 @@ const addVehicleToPost = async (req, res, next) => {
       })
     }
 
-    const assignedCount = await VehicleRouteAssignment.countDocuments({
-      postId: post._id
-    })
+    const assignedCount = await VehicleRouteAssignment.countDocuments(
+      liveAssignmentFilter({ postId: post._id })
+    )
     const slotsRemaining = post.quantity - assignedCount
     if (slotsRemaining < uniqueIds.length) {
       return res.status(400).json({
@@ -1171,9 +1205,9 @@ const addVehicleToPost = async (req, res, next) => {
       })
     }
 
-    const existingAssignments = await VehicleRouteAssignment.find({
-      postId: post._id
-    }).lean()
+    const existingAssignments = await VehicleRouteAssignment.find(
+      liveAssignmentFilter({ postId: post._id })
+    ).lean()
     const existingVehicleIds = new Set(
       existingAssignments.map(a => a.vehicleId.toString())
     )
@@ -1250,11 +1284,18 @@ const addVehicleToPost = async (req, res, next) => {
         transporterId: viewerId,
         price: priceVal,
         note: note || null,
-        servedStopIndexes
+        servedStopIndexes: servedIndexes
       }))
       const created = await VehicleRouteAssignment.insertMany(docs, { session })
       await session.commitTransaction()
       session.endSession()
+
+      let justPublished = false
+      if (post.status === 'draft') {
+        post.status = 'active'
+        await post.save()
+        justPublished = true
+      }
 
       const populated = await VehicleRouteAvailability.findById(post._id)
         .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
@@ -1281,8 +1322,11 @@ const addVehicleToPost = async (req, res, next) => {
         io.emit('vehiclePost:updated', { post: response })
       } catch (e) {}
 
-      const message =
-        uniqueIds.length === 1
+      const message = justPublished
+        ? uniqueIds.length === 1
+          ? 'Vehicle added; listing is now live on the marketplace'
+          : 'Vehicles added; listing is now live on the marketplace'
+        : uniqueIds.length === 1
           ? 'Vehicle added to post'
           : 'Vehicles added to post'
 
@@ -1292,7 +1336,8 @@ const addVehicleToPost = async (req, res, next) => {
         data: {
           assignments: created,
           added: created.length,
-          assignment: created.length === 1 ? created[0] : undefined
+          assignment: created.length === 1 ? created[0] : undefined,
+          published: justPublished
         }
       })
     } catch (err) {

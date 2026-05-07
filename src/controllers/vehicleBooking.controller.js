@@ -41,8 +41,9 @@ async function releaseBookingAssignmentResources(booking) {
   const assignmentId = booking.assignmentId
   if (!assignmentId) return
 
-  const deleted = await VehicleRouteAssignment.findByIdAndDelete(assignmentId)
-  if (!deleted) return
+  await VehicleRouteAssignment.findByIdAndUpdate(assignmentId, {
+    $set: { isReleased: true }
+  })
 }
 
 async function consumeConfirmedBookingSlot(postId, session) {
@@ -110,10 +111,9 @@ const createBooking = async (req, res, next) => {
     }
 
     // Get assignment (vehicle) details
-    const assignment = await VehicleRouteAssignment.findById(
-      assignmentId
-    ).populate('vehicleId', 'vehicleNumber vehicleType trailerType')
-    if (!assignment) {
+    const assignment = await VehicleRouteAssignment.findById(assignmentId)
+      .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+    if (!assignment || assignment.isReleased === true) {
       return res
         .status(404)
         .json({ success: false, message: 'Vehicle assignment not found' })
@@ -806,7 +806,6 @@ const acceptBooking = async (req, res, next) => {
     }
 
     // 🔒 CHECK: vehicle still available (prevents double booking)
-    {
     // New confirmation flow: consume capacity only when the booking is formally
     // confirmed, not when a vehicle is merely attached to the post.
     const finalPrice =
@@ -819,9 +818,10 @@ const acceptBooking = async (req, res, next) => {
     let populatedBooking = null
 
     try {
-      const assignmentExists = await VehicleRouteAssignment.findById(
-        booking.assignmentId
-      ).session(session)
+      const assignmentExists = await VehicleRouteAssignment.findOne({
+        _id: booking.assignmentId,
+        isReleased: { $ne: true }
+      }).session(session)
 
       if (!assignmentExists) {
         throw new Error('Vehicle already booked by another user')
@@ -838,8 +838,10 @@ const acceptBooking = async (req, res, next) => {
         trip = await createTripFromBooking(booking, { session })
       }
 
-      await VehicleRouteAssignment.findByIdAndDelete(booking.assignmentId).session(
-        session
+      await VehicleRouteAssignment.findByIdAndUpdate(
+        booking.assignmentId,
+        { $set: { isReleased: true } },
+        { session }
       )
 
       await booking.save({ session })
@@ -859,6 +861,32 @@ const acceptBooking = async (req, res, next) => {
 
     session.endSession()
 
+    try {
+      await TransporterMessage.create({
+        bookingId: id,
+        senderId: userId,
+        receiverId: booking.buyerId,
+        messageType: 'ACCEPTED',
+        content: `Booking accepted at ₹${finalPrice}`,
+        proposedPrice: finalPrice
+      })
+    } catch (e) {
+      console.warn('TransporterMessage create failed (accept booking):', e.message || e)
+    }
+
+    try {
+      await VehicleBookingAudit.logAction({
+        bookingId: id,
+        action: BOOKING_AUDIT_ACTIONS.CONFIRMED,
+        performedBy: userId,
+        details: {
+          agreedPrice: finalPrice
+        }
+      })
+    } catch (e) {
+      console.warn('VehicleBookingAudit.logAction failed (accept booking):', e.message || e)
+    }
+
     if (trip) {
       try {
         const io = getIO()
@@ -876,108 +904,6 @@ const acceptBooking = async (req, res, next) => {
       }
     }
 
-    try {
-      const io = getIO()
-
-      io.to(`transporter:${booking.buyerId}`).emit('booking:confirmed', {
-        booking: populatedBooking
-      })
-
-      io.to(`transporter:${booking.sellerId}`).emit('booking:confirmed', {
-        booking: populatedBooking
-      })
-    } catch (err) {
-      console.warn('Socket emit failed (booking:confirmed)')
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Booking confirmed successfully',
-      data: { booking: populatedBooking }
-    })
-
-    }
-
-    const assignmentExists = await VehicleRouteAssignment.findById(
-      booking.assignmentId
-    )
-
-    if (!assignmentExists) {
-      return res.status(400).json({
-        success: false,
-        message: 'Vehicle already booked by another user'
-      })
-    }
-
-    // 💰 Final price
-    const finalPrice =
-      booking.lastPriceProposal?.proposedPrice || booking.estimatedPrice
-
-    booking.agreedPrice = finalPrice
-    booking.status = 'CONFIRMED'
-
-    // 🔥 CREATE TRIP FIRST (IMPORTANT ORDER)
-    if (!booking.tripId) {
-      const trip = await createTripFromBooking(booking)
-      booking.tripId = trip._id
-
-      try {
-        const io = getIO()
-        const payload = { trip, bookingId: booking._id }
-        io.to(`transporter:${booking.buyerId}`).emit(
-          'trip:created:from-booking',
-          payload
-        )
-        io.to(`transporter:${booking.sellerId}`).emit(
-          'trip:created:from-booking',
-          payload
-        )
-      } catch (err) {
-        console.warn('Socket emit failed (trip:created:from-booking)')
-      }
-    }
-
-    // 🔥 REMOVE VEHICLE AFTER TRIP CREATED
-    await VehicleRouteAssignment.findByIdAndDelete(booking.assignmentId)
-
-    // ⏱ timestamps
-    booking.acceptedAt = new Date()
-    booking.confirmedAt = new Date()
-
-    // ✅ SINGLE SAVE (important)
-    await booking.save()
-
-    // Listing capacity is decremented when a vehicle is assigned to the post (addVehicleToPost).
-    // When the last slot is taken, status becomes `fulfilled` there; search also requires slotsLeft > 0.
-
-    // 💬 confirmation message
-    const confirmMessage = await TransporterMessage.create({
-      bookingId: id,
-      senderId: userId,
-      receiverId: booking.buyerId,
-      messageType: 'ACCEPTED',
-      content: `Booking accepted at ₹${finalPrice}`,
-      proposedPrice: finalPrice
-    })
-
-    // 🧾 audit log
-    await VehicleBookingAudit.logAction({
-      bookingId: id,
-      action: BOOKING_AUDIT_ACTIONS.CONFIRMED,
-      performedBy: userId,
-      details: {
-        agreedPrice: finalPrice
-      }
-    })
-
-    // 📦 response data
-    const populatedBooking = await VehicleBooking.findById(id)
-      .populate('buyerId', 'name mobile company')
-      .populate('sellerId', 'name mobile company')
-      .populate('vehicleId', 'vehicleNumber vehicleType')
-      .lean()
-
-    // 📡 socket events
     try {
       const io = getIO()
 

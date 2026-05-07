@@ -278,9 +278,13 @@ const tests = [
         _id: 'post-1',
         transporterId: 'seller-1',
         status: 'active',
+        vehicleType: 'Truck',
         quantity: 2,
         slotsLeft: 2,
         pricePerVehicle: 5000,
+        destination: null,
+        destinations: [],
+        destinationQuantities: [],
         async save() {
           return this;
         },
@@ -313,27 +317,53 @@ const tests = [
         },
       };
 
-      const addVehicleController = loadWithMocks(path.resolve(process.cwd(), 'src/controllers/vehiclePost.controller.js'), {
-        '../models/Vehicle': {
-          findById: async () => ({ _id: 'vehicle-1', transporterId: 'seller-1', vehicleType: 'Truck' }),
-        },
-        '../models/VehicleRouteAvailability': {
-          findById: () => postState,
-        },
-        '../models/VehicleRouteAssignment': {
-          countDocuments: async () => 1,
-          create: async (payload) => ({ _id: 'assignment-1', ...payload }),
-        },
-        '../models/VehicleBooking': {},
-        '../services/socket.service': {
-          getIO: () => ({ emit: () => {} }),
-        },
-      });
+      const addVehicleController = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/vehiclePost.controller.js'),
+        {
+          mongoose: {
+            ...mongoose,
+            startSession: async () => ({
+              startTransaction: () => {},
+              commitTransaction: async () => {},
+              abortTransaction: async () => {},
+              endSession: () => {},
+            }),
+          },
+          '../models/Vehicle': {
+            find: async () => [
+              {
+                _id: 'vehicle-1',
+                transporterId: 'seller-1',
+                vehicleType: 'Truck',
+                status: 'active',
+              },
+            ],
+          },
+          '../models/VehicleRouteAvailability': {
+            findById: () => postState,
+          },
+          '../models/VehicleRouteAssignment': {
+            countDocuments: async () => 1,
+            find: () => ({
+              lean: async () => [],
+            }),
+            insertMany: async (docs) =>
+              docs.map((d, i) => ({
+                _id: `assignment-new-${i}`,
+                ...d,
+              })),
+          },
+          '../models/VehicleBooking': {},
+          '../services/socket.service': {
+            getIO: () => ({ emit: () => {} }),
+          },
+        }
+      );
 
       const addReq = {
         params: { id: 'post-1' },
         body: { vehicleId: 'vehicle-1', price: 5000 },
-        user: { id: 'seller-1' },
+        user: { id: 'seller-1', userType: 'transporter' },
       };
       const addRes = createMockRes();
 
@@ -361,12 +391,10 @@ const tests = [
           findById: () => postState,
         },
         '../models/VehicleRouteAssignment': {
-          findById: () => ({
+          findOne: () => ({
             session: async () => ({ _id: 'assignment-1' }),
           }),
-          findByIdAndDelete: () => ({
-            session: async () => ({ _id: 'assignment-1' }),
-          }),
+          findByIdAndUpdate: async () => ({}),
         },
         '../models/TransporterMessage': {
           create: async (payload) => payload,
@@ -644,6 +672,16 @@ const tests = [
       assert.equal(config.milestoneRules.containerPickedRequired, true);
       assert.equal(config.milestoneRules.podRequiredForBillable, false);
       assert.equal(auditPayload.action, 'MILESTONE_RULES_UPDATED');
+    },
+  },
+  {
+    name: 'liveAssignmentFilter selects non-released assignments',
+    run() {
+      const { liveAssignmentFilter } = require('../src/utils/liveVehicleAssignment')
+      assert.deepEqual(liveAssignmentFilter({ postId: 'abc' }), {
+        postId: 'abc',
+        isReleased: { $ne: true },
+      })
     },
   },
 ];

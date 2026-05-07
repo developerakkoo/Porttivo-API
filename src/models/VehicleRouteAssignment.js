@@ -36,10 +36,26 @@ const vehicleRouteAssignmentSchema = new mongoose.Schema(
       type: [Number],
       default: undefined,
     },
+
+    /**
+     * When true: no longer listed on the marketplace for this post (booking confirmed,
+     * cancelled, or rejected). Keeps the document for history and avoids orphaning posts.
+     */
+    isReleased: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
   },
   { timestamps: true }
 );
 
-vehicleRouteAssignmentSchema.index({ postId: 1, vehicleId: 1 }, { unique: true });
+vehicleRouteAssignmentSchema.index(
+  { postId: 1, vehicleId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { isReleased: { $ne: true } },
+  }
+);
 
 module.exports = mongoose.model('VehicleRouteAssignment', vehicleRouteAssignmentSchema);
