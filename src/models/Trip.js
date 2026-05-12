@@ -2,6 +2,7 @@ const mongoose = require('mongoose')
 const {
   TRIP_STATUS,
   TRIP_STATUS_VALUES,
+  TRIP_TYPE_VALUES,
   BOOKING_STATUS_VALUES
 } = require('../utils/tripState')
 const locationSchema = require('./schemas/location.schema')
@@ -320,7 +321,7 @@ const tripSchema = new mongoose.Schema(
     },
     tripType: {
       type: String,
-      enum: ['IMPORT', 'EXPORT'],
+      enum: TRIP_TYPE_VALUES,
       required: [true, 'Trip type is required'],
       index: true
     },

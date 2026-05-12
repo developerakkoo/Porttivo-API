@@ -1,6 +1,10 @@
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
-const { checkVehicleHasTripHistory, validateIndianVehicleRegistrationFormat } = require('../utils/vehicleValidation');
+const {
+  checkVehicleHasActiveTrip,
+  checkVehicleHasTripHistory,
+  validateIndianVehicleRegistrationFormat,
+} = require('../utils/vehicleValidation');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 
 /**
@@ -28,7 +32,7 @@ const getVehicles = async (req, res, next) => {
       });
     }
 
-    const { status, ownerType, driverId, transporterId: queryTransporterId } = req.query;
+    const { status, ownerType, driverId, transporterId: queryTransporterId, availableForTrip } = req.query;
 
     // Build query - admins can see all, others see only their transporter's vehicles
     const query = {};
@@ -56,10 +60,26 @@ const getVehicles = async (req, res, next) => {
     if (driverId) query.driverId = driverId;
 
     // Get vehicles with populated driver info
-    const vehicles = await Vehicle.find(query)
+    let vehicles = await Vehicle.find(query)
       .populate('driverId', 'name mobile status')
       .populate('originalOwnerId', 'name company')
       .sort({ createdAt: -1 });
+
+    if (availableForTrip === 'true') {
+      const candidateVehicles = await Promise.all(
+        vehicles.map(async (vehicle) => {
+          const hasActiveTrip = await checkVehicleHasActiveTrip(vehicle._id.toString());
+          return {
+            vehicle,
+            hasActiveTrip,
+          };
+        })
+      );
+
+      vehicles = candidateVehicles
+        .filter(({ vehicle, hasActiveTrip }) => vehicle.status === 'active' && !hasActiveTrip)
+        .map(({ vehicle }) => vehicle);
+    }
 
     return res.status(200).json({
       success: true,

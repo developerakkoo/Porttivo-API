@@ -9,6 +9,12 @@ const TRIP_STATUS = Object.freeze({
   CANCELLED: 'CANCELLED',
 });
 
+const TRIP_TYPES = Object.freeze({
+  IMPORT: 'IMPORT',
+  EXPORT: 'EXPORT',
+  LOCAL: 'LOCAL',
+});
+
 const BOOKING_STATUS = Object.freeze({
   OPEN: 'OPEN',
   ACCEPTED: 'ACCEPTED',
@@ -16,6 +22,7 @@ const BOOKING_STATUS = Object.freeze({
 });
 
 const TRIP_STATUS_VALUES = Object.freeze(Object.values(TRIP_STATUS));
+const TRIP_TYPE_VALUES = Object.freeze(Object.values(TRIP_TYPES));
 const BOOKING_STATUS_VALUES = Object.freeze(Object.values(BOOKING_STATUS));
 const CLOSED_TRIP_STATUSES = Object.freeze([
   TRIP_STATUS.CLOSED_WITH_POD,
@@ -40,8 +47,10 @@ const isClosedTripStatus = (status) => CLOSED_TRIP_STATUSES.includes(status);
 
 module.exports = {
   TRIP_STATUS,
+  TRIP_TYPES,
   BOOKING_STATUS,
   TRIP_STATUS_VALUES,
+  TRIP_TYPE_VALUES,
   BOOKING_STATUS_VALUES,
   CLOSED_TRIP_STATUSES,
   DRIVER_HISTORY_STATUSES,

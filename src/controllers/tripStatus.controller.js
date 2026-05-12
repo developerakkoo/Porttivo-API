@@ -18,6 +18,9 @@ const {
 } = require('../services/wati.service');
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState');
 const {
+  TRACKING_UPDATE_INTERVAL_SECONDS,
+} = require('../services/tripLocationLog.service');
+const {
   completeMarketplaceBookingAfterTripClosed,
 } = require('../utils/marketplaceBookingComplete');
 
@@ -240,6 +243,19 @@ const startTrip = async (req, res, next) => {
     };
     await trip.save();
 
+    console.log(
+      '[Trip/start]',
+      JSON.stringify({
+        tripId: trip.tripId,
+        tripObjectId: trip._id.toString(),
+        driverId: trip.driverId?.toString?.() || null,
+        userId,
+        userType,
+        status: trip.status,
+        trackingUpdateIntervalSeconds: TRACKING_UPDATE_INTERVAL_SECONDS,
+      })
+    );
+
     // Get current milestone info
     const currentMilestone = trip.getCurrentMilestone();
     const milestoneLabel = currentMilestone ? getDriverLabel(currentMilestone.milestoneType) : null;
@@ -258,7 +274,12 @@ const startTrip = async (req, res, next) => {
             milestoneType: currentMilestone.milestoneType,
             label: milestoneLabel,
           }
-        : null
+        : null,
+      {
+        trackingConfig: {
+          updateIntervalSeconds: TRACKING_UPDATE_INTERVAL_SECONDS,
+        },
+      }
     );
 
     res.json({
@@ -273,6 +294,9 @@ const startTrip = async (req, res, next) => {
               label: milestoneLabel,
             }
           : null,
+        trackingConfig: {
+          updateIntervalSeconds: TRACKING_UPDATE_INTERVAL_SECONDS,
+        },
       },
     });
   } catch (error) {

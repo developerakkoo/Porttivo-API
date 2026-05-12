@@ -1,7 +1,7 @@
 const Trip = require('../models/Trip')
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
 const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
-const { TRIP_STATUS } = require('../utils/tripState')
+const { TRIP_STATUS, TRIP_TYPE_VALUES } = require('../utils/tripState')
 
 const createTripFromBooking = async (booking, options = {}) => {
   if (!booking) {
@@ -59,8 +59,7 @@ const createTripFromBooking = async (booking, options = {}) => {
   }
 
   // ✅ TripType logic
-  const allowedTypes = ['IMPORT', 'EXPORT']
-  const tripType = allowedTypes.includes(booking.tripType)
+  const tripType = TRIP_TYPE_VALUES.includes(booking.tripType)
     ? booking.tripType
     : 'EXPORT'
 

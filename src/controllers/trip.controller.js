@@ -36,7 +36,7 @@ const {
   sendBookingRequestReceivedTemplate,
 } = require('../services/wati.service');
 const { syncTripLocationsToSavedCatalog } = require('../services/savedLocation.service');
-const { TRIP_STATUS, BOOKING_STATUS, TRIP_STATUS_VALUES } = require('../utils/tripState');
+const { TRIP_STATUS, BOOKING_STATUS, TRIP_STATUS_VALUES, TRIP_TYPE_VALUES } = require('../utils/tripState');
 const { buildVisibleTrip } = require('../services/tripVisibility.service');
 
 const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
@@ -91,6 +91,30 @@ const validateVehicleAssignmentInput = ({ vehicleId, hiredVehicle }) => {
     if (!isValidIndianVehicleRegistration(normalized.vehicleNumber)) {
       return 'hiredVehicle.vehicleNumber must be a valid 10-character Indian registration (e.g. MH12AB3434)';
     }
+  }
+
+  return null;
+};
+
+const normalizeTripType = (tripType) =>
+  typeof tripType === 'string' ? tripType.trim().toUpperCase() : tripType;
+
+const validateTripType = (tripType) => {
+  const normalized = normalizeTripType(tripType);
+  if (!normalized || !TRIP_TYPE_VALUES.includes(normalized)) {
+    return null;
+  }
+  return normalized;
+};
+
+const validateVehicleIsFreeForTrip = async (vehicleId, excludeTripId = null) => {
+  if (!vehicleId) {
+    return null;
+  }
+
+  const hasActiveTrip = await checkVehicleHasActiveTrip(vehicleId, excludeTripId);
+  if (hasActiveTrip) {
+    return 'Vehicle is already assigned to an active trip. Please close or cancel the active trip first.';
   }
 
   return null;
@@ -451,12 +475,21 @@ const createTrip = async (req, res, next) => {
       });
     }
     const { vehicleId, hiredVehicle, driverId, containerNumber, reference, customerName, pickupLocation, dropLocation, tripType, assignments: assignmentsInput } = req.body;
+    const normalizedTripType = validateTripType(tripType);
+    const normalizedCustomerName = customerName?.trim();
 
     // Validate required fields
-    if (!tripType || !['IMPORT', 'EXPORT'].includes(tripType)) {
+    if (!normalizedTripType) {
       return res.status(400).json({
         success: false,
-        message: 'Trip type is required and must be IMPORT or EXPORT',
+        message: 'Trip type is required and must be IMPORT, EXPORT, or LOCAL',
+      });
+    }
+
+    if (!normalizedCustomerName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer name is required. Use +Add Customer to create the trip.',
       });
     }
 
@@ -469,10 +502,10 @@ const createTrip = async (req, res, next) => {
       hiredVehicle: null,
       driverId: null,
       reference: reference?.trim().toUpperCase() || null,
-      customerName: customerName?.trim().toUpperCase() || null,
+      customerName: normalizedCustomerName.toUpperCase(),
       pickupLocation: normalizeLocation(pickupLocation),
       dropLocation: normalizeLocation(dropLocation),
-      tripType,
+      tripType: normalizedTripType,
       status: TRIP_STATUS.PLANNED,
       customerOwnership: { ownerType: 'TRANSPORTER_MANAGED', payerType: 'TRANSPORTER' },
       visibilityMode: 'FULL_EXECUTION',
@@ -510,6 +543,13 @@ const createTrip = async (req, res, next) => {
             message: `Assignment ${i + 1}: ${vehicleValidation.error}`,
           });
         }
+        const activeTripError = await validateVehicleIsFreeForTrip(vid);
+        if (activeTripError) {
+          return res.status(400).json({
+            success: false,
+            message: `Assignment ${i + 1}: ${activeTripError}`,
+          });
+        }
         const driver = await Driver.findById(did);
         if (!driver) {
           return res.status(404).json({ success: false, message: `Assignment ${i + 1}: Driver not found` });
@@ -545,6 +585,13 @@ const createTrip = async (req, res, next) => {
           return res.status(vehicleValidation.statusCode).json({
             success: false,
             message: vehicleValidation.error,
+          });
+        }
+        const activeTripError = await validateVehicleIsFreeForTrip(vehicleId);
+        if (activeTripError) {
+          return res.status(400).json({
+            success: false,
+            message: activeTripError,
           });
         }
         tripPayload.vehicleId = vehicleId;
@@ -962,6 +1009,14 @@ const updateTrip = async (req, res, next) => {
           return res.status(vehicleValidation.statusCode).json({
             success: false,
             message: vehicleValidation.error,
+          });
+        }
+
+        const activeTripError = await validateVehicleIsFreeForTrip(vehicleId, trip._id.toString());
+        if (activeTripError) {
+          return res.status(400).json({
+            success: false,
+            message: activeTripError,
           });
         }
 
@@ -1707,11 +1762,12 @@ const bookCustomerTrip = async (req, res, next) => {
     }
 
     const { tripType, containerNumber, reference, pickupLocation, dropLocation, scheduledAt, loadType, notes } = req.body;
+    const normalizedTripType = validateTripType(tripType);
 
-    if (!tripType || !['IMPORT', 'EXPORT'].includes(tripType)) {
+    if (!normalizedTripType) {
       return res.status(400).json({
         success: false,
-        message: 'Trip type is required and must be IMPORT or EXPORT',
+        message: 'Trip type is required and must be IMPORT, EXPORT, or LOCAL',
       });
     }
 
@@ -1740,7 +1796,7 @@ const bookCustomerTrip = async (req, res, next) => {
       bookedBy: 'CUSTOMER',
       bookingStatus: BOOKING_STATUS.OPEN,
       status: TRIP_STATUS.BOOKED,
-      tripType,
+      tripType: normalizedTripType,
       containerNumber: containerNumber?.trim().toUpperCase() || null,
       reference: reference?.trim() || null,
       pickupLocation: normalizeLocation(pickupLocation),
@@ -2178,11 +2234,11 @@ const assignTripVehicle = async (req, res, next) => {
           message: vehicleValidation.error,
         });
       }
-      const alreadyAssigned = await checkVehicleHasActiveTrip(vehicleId, req.params.id);
-      if (alreadyAssigned) {
+      const activeTripError = await validateVehicleIsFreeForTrip(vehicleId, req.params.id);
+      if (activeTripError) {
         return res.status(400).json({
           success: false,
-          message: 'Vehicle is already assigned to an active trip.',
+          message: activeTripError,
         });
       }
       trip.vehicleId = vehicleId;
@@ -2375,6 +2431,13 @@ const assignCustomerTrip = async (req, res, next) => {
         return res.status(vehicleValidation.statusCode).json({
           success: false,
           message: vehicleValidation.error,
+        });
+      }
+      const activeTripError = await validateVehicleIsFreeForTrip(vehicleId, trip._id.toString());
+      if (activeTripError) {
+        return res.status(400).json({
+          success: false,
+          message: activeTripError,
         });
       }
     } else {

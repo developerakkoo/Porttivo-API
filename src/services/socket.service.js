@@ -18,6 +18,10 @@ const {
   ensureMilestonePhoto,
   toAuditUserType
 } = require('./tripLifecycle.service')
+const {
+  TRACKING_UPDATE_INTERVAL_SECONDS,
+  logTripLocationUpdate
+} = require('./tripLocationLog.service')
 
 const TransporterMessage = require('../models/TransporterMessage')
 const Notification = require('../models/Notification')
@@ -469,6 +473,18 @@ const initializeSocketIO = httpServer => {
         trip.status = TRIP_STATUS.ACTIVE
         await trip.save()
 
+        console.log(
+          '[Trip/start]',
+          JSON.stringify({
+            tripId: trip.tripId,
+            tripObjectId: trip._id.toString(),
+            driverId: socket.user.id,
+            userType: socket.user.userType,
+            status: trip.status,
+            trackingUpdateIntervalSeconds: TRACKING_UPDATE_INTERVAL_SECONDS
+          })
+        )
+
         // Get current milestone
         const currentMilestone = trip.getCurrentMilestone()
         const milestoneLabel = currentMilestone
@@ -484,7 +500,10 @@ const initializeSocketIO = httpServer => {
                 milestoneType: currentMilestone.milestoneType,
                 label: milestoneLabel
               }
-            : null
+            : null,
+          trackingConfig: {
+            updateIntervalSeconds: TRACKING_UPDATE_INTERVAL_SECONDS
+          }
         }
         emitToTripAudience('trip:started', startedPayload)
       } catch (error) {
@@ -602,6 +621,20 @@ const initializeSocketIO = httpServer => {
           userType: toAuditUserType(socket.user.userType)
         }
         await trip.save()
+        logTripLocationUpdate({
+          trip,
+          driverId: socket.user.id,
+          latitude,
+          longitude,
+          socket,
+          source: 'trip:milestone:update',
+          payload: {
+            tripId,
+            milestoneNumber: milestoneNum,
+            milestoneType,
+            backendMeaning
+          }
+        })
 
         // Get current milestone for next milestone
         const currentMilestone = trip.getCurrentMilestone()
@@ -633,7 +666,14 @@ const initializeSocketIO = httpServer => {
     // Handle driver location update (from driver app, for real-time tracking)
     socket.on('driver:location:update', async data => {
       try {
-        const { tripId, latitude, longitude } = data
+        const {
+          tripId,
+          latitude,
+          longitude,
+          accuracy = null,
+          speed = null,
+          heading = null
+        } = data
 
         if (!tripId || latitude === undefined || longitude === undefined) {
           return socket.emit('error', {
@@ -683,12 +723,32 @@ const initializeSocketIO = httpServer => {
           updatedAt: new Date()
         }
         await trip.save()
+        logTripLocationUpdate({
+          trip,
+          driverId: socket.user.id,
+          latitude: lat,
+          longitude: lng,
+          socket,
+          accuracy: accuracy !== null && accuracy !== undefined ? Number(accuracy) : null,
+          speed: speed !== null && speed !== undefined ? Number(speed) : null,
+          heading: heading !== null && heading !== undefined ? Number(heading) : null,
+          source: 'driver:location:update',
+          payload: {
+            tripId,
+            accuracy,
+            speed,
+            heading
+          }
+        })
 
         const payload = {
           tripId: trip._id.toString(),
           trip: trip.toObject(),
           latitude: lat,
           longitude: lng,
+          accuracy: accuracy !== null && accuracy !== undefined ? Number(accuracy) : null,
+          speed: speed !== null && speed !== undefined ? Number(speed) : null,
+          heading: heading !== null && heading !== undefined ? Number(heading) : null,
           timestamp: new Date().toISOString()
         }
 
@@ -1278,10 +1338,11 @@ const emitTripAssigned = (trip, assignment = {}) => {
   })
 }
 
-const emitTripStarted = (trip, currentMilestone = null) => {
+const emitTripStarted = (trip, currentMilestone = null, meta = {}) => {
   emitToTripAudience('trip:started', {
     trip: trip.toObject ? trip.toObject() : trip,
-    currentMilestone
+    currentMilestone,
+    ...(meta.trackingConfig ? { trackingConfig: meta.trackingConfig } : {})
   })
 }
 

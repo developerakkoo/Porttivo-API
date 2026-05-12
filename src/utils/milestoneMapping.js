@@ -1,35 +1,40 @@
 /**
  * Backend meaning mapping for unified milestones
- * Maps milestone types to their operational meaning based on trip type (IMPORT/EXPORT)
+ * Maps milestone types to their operational meaning based on trip type (IMPORT/EXPORT/LOCAL)
  */
 
 const MILESTONE_MEANINGS = {
   CONTAINER_PICKED: {
     EXPORT: 'Empty container picked from CFS / yard',
     IMPORT: 'Loaded container picked from port / terminal',
+    LOCAL: 'Vehicle dispatched for local movement',
   },
   REACHED_LOCATION: {
     EXPORT: 'Reached factory for loading',
     IMPORT: 'Reached factory / warehouse for unloading',
+    LOCAL: 'Reached pickup / delivery location',
   },
   LOADING_UNLOADING: {
     EXPORT: 'Loading completed and vehicle exited factory',
     IMPORT: 'Unloading completed and vehicle exited warehouse',
+    LOCAL: 'Loading / unloading completed',
   },
   REACHED_DESTINATION: {
     EXPORT: 'Reached port',
     IMPORT: 'Reached empty yard / CFS',
+    LOCAL: 'Reached final destination',
   },
   TRIP_COMPLETED: {
     EXPORT: 'Container gate-in completed',
     IMPORT: 'Empty container offloaded',
+    LOCAL: 'Local trip completed',
   },
 };
 
 /**
  * Get backend meaning for a milestone based on trip type
  * @param {string} milestoneType - The milestone type (CONTAINER_PICKED, etc.)
- * @param {string} tripType - The trip type (IMPORT or EXPORT)
+ * @param {string} tripType - The trip type (IMPORT, EXPORT, or LOCAL)
  * @returns {string} Backend meaning string
  */
 function getBackendMeaning(milestoneType, tripType) {
