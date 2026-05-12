@@ -1,9 +1,11 @@
 const Trip = require('../models/Trip')
+const Notification = require('../models/Notification')
 const { completeMarketplaceBookingAfterTripClosed } = require('../utils/marketplaceBookingComplete')
 const path = require('path')
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState')
 const {
   emitTripPodUploaded,
+  emitTripPodApproved,
   emitTripClosedWithPOD,
   emitTripAutoActivated,
   emitTripMilestoneUpdated,
@@ -305,6 +307,35 @@ const approvePOD = async (req, res, next) => {
     await trip.populate('customerId', 'name mobile')
 
     emitTripClosedWithPOD(trip)
+    emitTripPodApproved(trip, {
+      message: 'POD approved successfully. Trip closed with POD.',
+      approvedAt: trip.POD.approvedAt,
+      closedReason: trip.closedReason
+    })
+
+    if (trip.driverId) {
+      try {
+        await Notification.create({
+          userId: trip.driverId._id || trip.driverId,
+          userType: 'DRIVER',
+          type: 'TRIP_COMPLETED',
+          title: 'POD approved',
+          message: `POD approved for trip ${trip.tripId}. Trip closed with POD.`,
+          data: {
+            tripId: trip._id,
+            publicTripId: trip.tripId,
+            approvedAt: trip.POD.approvedAt,
+            closedReason: trip.closedReason
+          },
+          priority: 'high'
+        })
+      } catch (notifyError) {
+        console.warn(
+          'Driver POD approval notification skipped:',
+          notifyError.message || notifyError
+        )
+      }
+    }
 
     try {
       const nextTrip = await activateNextTrip(trip)

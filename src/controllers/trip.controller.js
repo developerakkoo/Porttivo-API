@@ -107,6 +107,39 @@ const validateTripType = (tripType) => {
   return normalized;
 };
 
+const validateUniqueAssignments = (assignmentsInput) => {
+  if (!Array.isArray(assignmentsInput)) {
+    return null;
+  }
+
+  const seenVehicles = new Map();
+  const seenDrivers = new Map();
+
+  for (let i = 0; i < assignmentsInput.length; i++) {
+    const assignment = assignmentsInput[i] || {};
+    const vehicleKey = assignment.vehicleId ? String(assignment.vehicleId) : '';
+    const driverKey = assignment.driverId ? String(assignment.driverId) : '';
+
+    if (vehicleKey) {
+      const previousIndex = seenVehicles.get(vehicleKey);
+      if (previousIndex !== undefined) {
+        return `Assignment ${i + 1}: vehicleId is already used in assignment ${previousIndex + 1}. Each vehicle can only be selected once per trip.`;
+      }
+      seenVehicles.set(vehicleKey, i);
+    }
+
+    if (driverKey) {
+      const previousIndex = seenDrivers.get(driverKey);
+      if (previousIndex !== undefined) {
+        return `Assignment ${i + 1}: driverId is already used in assignment ${previousIndex + 1}. Each driver can only be selected once per trip.`;
+      }
+      seenDrivers.set(driverKey, i);
+    }
+  }
+
+  return null;
+};
+
 const validateVehicleIsFreeForTrip = async (vehicleId, excludeTripId = null) => {
   if (!vehicleId) {
     return null;
@@ -518,6 +551,14 @@ const createTrip = async (req, res, next) => {
 
     if (hasAssignments) {
       // Multi-container mode: validate each assignment
+      const duplicateAssignmentError = validateUniqueAssignments(assignmentsInput);
+      if (duplicateAssignmentError) {
+        return res.status(400).json({
+          success: false,
+          message: duplicateAssignmentError,
+        });
+      }
+
       const assignments = [];
       for (let i = 0; i < assignmentsInput.length; i++) {
         const a = assignmentsInput[i];

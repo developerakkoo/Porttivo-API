@@ -582,6 +582,7 @@ tripSchema.methods.getMilestoneTypeByNumber = function (number) {
 
 tripSchema.pre('save', function () {
   const now = new Date()
+  const containerNumberChanged = this.isModified('containerNumber')
 
   if (!this.audit?.statusHistory?.length) {
     this.audit.statusHistory = [
@@ -631,6 +632,30 @@ tripSchema.pre('save', function () {
   if (this.shareConfig?.token) {
     this.shareToken = this.shareConfig.token
     this.shareTokenExpiry = this.shareConfig.expiresAt
+  }
+
+  // Keep the trip-level container number and assignment snapshot aligned on updates.
+  // We intentionally avoid doing this on new documents so multi-container creates
+  // can preserve their individual assignment container numbers.
+  if (
+    !this.isNew &&
+    containerNumberChanged &&
+    Array.isArray(this.assignments) &&
+    this.assignments.length > 0
+  ) {
+    this.assignments.forEach((assignment) => {
+      assignment.containerNumber = this.containerNumber || null
+    })
+  }
+
+  if (
+    !this.isNew &&
+    !this.containerNumber &&
+    Array.isArray(this.assignments) &&
+    this.assignments.length > 0 &&
+    this.assignments[0]?.containerNumber
+  ) {
+    this.containerNumber = this.assignments[0].containerNumber
   }
 })
 

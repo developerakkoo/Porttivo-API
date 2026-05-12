@@ -146,3 +146,63 @@ test('createTrip accepts LOCAL trips and blocks vehicles with active trips', asy
   assert.equal(res.statusCode, 400);
   assert.match(res.body.message, /active trip/i);
 });
+
+test('createTrip rejects duplicate vehicles or drivers within the same trip', async () => {
+  const controller = createTripController({
+    '../models/Driver': {
+      findById: async (id) => ({
+        _id: id,
+        transporterId: 'transporter-1',
+        status: 'active',
+      }),
+    },
+    '../models/Vehicle': {
+      findById: async (id) => ({
+        _id: id,
+        transporterId: 'transporter-1',
+        ownerType: 'OWN',
+        status: 'active',
+      }),
+    },
+  });
+
+  const req = {
+    user: { id: 'user-1', userType: 'transporter' },
+    body: {
+      tripType: 'LOCAL',
+      customerName: 'Acme Logistics',
+      assignments: [
+        { containerNumber: 'CONT-1', vehicleId: 'vehicle-1', driverId: 'driver-1' },
+        { containerNumber: 'CONT-2', vehicleId: 'vehicle-1', driverId: 'driver-2' },
+      ],
+    },
+  };
+  const res = createMockRes();
+
+  await controller.createTrip(req, res, (error) => {
+    throw error;
+  });
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /vehicleId is already used/i);
+
+  const duplicateDriverReq = {
+    user: { id: 'user-1', userType: 'transporter' },
+    body: {
+      tripType: 'LOCAL',
+      customerName: 'Acme Logistics',
+      assignments: [
+        { containerNumber: 'CONT-1', vehicleId: 'vehicle-1', driverId: 'driver-1' },
+        { containerNumber: 'CONT-2', vehicleId: 'vehicle-2', driverId: 'driver-1' },
+      ],
+    },
+  };
+  const duplicateDriverRes = createMockRes();
+
+  await controller.createTrip(duplicateDriverReq, duplicateDriverRes, (error) => {
+    throw error;
+  });
+
+  assert.equal(duplicateDriverRes.statusCode, 400);
+  assert.match(duplicateDriverRes.body.message, /driverId is already used/i);
+});

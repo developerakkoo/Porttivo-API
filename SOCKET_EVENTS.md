@@ -11,6 +11,7 @@ All authenticated clients join a role room on connect (`transporter:{id}`, `driv
 | `trip:started` | `{ trip, currentMilestone?, trackingConfig? }` | `trackingConfig.updateIntervalSeconds` tells the client how often to send location updates. |
 | `trip:milestone:updated` | `{ trip, milestone, currentMilestone? }` | |
 | `driver:location:updated` | `{ tripId, trip, latitude, longitude, accuracy?, speed?, heading?, timestamp }` | Only when trip is ACTIVE; `trip` includes `lastDriverLocation`. |
+| `trip:pod:approved` | `{ trip, message, approvedAt?, closedReason? }` | Visible to the driver after transporter approves POD. |
 | `trip:cancelled` | `{ trip }` | |
 
 ## Client → server (driver)

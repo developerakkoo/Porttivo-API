@@ -1360,6 +1360,15 @@ const emitTripPodUploaded = trip => {
   })
 }
 
+const emitTripPodApproved = (trip, meta = {}) => {
+  emitToTripAudience('trip:pod:approved', {
+    trip: trip.toObject ? trip.toObject() : trip,
+    message: meta.message || 'POD approved successfully.',
+    approvedAt: meta.approvedAt || trip?.POD?.approvedAt || null,
+    closedReason: meta.closedReason || trip?.closedReason || null
+  })
+}
+
 const emitTripCompleted = trip => {
   emitToTripAudience('trip:completed', {
     trip: trip.toObject ? trip.toObject() : trip
@@ -1546,6 +1555,7 @@ module.exports = {
   emitTripStarted,
   emitTripMilestoneUpdated,
   emitTripPodUploaded,
+  emitTripPodApproved,
   emitTripCompleted,
   emitTripPodPending,
   emitTripClosedWithPOD,
