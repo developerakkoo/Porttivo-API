@@ -26,7 +26,11 @@ const driverSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ['pending', 'active', 'inactive', 'blocked'],
-      default: 'pending',
+      default: 'active',
+    },
+    isBusy: {
+      type: Boolean,
+      default: false,
     },
     riskLevel: {
       type: String,

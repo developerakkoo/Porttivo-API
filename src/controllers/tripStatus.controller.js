@@ -17,6 +17,7 @@ const {
   sendTripClosedWithoutPODTemplate,
 } = require('../services/wati.service');
 const { TRIP_STATUS, calculatePodDueAt } = require('../utils/tripState');
+const { releaseTripResources } = require('../utils/tripResourceState');
 const {
   TRACKING_UPDATE_INTERVAL_SECONDS,
 } = require('../services/tripLocationLog.service');
@@ -242,6 +243,7 @@ const startTrip = async (req, res, next) => {
       userType: toAuditUserType(userType),
     };
     await trip.save();
+    await releaseTripResources(trip);
 
     console.log(
       '[Trip/start]',
@@ -496,6 +498,7 @@ const closeTripWithoutPOD = async (req, res, next) => {
       userType: toAuditUserType(req.user.userType),
     };
     await trip.save();
+    await releaseTripResources(trip);
 
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');

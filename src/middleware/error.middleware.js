@@ -2,7 +2,18 @@
  * Centralized error handling middleware
  */
 const errorHandler = (err, req, res, next) => {
-  console.error('Error:', err);
+  console.error(
+    '[API/error]',
+    JSON.stringify({
+      method: req.method,
+      path: req.originalUrl || req.url || req.path || '',
+      statusCode: err.statusCode || 500,
+      userType: req.user?.userType || null,
+      userId: req.user?.id || null,
+      message: err.message || 'Internal server error',
+      name: err.name || null
+    })
+  );
 
   // Default error
   let statusCode = err.statusCode || 500;
@@ -54,6 +65,15 @@ const errorHandler = (err, req, res, next) => {
  * 404 Not Found handler
  */
 const notFound = (req, res) => {
+  console.warn(
+    '[API/404]',
+    JSON.stringify({
+      method: req.method,
+      path: req.originalUrl,
+      userType: req.user?.userType || null,
+      userId: req.user?.id || null
+    })
+  );
   res.status(404).json({
     success: false,
     message: `Route ${req.originalUrl} not found`,

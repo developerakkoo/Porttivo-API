@@ -16,6 +16,7 @@ const AuditLog = require('../models/AuditLog');
 const SavedLocation = require('../models/SavedLocation');
 const { generateTokens } = require('../services/jwt.service');
 const { TRIP_STATUS, CLOSED_TRIP_STATUSES } = require('../utils/tripState');
+const { releaseTripResources, syncTripResourceBusyState } = require('../utils/tripResourceState');
 const { logAdminAction } = require('../services/adminAudit.service');
 const {
   emitTripAssigned,
@@ -2041,6 +2042,7 @@ const adminUpdateTripStatus = async (req, res, next) => {
     }
 
     const fromStatus = trip.status;
+    const previousTripState = trip.toObject({ depopulate: true });
 
     if (status === TRIP_STATUS.CANCELLED) {
       const canCancel = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE, TRIP_STATUS.ACCEPTED, TRIP_STATUS.POD_PENDING].includes(trip.status);
@@ -2056,6 +2058,7 @@ const adminUpdateTripStatus = async (req, res, next) => {
       trip.audit = trip.audit || {};
       trip.audit.updatedBy = { userId: req.user.id, userType: 'ADMIN' };
       await trip.save();
+      await releaseTripResources(trip);
       emitTripCancelled(trip);
     } else if (status === TRIP_STATUS.CLOSED_WITHOUT_POD) {
       if (trip.status !== TRIP_STATUS.POD_PENDING) {
@@ -2070,6 +2073,7 @@ const adminUpdateTripStatus = async (req, res, next) => {
       trip.audit = trip.audit || {};
       trip.audit.updatedBy = { userId: req.user.id, userType: 'ADMIN' };
       await trip.save();
+      await releaseTripResources(trip);
       emitTripClosedWithoutPOD(trip);
     }
 
@@ -2121,6 +2125,8 @@ const adminReassignTrip = async (req, res, next) => {
         message: `Trip can only be reassigned when status is ACCEPTED or PLANNED. Current: ${trip.status}`,
       });
     }
+
+    const previousTripState = trip.toObject({ depopulate: true });
 
     let targetTransporterId = trip.transporterId?.toString() || trip.acceptedTransporterId?.toString();
 
@@ -2176,6 +2182,7 @@ const adminReassignTrip = async (req, res, next) => {
     trip.audit = trip.audit || {};
     trip.audit.updatedBy = { userId: req.user.id, userType: 'ADMIN' };
     await trip.save();
+    await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
     await trip.populate('transporterId', 'name company mobile');

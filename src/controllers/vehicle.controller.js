@@ -1,8 +1,8 @@
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
 const {
-  checkVehicleHasActiveTrip,
   checkVehicleHasTripHistory,
+  getVehicleAvailabilityState,
   validateIndianVehicleRegistrationFormat,
 } = require('../utils/vehicleValidation');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
@@ -68,16 +68,16 @@ const getVehicles = async (req, res, next) => {
     if (availableForTrip === 'true') {
       const candidateVehicles = await Promise.all(
         vehicles.map(async (vehicle) => {
-          const hasActiveTrip = await checkVehicleHasActiveTrip(vehicle._id.toString());
+          const availability = await getVehicleAvailabilityState(vehicle._id.toString());
           return {
             vehicle,
-            hasActiveTrip,
+            availability,
           };
         })
       );
 
       vehicles = candidateVehicles
-        .filter(({ vehicle, hasActiveTrip }) => vehicle.status === 'active' && !hasActiveTrip)
+        .filter(({ vehicle, availability }) => vehicle.status === 'active' && availability.isAvailable)
         .map(({ vehicle }) => vehicle);
     }
 

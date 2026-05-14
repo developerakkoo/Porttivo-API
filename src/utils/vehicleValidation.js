@@ -2,6 +2,12 @@ const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
 const { TRIP_STATUS } = require('./tripState');
 
+const BUSY_TRIP_STATUSES = [
+  TRIP_STATUS.ACCEPTED,
+  TRIP_STATUS.PLANNED,
+  TRIP_STATUS.ACTIVE,
+];
+
 /** Indian vehicle registration (standard): 2 letters + 2 digits + 2 letters + 4 digits (10 chars), e.g. MH12AB3434 */
 const INDIAN_VEHICLE_REGISTRATION_RE = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
 
@@ -109,13 +115,28 @@ const getQueuedTripsCount = async (vehicleSelector) => {
  */
 const getVehicleAvailabilityState = async (vehicleId) => {
   try {
+    const vehicle = await Vehicle.findById(vehicleId).select('isBusy status');
+    if (!vehicle) {
+      return {
+        state: 'UNKNOWN',
+        hasActiveTrip: false,
+        hasOccupiedTrip: false,
+        queuedTripsCount: 0,
+        hasTripHistory: false,
+        isBusy: false,
+        isAvailable: false,
+      };
+    }
+
     const hasActiveTrip = await checkVehicleHasActiveTrip(vehicleId);
+    const hasOccupiedTrip = await checkVehicleHasAssignedTrip(vehicleId);
     const queuedTripsCount = await getQueuedTripsCount(vehicleId);
     const hasTripHistory = await checkVehicleHasTripHistory(vehicleId);
+    const isBusy = !!vehicle.isBusy || hasOccupiedTrip || hasActiveTrip;
 
     let state = 'AVAILABLE';
-    if (hasActiveTrip) {
-      state = 'ACTIVE';
+    if (isBusy) {
+      state = 'BUSY';
     } else if (queuedTripsCount > 0) {
       state = 'QUEUED';
     }
@@ -123,19 +144,48 @@ const getVehicleAvailabilityState = async (vehicleId) => {
     return {
       state,
       hasActiveTrip,
+      hasOccupiedTrip,
       queuedTripsCount,
       hasTripHistory,
-      isAvailable: !hasActiveTrip,
+      isBusy,
+      isAvailable: !isBusy,
     };
   } catch (error) {
     console.error('Error getting vehicle availability:', error);
     return {
       state: 'UNKNOWN',
       hasActiveTrip: false,
+      hasOccupiedTrip: false,
       queuedTripsCount: 0,
       hasTripHistory: false,
+      isBusy: false,
       isAvailable: false,
     };
+  }
+};
+
+/**
+ * Check if vehicle has an assigned trip that is not yet completed
+ * @param {String|Object} vehicleSelector - Vehicle ID or query selector
+ * @param {String|null} excludeTripId - Trip ID to exclude from the check
+ * @returns {Promise<Boolean>} True if vehicle has an assigned trip
+ */
+const checkVehicleHasAssignedTrip = async (vehicleSelector, excludeTripId = null) => {
+  try {
+    const query =
+      vehicleSelector && typeof vehicleSelector === 'object' && !Array.isArray(vehicleSelector)
+        ? { ...vehicleSelector, status: { $in: BUSY_TRIP_STATUSES } }
+        : { vehicleId: vehicleSelector, status: { $in: BUSY_TRIP_STATUSES } };
+
+    if (excludeTripId) {
+      query._id = { $ne: excludeTripId };
+    }
+
+    const assignedTrip = await Trip.findOne(query);
+    return !!assignedTrip;
+  } catch (error) {
+    console.error('Error checking assigned trip:', error);
+    return false;
   }
 };
 
@@ -163,8 +213,13 @@ const validateVehicleForTrip = async (vehicleId) => {
 
     const availability = await getVehicleAvailabilityState(vehicleId);
 
-    // Vehicle can have multiple queued trips, but only one active trip
-    // So it's always valid to create a new trip (it will be queued)
+    if (availability.isBusy) {
+      return {
+        valid: false,
+        message: 'Vehicle is already assigned to another trip. Please complete or cancel the current trip first.',
+      };
+    }
+
     return {
       valid: true,
       availability,
@@ -237,6 +292,7 @@ module.exports = {
   isValidIndianVehicleRegistration,
   validateIndianVehicleRegistrationFormat,
   checkVehicleHasActiveTrip,
+  checkVehicleHasAssignedTrip,
   checkVehicleHasTripHistory,
   getQueuedTripsCount,
   getVehicleAvailabilityState,

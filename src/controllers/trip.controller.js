@@ -6,10 +6,22 @@ const Transporter = require('../models/Transporter');
 const Notification = require('../models/Notification');
 const SystemConfig = require('../models/SystemConfig');
 const {
-  checkVehicleHasActiveTrip,
+  checkVehicleHasAssignedTrip,
   normalizeIndianVehicleRegistration,
   isValidIndianVehicleRegistration,
 } = require('../utils/vehicleValidation');
+const {
+  markTripResourcesBusy,
+  releaseTripResources,
+  syncTripResourceBusyState,
+} = require('../utils/tripResourceState');
+const { TRIP_STATUS, BOOKING_STATUS, TRIP_STATUS_VALUES, TRIP_TYPE_VALUES } = require('../utils/tripState');
+
+const BUSY_TRIP_STATUSES = [
+  TRIP_STATUS.ACCEPTED,
+  TRIP_STATUS.PLANNED,
+  TRIP_STATUS.ACTIVE,
+];
 const {
   emitTripCreated,
   emitTripCreatedForCustomer,
@@ -36,7 +48,6 @@ const {
   sendBookingRequestReceivedTemplate,
 } = require('../services/wati.service');
 const { syncTripLocationsToSavedCatalog } = require('../services/savedLocation.service');
-const { TRIP_STATUS, BOOKING_STATUS, TRIP_STATUS_VALUES, TRIP_TYPE_VALUES } = require('../utils/tripState');
 const { buildVisibleTrip } = require('../services/tripVisibility.service');
 
 const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
@@ -145,9 +156,16 @@ const validateVehicleIsFreeForTrip = async (vehicleId, excludeTripId = null) => 
     return null;
   }
 
-  const hasActiveTrip = await checkVehicleHasActiveTrip(vehicleId, excludeTripId);
-  if (hasActiveTrip) {
-    return 'Vehicle is already assigned to an active trip. Please close or cancel the active trip first.';
+  const hasOccupiedTrip = await checkVehicleHasAssignedTrip(vehicleId, excludeTripId);
+  if (hasOccupiedTrip) {
+    return 'Vehicle is already assigned to another trip. Please complete or cancel the current trip first.';
+  }
+
+  if (!excludeTripId) {
+    const vehicle = await Vehicle.findById(vehicleId).select('isBusy');
+    if (vehicle?.isBusy) {
+      return 'Vehicle is already assigned to another trip. Please complete or cancel the current trip first.';
+    }
   }
 
   return null;
@@ -172,6 +190,43 @@ const validateOwnedVehicleAccess = async (vehicleId, transporterId) => {
   }
 
   return { vehicle };
+};
+
+const validateDriverAccess = async (driverId, transporterId, excludeTripId = null) => {
+  const driver = await Driver.findById(driverId);
+  if (!driver) {
+    return { error: 'Driver not found', statusCode: 404 };
+  }
+
+  if (driver.transporterId?.toString() !== transporterId) {
+    return { error: 'Driver does not belong to your transporter account', statusCode: 403 };
+  }
+
+  if (driver.status !== 'active') {
+    return {
+      error: 'Only active drivers can receive trip assignments. This driver is currently inactive or pending.',
+      statusCode: 400,
+    };
+  }
+
+  const conflictQuery = {
+    driverId,
+    status: { $in: BUSY_TRIP_STATUSES },
+  };
+  if (excludeTripId) {
+    conflictQuery._id = { $ne: excludeTripId };
+  }
+
+  const conflictingTrip = await Trip.findOne(conflictQuery);
+
+  if (conflictingTrip || (!excludeTripId && driver.isBusy)) {
+    return {
+      error: 'Driver is already assigned to another trip. Please complete or cancel the current trip first.',
+      statusCode: 400,
+    };
+  }
+
+  return { driver };
 };
 
 const normalizeLocation = (location) => {
@@ -591,15 +646,12 @@ const createTrip = async (req, res, next) => {
             message: `Assignment ${i + 1}: ${activeTripError}`,
           });
         }
-        const driver = await Driver.findById(did);
-        if (!driver) {
-          return res.status(404).json({ success: false, message: `Assignment ${i + 1}: Driver not found` });
-        }
-        if (driver.transporterId?.toString() !== transporterId) {
-          return res.status(403).json({ success: false, message: `Assignment ${i + 1}: Driver does not belong to your transporter` });
-        }
-        if (driver.status !== 'active') {
-          return res.status(400).json({ success: false, message: `Assignment ${i + 1}: Driver must be active` });
+        const driverValidation = await validateDriverAccess(did, transporterId);
+        if (driverValidation.error) {
+          return res.status(driverValidation.statusCode).json({
+            success: false,
+            message: `Assignment ${i + 1}: ${driverValidation.error}`,
+          });
         }
         assignments.push({ containerNumber: cn, vehicleId: vid, driverId: did });
       }
@@ -642,17 +694,11 @@ const createTrip = async (req, res, next) => {
       }
 
       if (driverId) {
-        const driver = await Driver.findById(driverId);
-        if (!driver) {
-          return res.status(404).json({ success: false, message: 'Driver not found' });
-        }
-        if (driver.transporterId?.toString() !== transporterId) {
-          return res.status(403).json({ success: false, message: 'Driver does not belong to your transporter account' });
-        }
-        if (driver.status !== 'active') {
-          return res.status(400).json({
+        const driverValidation = await validateDriverAccess(driverId, transporterId);
+        if (driverValidation.error) {
+          return res.status(driverValidation.statusCode).json({
             success: false,
-            message: 'Only active drivers can receive trip assignments. This driver is currently inactive or pending.',
+            message: driverValidation.error,
           });
         }
         tripPayload.driverId = driverId;
@@ -688,6 +734,7 @@ const createTrip = async (req, res, next) => {
     // Create trip
     const trip = new Trip(tripPayload);
     await trip.save();
+    await markTripResourcesBusy(trip);
     await syncTripLocationsToSavedCatalog({
       trip,
       actor: {
@@ -1001,6 +1048,8 @@ const updateTrip = async (req, res, next) => {
       });
     }
 
+    const previousTripState = trip.toObject({ depopulate: true });
+
     // Only allow full updates (vehicle, driver, etc) if trip is PLANNED or ACCEPTED (customer-booked)
     // For containerNumber only, allow PLANNED, ACTIVE, or ACCEPTED
     const isContainerOnlyUpdate = containerNumber !== undefined &&
@@ -1074,25 +1123,11 @@ const updateTrip = async (req, res, next) => {
       if (driverId === null) {
         trip.driverId = null;
       } else {
-        const driver = await Driver.findById(driverId);
-        if (!driver) {
-          return res.status(404).json({
+        const driverValidation = await validateDriverAccess(driverId, transporterId, trip._id.toString());
+        if (driverValidation.error) {
+          return res.status(driverValidation.statusCode).json({
             success: false,
-            message: 'Driver not found',
-          });
-        }
-
-        if (driver.transporterId?.toString() !== transporterId) {
-          return res.status(403).json({
-            success: false,
-            message: 'Driver does not belong to your transporter account',
-          });
-        }
-
-        if (driver.status !== 'active') {
-          return res.status(400).json({
-            success: false,
-            message: 'Only active drivers can receive trip assignments. This driver is currently inactive or pending.',
+            message: driverValidation.error,
           });
         }
 
@@ -1138,6 +1173,7 @@ const updateTrip = async (req, res, next) => {
 
     setAuditActor(trip, req.user);
     await trip.save();
+    await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
     if (pickupLocation !== undefined || dropLocation !== undefined) {
       await syncTripLocationsToSavedCatalog({
         trip,
@@ -1271,8 +1307,14 @@ const cancelTrip = async (req, res, next) => {
       trip.driverId = undefined;
       trip.driverAcceptedAt = undefined;
       trip.queuedAt = null;
+      if (Array.isArray(trip.assignments) && trip.assignments.length > 0) {
+        trip.assignments = trip.assignments.filter(
+          (assignment) => assignment?.driverId?.toString() !== req.user.id
+        );
+      }
       setAuditActor(trip, req.user);
       await trip.save();
+      await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
       emitTripDriverAssigned(trip, { unassigned: true });
       return res.json({
         success: true,
@@ -1286,6 +1328,7 @@ const cancelTrip = async (req, res, next) => {
     trip.closedAt = new Date();
     setAuditActor(trip, req.user);
     await trip.save();
+    await releaseTripResources(trip);
 
     emitTripCancelled(trip);
 
@@ -2259,6 +2302,8 @@ const assignTripVehicle = async (req, res, next) => {
       });
     }
 
+    const previousTripState = trip.toObject({ depopulate: true });
+
     const assignmentError = ensureTripAssignableByTransporter(trip, transporterId);
     if (assignmentError) {
       return res.status(400).json({
@@ -2292,6 +2337,7 @@ const assignTripVehicle = async (req, res, next) => {
     finalizeAssignmentState(trip);
     setAuditActor(trip, req.user);
     await trip.save();
+    await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
     await populateTripReferences(trip);
 
     await emitAssignmentEvents(
@@ -2347,6 +2393,8 @@ const assignTripDriver = async (req, res, next) => {
       });
     }
 
+    const previousTripState = trip.toObject({ depopulate: true });
+
     const assignmentError = ensureTripAssignableByTransporter(trip, transporterId);
     if (assignmentError) {
       return res.status(400).json({
@@ -2355,25 +2403,11 @@ const assignTripDriver = async (req, res, next) => {
       });
     }
 
-    const driver = await Driver.findById(driverId);
-    if (!driver) {
-      return res.status(404).json({
+    const driverValidation = await validateDriverAccess(driverId, transporterId, req.params.id);
+    if (driverValidation.error) {
+      return res.status(driverValidation.statusCode).json({
         success: false,
-        message: 'Driver not found',
-      });
-    }
-
-    if (driver.transporterId?.toString() !== transporterId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Driver does not belong to your transporter account',
-      });
-    }
-
-    if (driver.status !== 'active') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only active drivers can receive trip assignments. This driver is currently inactive or pending.',
+        message: driverValidation.error,
       });
     }
 
@@ -2381,6 +2415,7 @@ const assignTripDriver = async (req, res, next) => {
     finalizeAssignmentState(trip);
     setAuditActor(trip, req.user);
     await trip.save();
+    await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
     await populateTripReferences(trip);
 
     await emitAssignmentEvents(
@@ -2444,6 +2479,8 @@ const assignCustomerTrip = async (req, res, next) => {
       });
     }
 
+    const previousTripState = trip.toObject({ depopulate: true });
+
     if (trip.bookedBy !== 'CUSTOMER') {
       return res.status(400).json({
         success: false,
@@ -2485,18 +2522,11 @@ const assignCustomerTrip = async (req, res, next) => {
       normalizedHiredVehicle = normalizeHiredVehicle(hiredVehicle);
     }
 
-    const driver = await Driver.findById(driverId);
-    if (!driver) {
-      return res.status(404).json({
+    const driverValidation = await validateDriverAccess(driverId, transporterId, trip._id.toString());
+    if (driverValidation.error) {
+      return res.status(driverValidation.statusCode).json({
         success: false,
-        message: 'Driver not found',
-      });
-    }
-
-    if (driver.transporterId?.toString() !== transporterId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Driver does not belong to your transporter account',
+        message: driverValidation.error,
       });
     }
 
@@ -2507,6 +2537,7 @@ const assignCustomerTrip = async (req, res, next) => {
     finalizeAssignmentState(trip);
     setAuditActor(trip, req.user);
     await trip.save();
+    await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
 
     await populateTripReferences(trip);
 

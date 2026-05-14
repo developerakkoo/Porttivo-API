@@ -278,7 +278,7 @@ const createDriver = async (req, res, next) => {
 
     // Validate status if provided
     const validStatuses = ['pending', 'active', 'inactive', 'blocked'];
-    const driverStatus = status || 'pending';
+    const driverStatus = status || 'active';
     if (!validStatuses.includes(driverStatus)) {
       return res.status(400).json({
         success: false,

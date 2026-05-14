@@ -8,6 +8,7 @@ const connectDB = require('./src/config/database');
 const { port } = require('./src/config/env');
 const { errorHandler, notFound } = require('./src/middleware/error.middleware');
 const { auditRequest } = require('./src/middleware/audit.middleware');
+const { logApiRequest } = require('./src/middleware/requestLog.middleware');
 const { initializeSocketIO } = require('./src/services/socket.service');
 
 // Import routes
@@ -64,6 +65,7 @@ app.set('views', path.join(__dirname, 'src/views'));
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/api', logApiRequest);
 
 // Audit middleware for /api routes (logs mutating ops when req.user exists)
 app.use('/api', auditRequest);

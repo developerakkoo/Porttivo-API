@@ -43,6 +43,10 @@ const vehicleSchema = new mongoose.Schema(
       enum: ['active', 'inactive'],
       default: 'active',
     },
+    isBusy: {
+      type: Boolean,
+      default: false,
+    },
     vehicleType: {
       type: String,
       trim: true,

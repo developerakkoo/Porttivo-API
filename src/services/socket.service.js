@@ -72,6 +72,36 @@ function emitMarketplaceChatError(socket, code, message) {
   socket.emit('error', { code, message })
 }
 
+const safeSocketMeta = socket => {
+  const transport = socket.conn?.transport?.name || null
+  const xf = socket.handshake.headers['x-forwarded-for']
+  const clientIp =
+    (typeof xf === 'string' && xf.split(',')[0]?.trim()) ||
+    socket.handshake.address ||
+    null
+  const ua = socket.handshake.headers['user-agent']
+
+  return {
+    socketId: socket.id,
+    userType: socket.user?.userType || null,
+    userId: socket.user?.id || null,
+    transporterScopeId: socket.user ? getTransporterScopeId(socket.user) : null,
+    transport,
+    clientIp,
+    userAgent: ua ? String(ua).slice(0, 160) : null
+  }
+}
+
+const logSocketEvent = (event, socket, details = {}, level = 'log') => {
+  const payload = {
+    event,
+    ...safeSocketMeta(socket),
+    ...details
+  }
+  const logger = console[level] || console.log
+  logger('[Socket]', JSON.stringify(payload))
+}
+
 /**
  * Structured logs for transporter / company-user socket lifecycle (debugging connectivity).
  */
@@ -110,37 +140,48 @@ const emitToTripAudience = (eventName, payload, options = {}) => {
   }
 
   const trip = payload.trip
+  const recipientRooms = []
 
   if (trip.transporterId) {
-    io.to(`transporter:${trip.transporterId._id || trip.transporterId}`).emit(
-      eventName,
-      payload
-    )
+    const room = `transporter:${trip.transporterId._id || trip.transporterId}`
+    recipientRooms.push(room)
+    io.to(room).emit(eventName, payload)
   }
 
   if (trip.driverId) {
-    io.to(`driver:${trip.driverId._id || trip.driverId}`).emit(
-      eventName,
-      payload
-    )
+    const room = `driver:${trip.driverId._id || trip.driverId}`
+    recipientRooms.push(room)
+    io.to(room).emit(eventName, payload)
   }
 
   if (trip.customerId && !options.excludeCustomer) {
-    io.to(`customer:${trip.customerId._id || trip.customerId}`).emit(
-      eventName,
-      payload
-    )
+    const room = `customer:${trip.customerId._id || trip.customerId}`
+    recipientRooms.push(room)
+    io.to(room).emit(eventName, payload)
   }
 
   const vehicleRoom = getTripVehicleRoom(trip)
   if (vehicleRoom) {
+    recipientRooms.push(vehicleRoom)
     io.to(vehicleRoom).emit(eventName, payload)
   }
 
-  io.to(`trip:${trip._id || trip.id}`).emit(eventName, payload)
+  const tripRoom = `trip:${trip._id || trip.id}`
+  recipientRooms.push(tripRoom)
+  io.to(tripRoom).emit(eventName, payload)
 
   // Admin receives all trip events
+  recipientRooms.push('admin:all')
   io.to('admin:all').emit(eventName, payload)
+
+  console.log(
+    '[Socket/broadcast]',
+    JSON.stringify({
+      event: eventName,
+      tripId: trip._id || trip.id,
+      recipients: recipientRooms
+    })
+  )
 }
 
 /**
@@ -166,6 +207,18 @@ const initializeSocketIO = httpServer => {
         socket.handshake.headers.authorization?.replace('Bearer ', '')
 
       if (!token) {
+        console.warn(
+          '[Socket/auth]',
+          JSON.stringify({
+            event: 'authentication_failed',
+            reason: 'no_token',
+            socketId: socket.id,
+            clientIp:
+              socket.handshake.address ||
+              socket.handshake.headers['x-forwarded-for'] ||
+              null
+          })
+        )
         return next(new Error('Authentication error: No token provided'))
       }
 
@@ -187,10 +240,31 @@ const initializeSocketIO = httpServer => {
         }
 
         if (!user) {
+          console.warn(
+            '[Socket/auth]',
+            JSON.stringify({
+              event: 'authentication_failed',
+              reason: 'user_not_found',
+              socketId: socket.id,
+              userType: decoded.userType,
+              userId: decoded.userId
+            })
+          )
           return next(new Error('Authentication error: User not found'))
         }
 
         if (user.status === 'blocked' || user.status === 'inactive') {
+          console.warn(
+            '[Socket/auth]',
+            JSON.stringify({
+              event: 'authentication_failed',
+              reason: 'account_inactive',
+              socketId: socket.id,
+              userType: decoded.userType,
+              userId: decoded.userId,
+              status: user.status
+            })
+          )
           return next(
             new Error('Authentication error: Account blocked or inactive')
           )
@@ -216,9 +290,27 @@ const initializeSocketIO = httpServer => {
 
         next()
       } catch (tokenError) {
+        console.warn(
+          '[Socket/auth]',
+          JSON.stringify({
+            event: 'authentication_failed',
+            reason: 'invalid_token',
+            socketId: socket.id,
+            message: tokenError.message
+          })
+        )
         return next(new Error(`Authentication error: ${tokenError.message}`))
       }
     } catch (error) {
+      console.error(
+        '[Socket/auth]',
+        JSON.stringify({
+          event: 'authentication_failed',
+          reason: 'unexpected_error',
+          socketId: socket.id,
+          message: error.message
+        })
+      )
       next(new Error(`Authentication error: ${error.message}`))
     }
   })
@@ -228,6 +320,9 @@ const initializeSocketIO = httpServer => {
     console.log(
       `Socket connected: ${socket.id} (${socket.user.userType}: ${socket.user.id})`
     )
+    logSocketEvent('connected', socket, {
+      rooms: Array.from(socket.rooms || [])
+    })
 
     // Join user-specific rooms
     if (socket.user.userType === 'transporter') {
@@ -237,6 +332,10 @@ const initializeSocketIO = httpServer => {
       if (transporterScopeId) {
         io.to(`transporter:${transporterScopeId}`).emit('user:online', {
           userId: transporterScopeId
+        })
+        logSocketEvent('user:online', socket, {
+          room: `transporter:${transporterScopeId}`,
+          result: 'emitted'
         })
       }
     } else if (
@@ -266,6 +365,10 @@ const initializeSocketIO = httpServer => {
       if (socket.user.userType === 'transporter' && socket.user.id === id) {
         socket.join(`transporter:${id}`)
         console.log(`Socket ${socket.id} joined transporter:${id}`)
+        logSocketEvent('join:transporter', socket, {
+          room: `transporter:${id}`,
+          result: 'joined'
+        })
       } else if (
         socket.user.userType === 'company-user' &&
         socket.user.transporterId === id
@@ -274,6 +377,16 @@ const initializeSocketIO = httpServer => {
         console.log(
           `Socket ${socket.id} joined transporter:${id} (company-user)`
         )
+        logSocketEvent('join:transporter', socket, {
+          room: `transporter:${id}`,
+          result: 'joined',
+          scope: 'company-user'
+        })
+      } else {
+        logSocketEvent('join:transporter', socket, {
+          room: `transporter:${id}`,
+          result: 'denied'
+        }, 'warn')
       }
     })
 
@@ -281,6 +394,15 @@ const initializeSocketIO = httpServer => {
       if (socket.user.userType === 'driver' && socket.user.id === driverId) {
         socket.join(`driver:${driverId}`)
         console.log(`Socket ${socket.id} joined driver:${driverId}`)
+        logSocketEvent('join:driver', socket, {
+          room: `driver:${driverId}`,
+          result: 'joined'
+        })
+      } else {
+        logSocketEvent('join:driver', socket, {
+          room: `driver:${driverId}`,
+          result: 'denied'
+        }, 'warn')
       }
     })
 
@@ -291,6 +413,15 @@ const initializeSocketIO = httpServer => {
       ) {
         socket.join(`customer:${customerId}`)
         console.log(`Socket ${socket.id} joined customer:${customerId}`)
+        logSocketEvent('join:customer', socket, {
+          room: `customer:${customerId}`,
+          result: 'joined'
+        })
+      } else {
+        logSocketEvent('join:customer', socket, {
+          room: `customer:${customerId}`,
+          result: 'denied'
+        }, 'warn')
       }
     })
 
@@ -298,6 +429,7 @@ const initializeSocketIO = httpServer => {
       try {
         const vid = vehicleId?.toString?.() ?? vehicleId
         if (!vid) return
+        logSocketEvent('join:vehicle', socket, { vehicleId: vid, phase: 'attempt' })
 
         const vehicle = await Vehicle.findById(vid)
         if (!vehicle) {
@@ -341,8 +473,16 @@ const initializeSocketIO = httpServer => {
 
         socket.join(`vehicle:${vid}`)
         console.log(`Socket ${socket.id} joined vehicle:${vid}`)
+        logSocketEvent('join:vehicle', socket, {
+          vehicleId: vid,
+          result: 'joined'
+        })
       } catch (err) {
         console.error('join:vehicle error', err)
+        logSocketEvent('join:vehicle', socket, {
+          result: 'error',
+          message: err.message
+        }, 'error')
       }
     })
 
@@ -350,6 +490,7 @@ const initializeSocketIO = httpServer => {
       try {
         const tid = tripId?.toString?.() ?? tripId
         if (!tid) return
+        logSocketEvent('join:trip', socket, { tripId: tid, phase: 'attempt' })
 
         const trip = await Trip.findById(tid).select(
           'transporterId driverId customerId bookingId isFromBooking'
@@ -363,6 +504,11 @@ const initializeSocketIO = httpServer => {
         if (ut === 'admin') {
           socket.join(`trip:${tid}`)
           console.log(`Socket ${socket.id} joined trip:${tid} (admin)`)
+          logSocketEvent('join:trip', socket, {
+            tripId: tid,
+            result: 'joined',
+            scope: 'admin'
+          })
           return
         }
 
@@ -370,6 +516,11 @@ const initializeSocketIO = httpServer => {
           if (trip.driverId && trip.driverId.toString() === socket.user.id) {
             socket.join(`trip:${tid}`)
             console.log(`Socket ${socket.id} joined trip:${tid} (driver)`)
+            logSocketEvent('join:trip', socket, {
+              tripId: tid,
+              result: 'joined',
+              scope: 'driver'
+            })
           } else {
             console.warn(
               `Socket ${socket.id} join:trip denied — not assigned driver`
@@ -385,6 +536,11 @@ const initializeSocketIO = httpServer => {
           ) {
             socket.join(`trip:${tid}`)
             console.log(`Socket ${socket.id} joined trip:${tid} (customer)`)
+            logSocketEvent('join:trip', socket, {
+              tripId: tid,
+              result: 'joined',
+              scope: 'customer'
+            })
           }
           return
         }
@@ -393,6 +549,10 @@ const initializeSocketIO = httpServer => {
           if (await canTransporterPartyViewTripExecution(socket.user, trip)) {
             socket.join(`trip:${tid}`)
             console.log(`Socket ${socket.id} joined trip:${tid}`)
+            logSocketEvent('join:trip', socket, {
+              tripId: tid,
+              result: 'joined'
+            })
           } else {
             console.warn(
               `Socket ${socket.id} join:trip denied — not a party on this trip`
@@ -404,6 +564,10 @@ const initializeSocketIO = httpServer => {
         console.warn(`Socket ${socket.id} join:trip denied — unsupported user type`)
       } catch (err) {
         console.error('join:trip error', err)
+        logSocketEvent('join:trip', socket, {
+          result: 'error',
+          message: err.message
+        }, 'error')
       }
     })
 
@@ -411,6 +575,7 @@ const initializeSocketIO = httpServer => {
     socket.on('trip:start', async data => {
       try {
         const { tripId } = data
+        logSocketEvent('trip:start', socket, { tripId, phase: 'attempt' })
 
         if (!tripId) {
           return socket.emit('error', { message: 'Trip ID is required' })
@@ -472,6 +637,12 @@ const initializeSocketIO = httpServer => {
         // Update trip status
         trip.status = TRIP_STATUS.ACTIVE
         await trip.save()
+        logSocketEvent('trip:start', socket, {
+          tripId: trip._id.toString(),
+          tripCode: trip.tripId || null,
+          result: 'success',
+          status: trip.status
+        })
 
         console.log(
           '[Trip/start]',
@@ -508,6 +679,10 @@ const initializeSocketIO = httpServer => {
         emitToTripAudience('trip:started', startedPayload)
       } catch (error) {
         console.error('Error handling trip:start:', error)
+        logSocketEvent('trip:start', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
         socket.emit('error', {
           message: error.message || 'Failed to start trip'
         })
@@ -518,6 +693,11 @@ const initializeSocketIO = httpServer => {
     socket.on('trip:milestone:update', async data => {
       try {
         const { tripId, milestoneNumber, latitude, longitude, photo } = data
+        logSocketEvent('trip:milestone:update', socket, {
+          tripId,
+          milestoneNumber,
+          phase: 'attempt'
+        })
 
         if (
           !tripId ||
@@ -635,6 +815,13 @@ const initializeSocketIO = httpServer => {
             backendMeaning
           }
         })
+        logSocketEvent('trip:milestone:update', socket, {
+          tripId: trip._id.toString(),
+          milestoneNumber: milestoneNum,
+          milestoneType,
+          backendMeaning,
+          result: 'success'
+        })
 
         // Get current milestone for next milestone
         const currentMilestone = trip.getCurrentMilestone()
@@ -657,6 +844,10 @@ const initializeSocketIO = httpServer => {
         emitToTripAudience('trip:milestone:updated', milestonePayload)
       } catch (error) {
         console.error('Error handling trip:milestone:update:', error)
+        logSocketEvent('trip:milestone:update', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
         socket.emit('error', {
           message: error.message || 'Failed to update milestone'
         })
@@ -674,6 +865,10 @@ const initializeSocketIO = httpServer => {
           speed = null,
           heading = null
         } = data
+        logSocketEvent('driver:location:update', socket, {
+          tripId,
+          phase: 'attempt'
+        })
 
         if (!tripId || latitude === undefined || longitude === undefined) {
           return socket.emit('error', {
@@ -740,6 +935,12 @@ const initializeSocketIO = httpServer => {
             heading
           }
         })
+        logSocketEvent('driver:location:update', socket, {
+          tripId: trip._id.toString(),
+          result: 'success',
+          latitude: lat,
+          longitude: lng
+        })
 
         const payload = {
           tripId: trip._id.toString(),
@@ -755,6 +956,10 @@ const initializeSocketIO = httpServer => {
         emitToTripAudience('driver:location:updated', payload)
       } catch (error) {
         console.error('Error handling driver:location:update:', error)
+        logSocketEvent('driver:location:update', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
         socket.emit('error', {
           message: error.message || 'Failed to update location'
         })
@@ -765,6 +970,7 @@ const initializeSocketIO = httpServer => {
     socket.on('trip:complete', async data => {
       try {
         const { tripId } = data
+        logSocketEvent('trip:complete', socket, { tripId, phase: 'attempt' })
 
         if (!tripId) {
           return socket.emit('error', { message: 'Trip ID is required' })
@@ -819,6 +1025,12 @@ const initializeSocketIO = httpServer => {
           userType: toAuditUserType(socket.user.userType)
         }
         await trip.save()
+        logSocketEvent('trip:complete', socket, {
+          tripId: trip._id.toString(),
+          result: 'success',
+          status: trip.status,
+          podDueAt: trip.podDueAt || null
+        })
 
         // Broadcast pod pending event (transporter, driver, customer, vehicle, trip room, admin)
         emitToTripAudience('trip:pod:pending', { trip: trip.toObject() })
@@ -838,6 +1050,10 @@ const initializeSocketIO = httpServer => {
         }
       } catch (error) {
         console.error('Error handling trip:complete:', error)
+        logSocketEvent('trip:complete', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
         socket.emit('error', {
           message: error.message || 'Failed to complete trip'
         })
@@ -846,6 +1062,10 @@ const initializeSocketIO = httpServer => {
     // ================= CHAT JOIN =================
     socket.on('chat:join', async ({ bookingId }) => {
       try {
+        logSocketEvent('chat:join', socket, {
+          bookingId,
+          phase: 'attempt'
+        })
         if (!bookingId) {
           return socket.emit('error', { message: 'bookingId required' })
         }
@@ -894,9 +1114,17 @@ const initializeSocketIO = httpServer => {
         )
 
         console.log(`Socket ${socket.id} joined chat:${bookingId}`)
+        logSocketEvent('chat:join', socket, {
+          bookingId,
+          result: 'joined'
+        })
 
         socket.emit('chat:joined', { bookingId })
       } catch (err) {
+        logSocketEvent('chat:join', socket, {
+          result: 'error',
+          message: err.message
+        }, 'error')
         socket.emit('error', { message: err.message })
       }
     })
@@ -911,6 +1139,10 @@ const initializeSocketIO = httpServer => {
           proposedPrice,
           attachments: attachmentsRaw
         } = data || {}
+        logSocketEvent('chat:message:send', socket, {
+          bookingId: data?.bookingId || null,
+          phase: 'attempt'
+        })
 
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
@@ -1016,6 +1248,13 @@ const initializeSocketIO = httpServer => {
           status: 'DELIVERED',
           attachments
         })
+        logSocketEvent('chat:message:send', socket, {
+          bookingId,
+          messageId: createdMsg._id?.toString?.() || null,
+          messageType: effectiveType,
+          attachmentsCount: attachments.length,
+          result: 'success'
+        })
 
         const populatedMessage = await TransporterMessage.findById(
           createdMsg._id
@@ -1055,6 +1294,10 @@ const initializeSocketIO = httpServer => {
           )
         }
       } catch (err) {
+        logSocketEvent('chat:message:send', socket, {
+          result: 'error',
+          message: err.message
+        }, 'error')
         socket.emit('error', { message: err.message })
       }
     })
@@ -1083,6 +1326,10 @@ const initializeSocketIO = httpServer => {
     // ================= MESSAGE READ =================
     socket.on('chat:message:read', async ({ messageId }) => {
       try {
+        logSocketEvent('chat:message:read', socket, {
+          messageId,
+          phase: 'attempt'
+        })
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
           return emitMarketplaceChatError(
@@ -1138,25 +1385,56 @@ const initializeSocketIO = httpServer => {
           readPayload
         )
         io.to(`transporter:${message.senderId}`).emit('message:read', readPayload)
+        logSocketEvent('chat:message:read', socket, {
+          messageId,
+          bookingId: message.bookingId?.toString?.() || null,
+          result: 'success'
+        })
       } catch (err) {
+        logSocketEvent('chat:message:read', socket, {
+          result: 'error',
+          message: err.message
+        }, 'error')
         socket.emit('error', { message: err.message })
       }
     })
 
     // ================= TYPING =================
     socket.on('chat:typing', ({ bookingId }) => {
-      if (!socket.rooms.has(`chat:${bookingId}`)) return
+      if (!socket.rooms.has(`chat:${bookingId}`)) {
+        logSocketEvent('chat:typing', socket, {
+          bookingId,
+          result: 'ignored',
+          reason: 'chat_not_joined'
+        })
+        return
+      }
       const actorId = getTransporterScopeId(socket.user)
-      if (!actorId) return
+      if (!actorId) {
+        logSocketEvent('chat:typing', socket, {
+          bookingId,
+          result: 'ignored',
+          reason: 'no_actor'
+        })
+        return
+      }
 
       socket.to(`chat:${bookingId}`).emit('chat:typing', {
         senderId: actorId
+      })
+      logSocketEvent('chat:typing', socket, {
+        bookingId,
+        result: 'emitted'
       })
     })
 
     // Thread presence (peer opened / closed this chat screen)
     socket.on('chat:thread:join', async ({ bookingId }) => {
       try {
+        logSocketEvent('chat:thread:join', socket, {
+          bookingId,
+          phase: 'attempt'
+        })
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId) {
           return emitMarketplaceChatError(
@@ -1191,13 +1469,25 @@ const initializeSocketIO = httpServer => {
           userId: actorId,
           state: 'active'
         })
+        logSocketEvent('chat:thread:join', socket, {
+          bookingId,
+          result: 'emitted'
+        })
       } catch (e) {
+        logSocketEvent('chat:thread:join', socket, {
+          result: 'error',
+          message: e.message
+        }, 'error')
         socket.emit('error', { message: e.message })
       }
     })
 
     socket.on('chat:thread:leave', ({ bookingId }) => {
       try {
+        logSocketEvent('chat:thread:leave', socket, {
+          bookingId,
+          phase: 'attempt'
+        })
         const actorId = getTransporterScopeId(socket.user)
         if (!actorId || !bookingId) return
         if (!socket.rooms.has(`chat:${bookingId}`)) return
@@ -1206,7 +1496,15 @@ const initializeSocketIO = httpServer => {
           userId: actorId,
           state: 'away'
         })
+        logSocketEvent('chat:thread:leave', socket, {
+          bookingId,
+          result: 'emitted'
+        })
       } catch (e) {
+        logSocketEvent('chat:thread:leave', socket, {
+          result: 'error',
+          message: e.message
+        }, 'error')
         socket.emit('error', { message: e.message })
       }
     })
@@ -1218,11 +1516,18 @@ const initializeSocketIO = httpServer => {
       socket.to(`chat:${bookingId}`).emit('chat:user:left', {
         userId: actorId || socket.user.id
       })
+      logSocketEvent('chat:leave', socket, {
+        bookingId,
+        result: 'left'
+      })
     })
 
     socket.on('disconnecting', () => {
       const actorId = getTransporterScopeId(socket.user)
       if (!actorId) return
+      logSocketEvent('disconnecting', socket, {
+        rooms: Array.from(socket.rooms || [])
+      })
       for (const room of socket.rooms) {
         if (room.startsWith('chat:')) {
           const bookingId = room.slice('chat:'.length)
@@ -1238,6 +1543,9 @@ const initializeSocketIO = httpServer => {
     // Disconnection handler
     socket.on('disconnect', reason => {
       console.log(`Socket disconnected: ${socket.id} (${reason})`)
+      logSocketEvent('disconnect', socket, {
+        reason: reason || null
+      })
       logTransporterSocketLifecycle('disconnected', socket, {
         reason: reason || null
       })
@@ -1246,6 +1554,10 @@ const initializeSocketIO = httpServer => {
       if (transporterScopeId) {
         io.to(`transporter:${transporterScopeId}`).emit('user:offline', {
           userId: transporterScopeId
+        })
+        logSocketEvent('user:offline', socket, {
+          room: `transporter:${transporterScopeId}`,
+          result: 'emitted'
         })
       }
     })
@@ -1275,6 +1587,14 @@ const emitTripCreated = (transporterId, trip) => {
     io.to(`transporter:${transporterId}`).emit('trip:created', {
       trip: trip.toObject ? trip.toObject() : trip
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'trip:created',
+        recipient: `transporter:${transporterId}`,
+        tripId: trip?._id?.toString?.() || trip?.id || null
+      })
+    )
   }
 }
 
@@ -1288,6 +1608,14 @@ const emitTripCreatedForCustomer = (customerId, trip) => {
     io.to(`customer:${customerId}`).emit('trip:created', {
       trip: trip.toObject ? trip.toObject() : trip
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'trip:created',
+        recipient: `customer:${customerId}`,
+        tripId: trip?._id?.toString?.() || trip?.id || null
+      })
+    )
   }
 }
 
@@ -1311,10 +1639,26 @@ const emitBookingRejected = ({ trip, transporterId }) => {
         transporterId
       }
     )
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'trip:customer:rejected',
+        recipient: `customer:${tripData.customerId._id || tripData.customerId}`,
+        tripId: tripData._id || tripData.id || null
+      })
+    )
   }
   io.to(`transporter:${transporterId}`).emit('trip:customer:rejected', {
     tripId: tripData._id || tripData.id
   })
+  console.log(
+    '[Socket/broadcast]',
+    JSON.stringify({
+      event: 'trip:customer:rejected',
+      recipient: `transporter:${transporterId}`,
+      tripId: tripData._id || tripData.id || null
+    })
+  )
 }
 
 const emitTripVehicleAssigned = (trip, assignment) => {
@@ -1438,6 +1782,14 @@ const emitVehicleStatusUpdated = (vehicleId, transporterId, vehicle) => {
     io.to(`transporter:${transporterId}`).emit('vehicle:status:updated', {
       vehicle: vehicle.toObject ? vehicle.toObject() : vehicle
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'vehicle:status:updated',
+        recipients: [`vehicle:${vehicleId}`, `transporter:${transporterId}`],
+        vehicleId
+      })
+    )
   }
 }
 
@@ -1451,6 +1803,14 @@ const emitBookingRequested = (sellerId, booking) => {
     io.to(`transporter:${sellerId}`).emit('booking:requested', {
       booking: booking.toObject ? booking.toObject() : booking
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'booking:requested',
+        recipient: `transporter:${sellerId}`,
+        bookingId: booking?._id?.toString?.() || booking?.id || null
+      })
+    )
   }
 }
 
@@ -1466,6 +1826,14 @@ const emitPriceProposed = (recipientId, booking, message) => {
       booking: booking.toObject ? booking.toObject() : booking,
       message: message.toObject ? message.toObject() : message
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'booking:price-proposed',
+        recipient: `transporter:${recipientId}`,
+        bookingId: booking?._id?.toString?.() || booking?.id || null
+      })
+    )
   }
 }
 
@@ -1483,6 +1851,14 @@ const emitBookingConfirmed = (buyerId, sellerId, booking) => {
     io.to(`transporter:${sellerId}`).emit('booking:confirmed', {
       booking: booking.toObject ? booking.toObject() : booking
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'booking:confirmed',
+        recipients: [`transporter:${buyerId}`, `transporter:${sellerId}`],
+        bookingId: booking?._id?.toString?.() || booking?.id || null
+      })
+    )
   }
 }
 
@@ -1509,6 +1885,14 @@ const emitBookingCancelled = (sellerId, booking) => {
     io.to(`transporter:${sellerId}`).emit('booking:cancelled', {
       booking: booking.toObject ? booking.toObject() : booking
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'booking:cancelled',
+        recipient: `transporter:${sellerId}`,
+        bookingId: booking?._id?.toString?.() || booking?.id || null
+      })
+    )
   }
 }
 
@@ -1524,6 +1908,15 @@ const emitNewMessage = (recipientId, bookingId, message) => {
       bookingId,
       message: message.toObject ? message.toObject() : message
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'message:new',
+        recipient: `transporter:${recipientId}`,
+        bookingId,
+        messageId: message?._id?.toString?.() || message?.id || null
+      })
+    )
   }
 }
 
@@ -1539,6 +1932,14 @@ const emitMessageRead = (senderId, messageId, readAt) => {
       messageId,
       readAt
     })
+    console.log(
+      '[Socket/broadcast]',
+      JSON.stringify({
+        event: 'message:read',
+        recipient: `transporter:${senderId}`,
+        messageId
+      })
+    )
   }
 }
 
