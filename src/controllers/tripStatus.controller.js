@@ -5,6 +5,8 @@ const { checkVehicleHasActiveTrip } = require('../utils/vehicleValidation');
 const { getMilestoneTypeByNumber, getDriverLabel } = require('../utils/milestoneMapping');
 const {
   emitTripStarted,
+  emitTripPaused,
+  emitTripResumed,
   emitTripCompleted,
   emitTripPodPending,
   emitTripClosedWithoutPOD,
@@ -72,6 +74,24 @@ const triggerWatiTemplate = async (handler, contextLabel) => {
   } catch (error) {
     console.error(`WATI ${contextLabel} failed:`, error.message);
   }
+};
+
+const getTripControlAccessError = (trip, userId, userType, action) => {
+  if (userType === 'transporter') {
+    if (!trip.transporterId || trip.transporterId.toString() !== userId) {
+      return `Access denied. You do not have permission to ${action} this trip.`;
+    }
+    return null;
+  }
+
+  if (userType === 'driver') {
+    if (!trip.driverId || trip.driverId.toString() !== userId) {
+      return 'Access denied. This trip is not assigned to you.';
+    }
+    return null;
+  }
+
+  return `Access denied. Only transporters and drivers can ${action} trips.`;
 };
 
 /**
@@ -299,6 +319,170 @@ const startTrip = async (req, res, next) => {
         trackingConfig: {
           updateIntervalSeconds: TRACKING_UPDATE_INTERVAL_SECONDS,
         },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Pause trip
+ * PUT /api/trips/:id/pause
+ */
+const pauseTrip = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const userType = req.user.userType;
+
+    const trip = await Trip.findById(id).populate('vehicleId', 'vehicleNumber trailerType');
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found',
+      });
+    }
+
+    const accessError = getTripControlAccessError(trip, userId, userType, 'pause');
+    if (accessError) {
+      return res.status(403).json({
+        success: false,
+        message: accessError,
+      });
+    }
+
+    if (trip.status === TRIP_STATUS.PAUSED) {
+      return res.status(200).json({
+        success: true,
+        message: 'Trip is already paused',
+        data: trip,
+      });
+    }
+
+    if (trip.status !== TRIP_STATUS.ACTIVE) {
+      return res.status(400).json({
+        success: false,
+        message: `Trip can only be paused from ACTIVE status. Current status: ${trip.status}`,
+      });
+    }
+
+    trip.status = TRIP_STATUS.PAUSED;
+    trip.audit.updatedBy = {
+      userId,
+      userType: toAuditUserType(userType),
+    };
+    await trip.save();
+
+    await trip.populate('vehicleId', 'vehicleNumber trailerType');
+    await trip.populate('driverId', 'name mobile');
+    await trip.populate('transporterId', 'name company mobile');
+    await trip.populate('customerId', 'name mobile');
+
+    const currentMilestone = trip.getCurrentMilestone();
+    const milestoneLabel = currentMilestone ? getDriverLabel(currentMilestone.milestoneType) : null;
+
+    emitTripPaused(trip, currentMilestone ? {
+      milestoneNumber: currentMilestone.milestoneNumber,
+      milestoneType: currentMilestone.milestoneType,
+      label: milestoneLabel,
+    } : null);
+    emitTripUpdated(trip, { reason: 'trip_paused', changedFields: ['status'] });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Trip paused successfully',
+      data: {
+        ...trip.toObject(),
+        currentMilestone: currentMilestone
+          ? {
+              milestoneNumber: currentMilestone.milestoneNumber,
+              milestoneType: currentMilestone.milestoneType,
+              label: milestoneLabel,
+            }
+          : null,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Resume trip
+ * PUT /api/trips/:id/resume
+ */
+const resumeTrip = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    const userType = req.user.userType;
+
+    const trip = await Trip.findById(id).populate('vehicleId', 'vehicleNumber trailerType');
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found',
+      });
+    }
+
+    const accessError = getTripControlAccessError(trip, userId, userType, 'resume');
+    if (accessError) {
+      return res.status(403).json({
+        success: false,
+        message: accessError,
+      });
+    }
+
+    if (trip.status === TRIP_STATUS.ACTIVE) {
+      return res.status(200).json({
+        success: true,
+        message: 'Trip is already active',
+        data: trip,
+      });
+    }
+
+    if (trip.status !== TRIP_STATUS.PAUSED) {
+      return res.status(400).json({
+        success: false,
+        message: `Trip can only be resumed from PAUSED status. Current status: ${trip.status}`,
+      });
+    }
+
+    trip.status = TRIP_STATUS.ACTIVE;
+    trip.audit.updatedBy = {
+      userId,
+      userType: toAuditUserType(userType),
+    };
+    await trip.save();
+
+    await trip.populate('vehicleId', 'vehicleNumber trailerType');
+    await trip.populate('driverId', 'name mobile');
+    await trip.populate('transporterId', 'name company mobile');
+    await trip.populate('customerId', 'name mobile');
+
+    const currentMilestone = trip.getCurrentMilestone();
+    const milestoneLabel = currentMilestone ? getDriverLabel(currentMilestone.milestoneType) : null;
+
+    emitTripResumed(trip, currentMilestone ? {
+      milestoneNumber: currentMilestone.milestoneNumber,
+      milestoneType: currentMilestone.milestoneType,
+      label: milestoneLabel,
+    } : null);
+    emitTripUpdated(trip, { reason: 'trip_resumed', changedFields: ['status'] });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Trip resumed successfully',
+      data: {
+        ...trip.toObject(),
+        currentMilestone: currentMilestone
+          ? {
+              milestoneNumber: currentMilestone.milestoneNumber,
+              milestoneType: currentMilestone.milestoneType,
+              label: milestoneLabel,
+            }
+          : null,
       },
     });
   } catch (error) {
@@ -554,6 +738,8 @@ const closeTripWithoutPOD = async (req, res, next) => {
 module.exports = {
   acceptTripByDriver,
   startTrip,
+  pauseTrip,
+  resumeTrip,
   completeTrip,
   closeTripWithoutPOD,
 };

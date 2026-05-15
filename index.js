@@ -65,7 +65,7 @@ app.set('views', path.join(__dirname, 'src/views'));
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/api', logApiRequest);
+app.use(logApiRequest);
 
 // Audit middleware for /api routes (logs mutating ops when req.user exists)
 app.use('/api', auditRequest);

@@ -87,9 +87,13 @@ const updateMilestone = async (req, res, next) => {
 
     // Validate trip is ACTIVE
     if (trip.status !== TRIP_STATUS.ACTIVE) {
+      const statusMessage =
+        trip.status === TRIP_STATUS.PAUSED
+          ? 'Trip is paused. Resume the trip before updating milestones.'
+          : `Milestones can only be updated for ACTIVE trips. Current status: ${trip.status}`
       return res.status(400).json({
         success: false,
-        message: `Milestones can only be updated for ACTIVE trips. Current status: ${trip.status}`
+        message: statusMessage
       })
     }
 

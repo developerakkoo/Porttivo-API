@@ -21,6 +21,7 @@ const BUSY_TRIP_STATUSES = [
   TRIP_STATUS.ACCEPTED,
   TRIP_STATUS.PLANNED,
   TRIP_STATUS.ACTIVE,
+  TRIP_STATUS.PAUSED,
 ];
 const {
   emitTripCreated,
@@ -1056,13 +1057,25 @@ const updateTrip = async (req, res, next) => {
       vehicleId === undefined && hiredVehicle === undefined &&
       driverId === undefined && reference === undefined &&
       pickupLocation === undefined && dropLocation === undefined;
+    const isLocationOrContainerOnlyUpdate = (
+      (pickupLocation !== undefined || dropLocation !== undefined) &&
+      vehicleId === undefined &&
+      hiredVehicle === undefined &&
+      driverId === undefined &&
+      containerNumber === undefined &&
+      reference === undefined
+    );
 
     const canUpdateVehicleDriver = trip.status === TRIP_STATUS.PLANNED ||
       (trip.status === TRIP_STATUS.ACCEPTED && trip.bookedBy === 'CUSTOMER');
-    if (!isContainerOnlyUpdate && !canUpdateVehicleDriver) {
+    const canUpdateLocationAfterStart =
+      trip.status === TRIP_STATUS.ACTIVE &&
+      isLocationOrContainerOnlyUpdate;
+
+    if (!isContainerOnlyUpdate && !isLocationOrContainerOnlyUpdate && !canUpdateVehicleDriver && !canUpdateLocationAfterStart) {
       return res.status(400).json({
         success: false,
-        message: 'Trip can only be updated when status is PLANNED or ACCEPTED (customer-booked)',
+        message: 'Trip can only be updated when status is PLANNED, ACCEPTED (customer-booked), or ACTIVE for location updates',
       });
     }
 
@@ -1071,6 +1084,18 @@ const updateTrip = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: 'Container can only be updated when trip is PLANNED, ACTIVE, or ACCEPTED',
+      });
+    }
+
+    const canUpdateLocations = [
+      TRIP_STATUS.PLANNED,
+      TRIP_STATUS.ACTIVE,
+      TRIP_STATUS.ACCEPTED,
+    ].includes(trip.status);
+    if ((pickupLocation !== undefined || dropLocation !== undefined) && !canUpdateLocations) {
+      return res.status(400).json({
+        success: false,
+        message: 'Trip locations can only be updated when trip is PLANNED, ACTIVE, or ACCEPTED',
       });
     }
 
@@ -1272,13 +1297,13 @@ const cancelTrip = async (req, res, next) => {
       });
     }
 
-    const canCancelStatus = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE].includes(trip.status) ||
+    const canCancelStatus = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED].includes(trip.status) ||
       (trip.status === TRIP_STATUS.ACCEPTED && trip.bookedBy === 'CUSTOMER') ||
       trip.status === TRIP_STATUS.BOOKED;
     if (!canCancelStatus) {
       return res.status(400).json({
         success: false,
-        message: 'Trip can only be cancelled when status is BOOKED, PLANNED, ACCEPTED, or ACTIVE',
+        message: 'Trip can only be cancelled when status is BOOKED, PLANNED, ACCEPTED, ACTIVE, or PAUSED',
       });
     }
 
@@ -1296,10 +1321,10 @@ const cancelTrip = async (req, res, next) => {
           message: 'Drivers can only decline queued trips that are not yet started',
         });
       }
-    } else if (!isAdmin && trip.status === TRIP_STATUS.ACTIVE) {
+    } else if (!isAdmin && [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED].includes(trip.status)) {
       return res.status(400).json({
         success: false,
-        message: 'Only PLANNED or ACCEPTED trips can be cancelled by transporters',
+        message: 'Only PLANNED, ACCEPTED, ACTIVE, or PAUSED trips can be cancelled by transporters',
       });
     }
 
@@ -1450,7 +1475,7 @@ const getActiveTrips = async (req, res, next) => {
     const { transporterId: queryTransporterId } = req.query;
     
     // Build query - admins can see all or filter by transporterId
-    const query = { status: TRIP_STATUS.ACTIVE };
+    const query = { status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } };
     if (!isAdmin) {
       query.$and = [transporterPartyScopeCondition(transporterId)];
     } else if (queryTransporterId) {
@@ -1784,6 +1809,7 @@ const renderSharedTrip = async (req, res, next) => {
       [TRIP_STATUS.ACCEPTED]: 'Accepted',
       [TRIP_STATUS.PLANNED]: 'Planned',
       [TRIP_STATUS.ACTIVE]: 'Active',
+      [TRIP_STATUS.PAUSED]: 'Paused',
       [TRIP_STATUS.POD_PENDING]: 'POD Pending',
       [TRIP_STATUS.CLOSED_WITH_POD]: 'Closed With POD',
       [TRIP_STATUS.CLOSED_WITHOUT_POD]: 'Closed Without POD',

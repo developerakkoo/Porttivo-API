@@ -24,6 +24,20 @@ function logApiRequest(req, res, next) {
   const startedAt = Date.now()
   const requestPath = req.originalUrl || req.url || req.path || ''
 
+  console.log(
+    '[API][START]',
+    JSON.stringify({
+      method: req.method,
+      path: requestPath,
+      userType: req.user?.userType || null,
+      userId: req.user?.id || null,
+      ip: getClientIp(req),
+      userAgent: req.headers['user-agent']
+        ? String(req.headers['user-agent']).slice(0, 160)
+        : null
+    })
+  )
+
   res.once('finish', () => {
     const durationMs = Date.now() - startedAt
     const statusCode = res.statusCode
@@ -32,7 +46,7 @@ function logApiRequest(req, res, next) {
     const logger = console[level] || console.log
 
     logger(
-      '[API]',
+      '[API][DONE]',
       JSON.stringify({
         method: req.method,
         path: requestPath,

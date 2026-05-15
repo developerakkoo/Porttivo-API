@@ -689,6 +689,176 @@ const initializeSocketIO = httpServer => {
       }
     })
 
+    // Handle trip pause (from driver or transporter)
+    socket.on('trip:pause', async data => {
+      try {
+        const { tripId } = data
+        logSocketEvent('trip:pause', socket, { tripId, phase: 'attempt' })
+
+        if (!tripId) {
+          return socket.emit('error', { message: 'Trip ID is required' })
+        }
+
+        if (socket.user.userType !== 'driver' && socket.user.userType !== 'transporter') {
+          return socket.emit('error', {
+            message: 'Only drivers and transporters can pause trips'
+          })
+        }
+
+        const trip = await Trip.findById(tripId)
+        if (!trip) {
+          return socket.emit('error', { message: 'Trip not found' })
+        }
+
+        if (socket.user.userType === 'driver') {
+          if (!trip.driverId || trip.driverId.toString() !== socket.user.id) {
+            return socket.emit('error', {
+              message: 'Access denied. This trip is not assigned to you.'
+            })
+          }
+        } else if (!trip.transporterId || trip.transporterId.toString() !== socket.user.id) {
+          return socket.emit('error', {
+            message: 'Access denied. You do not have permission to pause this trip.'
+          })
+        }
+
+        if (trip.status === TRIP_STATUS.PAUSED) {
+          return socket.emit('trip:paused', {
+            trip: trip.toObject()
+          })
+        }
+
+        if (trip.status !== TRIP_STATUS.ACTIVE) {
+          return socket.emit('error', {
+            message: `Trip can only be paused from ACTIVE status. Current status: ${trip.status}`
+          })
+        }
+
+        trip.status = TRIP_STATUS.PAUSED
+        trip.audit.updatedBy = {
+          userId: socket.user.id,
+          userType: toAuditUserType(socket.user.userType)
+        }
+        await trip.save()
+        logSocketEvent('trip:pause', socket, {
+          tripId: trip._id.toString(),
+          result: 'success',
+          status: trip.status
+        })
+
+        const currentMilestone = trip.getCurrentMilestone()
+        const milestoneLabel = currentMilestone
+          ? getDriverLabel(currentMilestone.milestoneType)
+          : null
+
+        emitTripPaused(
+          trip,
+          currentMilestone
+            ? {
+                milestoneNumber: currentMilestone.milestoneNumber,
+                milestoneType: currentMilestone.milestoneType,
+                label: milestoneLabel
+              }
+            : null
+        )
+        emitTripUpdated(trip, { reason: 'trip_paused', changedFields: ['status'] })
+      } catch (error) {
+        console.error('Error handling trip:pause:', error)
+        logSocketEvent('trip:pause', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
+        socket.emit('error', {
+          message: error.message || 'Failed to pause trip'
+        })
+      }
+    })
+
+    // Handle trip resume (from driver or transporter)
+    socket.on('trip:resume', async data => {
+      try {
+        const { tripId } = data
+        logSocketEvent('trip:resume', socket, { tripId, phase: 'attempt' })
+
+        if (!tripId) {
+          return socket.emit('error', { message: 'Trip ID is required' })
+        }
+
+        if (socket.user.userType !== 'driver' && socket.user.userType !== 'transporter') {
+          return socket.emit('error', {
+            message: 'Only drivers and transporters can resume trips'
+          })
+        }
+
+        const trip = await Trip.findById(tripId)
+        if (!trip) {
+          return socket.emit('error', { message: 'Trip not found' })
+        }
+
+        if (socket.user.userType === 'driver') {
+          if (!trip.driverId || trip.driverId.toString() !== socket.user.id) {
+            return socket.emit('error', {
+              message: 'Access denied. This trip is not assigned to you.'
+            })
+          }
+        } else if (!trip.transporterId || trip.transporterId.toString() !== socket.user.id) {
+          return socket.emit('error', {
+            message: 'Access denied. You do not have permission to resume this trip.'
+          })
+        }
+
+        if (trip.status === TRIP_STATUS.ACTIVE) {
+          return socket.emit('trip:resumed', {
+            trip: trip.toObject()
+          })
+        }
+
+        if (trip.status !== TRIP_STATUS.PAUSED) {
+          return socket.emit('error', {
+            message: `Trip can only be resumed from PAUSED status. Current status: ${trip.status}`
+          })
+        }
+
+        trip.status = TRIP_STATUS.ACTIVE
+        trip.audit.updatedBy = {
+          userId: socket.user.id,
+          userType: toAuditUserType(socket.user.userType)
+        }
+        await trip.save()
+        logSocketEvent('trip:resume', socket, {
+          tripId: trip._id.toString(),
+          result: 'success',
+          status: trip.status
+        })
+
+        const currentMilestone = trip.getCurrentMilestone()
+        const milestoneLabel = currentMilestone
+          ? getDriverLabel(currentMilestone.milestoneType)
+          : null
+
+        emitTripResumed(
+          trip,
+          currentMilestone
+            ? {
+                milestoneNumber: currentMilestone.milestoneNumber,
+                milestoneType: currentMilestone.milestoneType,
+                label: milestoneLabel
+              }
+            : null
+        )
+        emitTripUpdated(trip, { reason: 'trip_resumed', changedFields: ['status'] })
+      } catch (error) {
+        console.error('Error handling trip:resume:', error)
+        logSocketEvent('trip:resume', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
+        socket.emit('error', {
+          message: error.message || 'Failed to resume trip'
+        })
+      }
+    })
+
     // Handle milestone update (from driver app)
     socket.on('trip:milestone:update', async data => {
       try {
@@ -745,8 +915,12 @@ const initializeSocketIO = httpServer => {
 
         // Validate trip is ACTIVE
         if (trip.status !== TRIP_STATUS.ACTIVE) {
+          const statusMessage =
+            trip.status === TRIP_STATUS.PAUSED
+              ? 'Trip is paused. Resume the trip before updating milestones.'
+              : `Milestones can only be updated for ACTIVE trips. Current status: ${trip.status}`
           return socket.emit('error', {
-            message: `Milestones can only be updated for ACTIVE trips. Current status: ${trip.status}`
+            message: statusMessage
           })
         }
 
@@ -1690,6 +1864,20 @@ const emitTripStarted = (trip, currentMilestone = null, meta = {}) => {
   })
 }
 
+const emitTripPaused = (trip, currentMilestone = null) => {
+  emitToTripAudience('trip:paused', {
+    trip: trip.toObject ? trip.toObject() : trip,
+    currentMilestone
+  })
+}
+
+const emitTripResumed = (trip, currentMilestone = null) => {
+  emitToTripAudience('trip:resumed', {
+    trip: trip.toObject ? trip.toObject() : trip,
+    currentMilestone
+  })
+}
+
 const emitTripMilestoneUpdated = (trip, milestone, currentMilestone = null) => {
   emitToTripAudience('trip:milestone:updated', {
     trip: trip.toObject ? trip.toObject() : trip,
@@ -1954,6 +2142,8 @@ module.exports = {
   emitTripDriverAssigned,
   emitTripAssigned,
   emitTripStarted,
+  emitTripPaused,
+  emitTripResumed,
   emitTripMilestoneUpdated,
   emitTripPodUploaded,
   emitTripPodApproved,

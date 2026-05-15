@@ -448,7 +448,7 @@ const getActiveTrip = async (req, res, next) => {
     // Find active trip assigned to driver
     const activeTrip = await Trip.findOne({
       driverId,
-      status: TRIP_STATUS.ACTIVE,
+      status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] },
     })
       .populate('vehicleId', 'vehicleNumber trailerType')
       .populate('transporterId', 'name company')

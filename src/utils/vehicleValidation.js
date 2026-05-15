@@ -6,6 +6,7 @@ const BUSY_TRIP_STATUSES = [
   TRIP_STATUS.ACCEPTED,
   TRIP_STATUS.PLANNED,
   TRIP_STATUS.ACTIVE,
+  TRIP_STATUS.PAUSED,
 ];
 
 /** Indian vehicle registration (standard): 2 letters + 2 digits + 2 letters + 4 digits (10 chars), e.g. MH12AB3434 */
@@ -58,8 +59,8 @@ const checkVehicleHasActiveTrip = async (vehicleSelector, excludeTripId = null) 
   try {
     const query =
       vehicleSelector && typeof vehicleSelector === 'object' && !Array.isArray(vehicleSelector)
-        ? { ...vehicleSelector, status: TRIP_STATUS.ACTIVE }
-        : { vehicleId: vehicleSelector, status: TRIP_STATUS.ACTIVE };
+        ? { ...vehicleSelector, status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } }
+        : { vehicleId: vehicleSelector, status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } };
 
     if (excludeTripId) {
       query._id = { $ne: excludeTripId };

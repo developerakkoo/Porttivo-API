@@ -301,7 +301,7 @@ const getDashboardStats = async (req, res, next) => {
     // Get trip stats
     const tripDateFilter = startDate || endDate ? { createdAt: dateFilter.createdAt } : {};
     const totalTrips = await Trip.countDocuments(tripDateFilter);
-    const activeTrips = await Trip.countDocuments({ ...tripDateFilter, status: TRIP_STATUS.ACTIVE });
+    const activeTrips = await Trip.countDocuments({ ...tripDateFilter, status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } });
     const completedTrips = await Trip.countDocuments({ ...tripDateFilter, status: { $in: CLOSED_TRIP_STATUSES } });
     const pendingPODTrips = await Trip.countDocuments({ ...tripDateFilter, status: TRIP_STATUS.POD_PENDING });
 
@@ -1201,7 +1201,7 @@ const getDriverDetails = async (req, res, next) => {
     // Get additional stats
     const [totalTrips, activeTrips] = await Promise.all([
       Trip.countDocuments({ driverId: driver._id }),
-      Trip.countDocuments({ driverId: driver._id, status: TRIP_STATUS.ACTIVE }),
+      Trip.countDocuments({ driverId: driver._id, status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } }),
     ]);
 
     return res.status(200).json({
@@ -2045,7 +2045,7 @@ const adminUpdateTripStatus = async (req, res, next) => {
     const previousTripState = trip.toObject({ depopulate: true });
 
     if (status === TRIP_STATUS.CANCELLED) {
-      const canCancel = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE, TRIP_STATUS.ACCEPTED, TRIP_STATUS.POD_PENDING].includes(trip.status);
+      const canCancel = [TRIP_STATUS.PLANNED, TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED, TRIP_STATUS.ACCEPTED, TRIP_STATUS.POD_PENDING].includes(trip.status);
       if (!canCancel) {
         return res.status(400).json({
           success: false,

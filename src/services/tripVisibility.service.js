@@ -5,6 +5,7 @@ const STATUS_LABELS = {
   [TRIP_STATUS.ACCEPTED]: 'Accepted',
   [TRIP_STATUS.PLANNED]: 'Planned',
   [TRIP_STATUS.ACTIVE]: 'Active',
+  [TRIP_STATUS.PAUSED]: 'Paused',
   [TRIP_STATUS.POD_PENDING]: 'POD Pending',
   [TRIP_STATUS.CLOSED_WITH_POD]: 'Closed With POD',
   [TRIP_STATUS.CLOSED_WITHOUT_POD]: 'Closed Without POD',

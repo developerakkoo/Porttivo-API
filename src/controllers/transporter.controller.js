@@ -186,7 +186,7 @@ const getDashboard = async (req, res, next) => {
       }),
       Trip.countDocuments({
         transporterId,
-        status: TRIP_STATUS.ACTIVE,
+        status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] },
       }),
       Trip.countDocuments({
         transporterId,
