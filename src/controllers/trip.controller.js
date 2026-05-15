@@ -1321,11 +1321,6 @@ const cancelTrip = async (req, res, next) => {
           message: 'Drivers can only decline queued trips that are not yet started',
         });
       }
-    } else if (!isAdmin && [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED].includes(trip.status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Only PLANNED, ACCEPTED, ACTIVE, or PAUSED trips can be cancelled by transporters',
-      });
     }
 
     if (isDriver && trip.status === TRIP_STATUS.PLANNED) {
