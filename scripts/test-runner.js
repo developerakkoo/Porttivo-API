@@ -272,6 +272,70 @@ const tests = [
     },
   },
   {
+    name: 'driver tracking service resolves and persists status changes',
+    async run() {
+      const created = [];
+      const service = loadWithMocks(path.resolve(process.cwd(), 'src/services/driverTracking.service.js'), {
+        '../models/Notification': {
+          create: async payload => {
+            created.push(payload);
+            return payload;
+          },
+        },
+      });
+
+      assert.equal(
+        service.resolveTrackingStatusFromTelemetry({ gpsEnabled: false }),
+        service.DRIVER_TRACKING_STATUS.GPS_OFF
+      );
+      assert.equal(
+        service.resolveTrackingStatusFromTelemetry({ networkConnected: false }),
+        service.DRIVER_TRACKING_STATUS.OFFLINE
+      );
+      assert.equal(
+        service.resolveTrackingStatusFromTelemetry({ loggedOut: true }),
+        service.DRIVER_TRACKING_STATUS.LOGGED_OUT
+      );
+
+      const trip = {
+        _id: 'trip-1',
+        tripId: 'TRIP-1',
+        transporterId: 'transporter-1',
+        driverId: 'driver-1',
+        driverTracking: {
+          status: service.DRIVER_TRACKING_STATUS.ONLINE,
+          reason: 'tracking_active',
+          updatedAt: new Date('2026-05-15T10:00:00.000Z'),
+        },
+        async save() {
+          return this;
+        },
+      };
+
+      const result = await service.persistTrackingUpdate({
+        trip,
+        patch: {
+          status: service.DRIVER_TRACKING_STATUS.LOGGED_OUT,
+          reason: 'driver_requested_logout',
+          source: 'auth.logout',
+          lastLogoutAt: new Date('2026-05-15T10:05:00.000Z'),
+          updatedAt: new Date('2026-05-15T10:05:00.000Z'),
+        },
+        actor: {
+          userId: 'driver-1',
+          userType: 'driver',
+        },
+      });
+
+      assert.equal(result.changed, true);
+      assert.equal(trip.driverTracking.status, service.DRIVER_TRACKING_STATUS.LOGGED_OUT);
+      assert.equal(created.length, 1);
+      assert.equal(created[0].type, 'DRIVER_STATUS');
+      assert.equal(created[0].priority, 'high');
+      assert.equal(created[0].userType, 'TRANSPORTER');
+    },
+  },
+  {
     name: 'vehicle post slots only decrease on confirmed booking',
     async run() {
       const postState = {

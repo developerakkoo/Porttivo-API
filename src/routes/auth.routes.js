@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { sendOTP, register, registerPumpOwner, customerMobileAuth, pinLogin, companyUserLogin, refreshToken } = require('../controllers/auth.controller');
+const { authenticate } = require('../middleware/auth.middleware');
+const { sendOTP, register, registerPumpOwner, customerMobileAuth, pinLogin, companyUserLogin, refreshToken, logout } = require('../controllers/auth.controller');
 const { adminLogin } = require('../controllers/admin.controller');
 
 /**
@@ -58,5 +59,12 @@ router.post('/admin-login', adminLogin);
  * @access  Public
  */
 router.post('/refresh', refreshToken);
+
+/**
+ * @route   POST /api/auth/logout
+ * @desc    Logout authenticated user
+ * @access  Private
+ */
+router.post('/logout', authenticate, logout);
 
 module.exports = router;

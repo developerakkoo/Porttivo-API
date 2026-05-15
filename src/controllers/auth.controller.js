@@ -1,10 +1,18 @@
 const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
+const Trip = require('../models/Trip');
 const CompanyUser = require('../models/CompanyUser');
 const PumpOwner = require('../models/PumpOwner');
 const PumpStaff = require('../models/PumpStaff');
 const Customer = require('../models/Customer');
 const { generateTokens } = require('../services/jwt.service');
+const {
+  DRIVER_TRACKING_STATUS,
+  persistTrackingUpdate
+} = require('../services/driverTracking.service');
+const {
+  emitDriverTrackingChanged
+} = require('../services/socket.service');
 const { validateMobile, cleanMobile, validateUserType, validatePin } = require('../utils/validation');
 
 /**
@@ -913,6 +921,73 @@ const refreshToken = async (req, res, next) => {
   }
 };
 
+/**
+ * Logout endpoint
+ * POST /api/auth/logout
+ */
+const logout = async (req, res, next) => {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+
+    if (req.user.userType === 'driver') {
+      const driver = await Driver.findById(req.user.id);
+      if (driver) {
+        driver.lastSeen = new Date();
+        await driver.save({ validateBeforeSave: false });
+      }
+
+      const activeTrip = await Trip.findOne({
+        driverId: req.user.id,
+        status: 'ACTIVE',
+      });
+
+      if (activeTrip) {
+        const { trip, currentTracking, previousTracking } = await persistTrackingUpdate({
+          trip: activeTrip,
+          patch: {
+            status: DRIVER_TRACKING_STATUS.LOGGED_OUT,
+            reason: 'driver_requested_logout',
+            source: 'auth.logout',
+            lastLogoutAt: new Date(),
+            updatedAt: new Date(),
+          },
+          actor: {
+            userId: req.user.id,
+            userType: req.user.userType,
+          },
+        });
+
+        emitDriverTrackingChanged(trip, {
+          previousStatus: previousTracking.status || null,
+          status: currentTracking.status,
+          reason: currentTracking.reason,
+          source: currentTracking.source,
+          lastSeenAt: currentTracking.updatedAt,
+          lastHeartbeatAt: currentTracking.lastHeartbeatAt,
+          lastLocationAt: currentTracking.lastLocationAt,
+          gpsEnabled: currentTracking.gpsEnabled ?? null,
+          networkConnected: currentTracking.networkConnected ?? null,
+          appState: currentTracking.appState || null,
+          batteryLevel: currentTracking.batteryLevel ?? null,
+          updatedAt: currentTracking.updatedAt,
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Logged out successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   sendOTP,
   register,
@@ -921,4 +996,5 @@ module.exports = {
   pinLogin,
   companyUserLogin,
   refreshToken,
+  logout,
 };

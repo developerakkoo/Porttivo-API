@@ -22,6 +22,7 @@ const notificationSchema = new mongoose.Schema(
         'TRIP_BOOKED',
         'TRIP_ACCEPTED',
         'TRIP_DRIVER_ASSIGNED',
+        'DRIVER_STATUS',
         'MILESTONE_COMPLETED',
         'POD_UPLOADED',
         'FUEL_TRANSACTION',

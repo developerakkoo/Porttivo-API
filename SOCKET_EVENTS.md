@@ -10,6 +10,7 @@ All authenticated clients join a role room on connect (`transporter:{id}`, `driv
 | `trip:driver:assigned` | `{ trip, assignment }` | |
 | `trip:started` | `{ trip, currentMilestone?, trackingConfig? }` | `trackingConfig.updateIntervalSeconds` tells the client how often to send location updates. |
 | `trip:milestone:updated` | `{ trip, milestone, currentMilestone? }` | |
+| `driver:status:changed` | `{ tripId, trip, driverId, status, reason, source, lastSeenAt, lastHeartbeatAt, lastLocationAt, gpsEnabled?, networkConnected?, appState?, batteryLevel?, updatedAt, previousStatus? }` | Transporter-visible driver health state changes. |
 | `driver:location:updated` | `{ tripId, trip, latitude, longitude, accuracy?, speed?, heading?, timestamp }` | Only when trip is ACTIVE; `trip` includes `lastDriverLocation`. |
 | `trip:pod:approved` | `{ trip, message, approvedAt?, closedReason? }` | Visible to the driver after transporter approves POD. |
 | `trip:cancelled` | `{ trip }` | |
@@ -19,6 +20,8 @@ All authenticated clients join a role room on connect (`transporter:{id}`, `driv
 | Event | Payload |
 |-------|---------|
 | `driver:location:update` | `{ tripId, latitude, longitude }` |
+| `driver:health:heartbeat` | `{ tripId, gpsEnabled?, networkConnected?, appState?, batteryLevel? }` |
+| `driver:session:logout` | `{ tripId? }` |
 | `trip:start` | `{ tripId }` |
 | `trip:milestone:update` | See API docs |
 

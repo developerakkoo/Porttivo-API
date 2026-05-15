@@ -24,6 +24,10 @@ const {
   TRACKING_UPDATE_INTERVAL_SECONDS,
 } = require('../services/tripLocationLog.service');
 const {
+  DRIVER_TRACKING_STATUS,
+  applyTrackingPatch,
+} = require('../services/driverTracking.service');
+const {
   completeMarketplaceBookingAfterTripClosed,
 } = require('../utils/marketplaceBookingComplete');
 
@@ -258,6 +262,13 @@ const startTrip = async (req, res, next) => {
 
     // Update trip status
     trip.status = TRIP_STATUS.ACTIVE;
+    applyTrackingPatch(trip, {
+      status: DRIVER_TRACKING_STATUS.ONLINE,
+      reason: 'trip_started',
+      source: 'tripStatus.startTrip',
+      lastHeartbeatAt: new Date(),
+      updatedAt: new Date(),
+    });
     trip.audit.updatedBy = {
       userId,
       userType: toAuditUserType(userType),

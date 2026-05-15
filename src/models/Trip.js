@@ -6,6 +6,9 @@ const {
   BOOKING_STATUS_VALUES
 } = require('../utils/tripState')
 const locationSchema = require('./schemas/location.schema')
+const {
+  DRIVER_TRACKING_STATUS
+} = require('../services/driverTracking.service')
 
 // Milestone Schema
 const milestoneSchema = new mongoose.Schema(
@@ -479,6 +482,62 @@ const tripSchema = new mongoose.Schema(
         default: null
       }
     },
+    driverTracking: {
+      status: {
+        type: String,
+        enum: Object.values(DRIVER_TRACKING_STATUS),
+        default: DRIVER_TRACKING_STATUS.OFFLINE
+      },
+      reason: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      source: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      updatedAt: {
+        type: Date,
+        default: null
+      },
+      lastHeartbeatAt: {
+        type: Date,
+        default: null
+      },
+      lastLocationAt: {
+        type: Date,
+        default: null
+      },
+      lastLogoutAt: {
+        type: Date,
+        default: null
+      },
+      lastDisconnectAt: {
+        type: Date,
+        default: null
+      },
+      gpsEnabled: {
+        type: Boolean,
+        default: null
+      },
+      networkConnected: {
+        type: Boolean,
+        default: null
+      },
+      appState: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      batteryLevel: {
+        type: Number,
+        min: 0,
+        max: 100,
+        default: null
+      }
+    },
     photoRules: {
       type: photoRulesSchema,
       default: () => ({})
@@ -545,6 +604,7 @@ tripSchema.index({ reference: 1 })
 tripSchema.index({ tripId: 1 })
 tripSchema.index({ 'shareConfig.token': 1 })
 tripSchema.index({ 'audit.lastStatusChangedAt': -1 })
+tripSchema.index({ 'driverTracking.status': 1, 'driverTracking.updatedAt': -1 })
 
 // Virtual for next milestone number
 tripSchema.virtual('nextMilestoneNumber').get(function () {

@@ -22,6 +22,14 @@ const {
   TRACKING_UPDATE_INTERVAL_SECONDS,
   logTripLocationUpdate
 } = require('./tripLocationLog.service')
+const {
+  DRIVER_TRACKING_STATUS,
+  DRIVER_TRACKING_STALE_SECONDS,
+  applyTrackingPatch,
+  buildTrackingPayload,
+  persistTrackingUpdate,
+  resolveTrackingStatusFromTelemetry
+} = require('./driverTracking.service')
 const logger = require('../utils/logger')
 
 const TransporterMessage = require('../models/TransporterMessage')
@@ -40,6 +48,7 @@ const {
 const { canTransporterPartyViewTripExecution } = require('./tripAccess.service')
 const env = require('../config/env')
 let io = null
+let staleDriverTrackingTimer = null
 
 const getTripVehicleSelector = trip => {
   if (trip.vehicleId) {
@@ -217,6 +226,112 @@ const emitToTripAudience = (eventName, payload, options = {}) => {
   })
 }
 
+const emitDriverTrackingChanged = (trip, extra = {}) => {
+  if (!trip) {
+    return
+  }
+
+  emitToTripAudience('driver:status:changed', buildTrackingPayload(trip, extra))
+}
+
+const setTripDriverTrackingOnline = (trip, source, extra = {}) => {
+  const now = extra.updatedAt || new Date()
+  applyTrackingPatch(trip, {
+    status: DRIVER_TRACKING_STATUS.ONLINE,
+    reason: extra.reason || 'tracking_active',
+    source,
+    updatedAt: now,
+    lastHeartbeatAt: extra.lastHeartbeatAt || now,
+    lastLocationAt: extra.lastLocationAt || trip.driverTracking?.lastLocationAt || null,
+    gpsEnabled: extra.gpsEnabled ?? trip.driverTracking?.gpsEnabled ?? null,
+    networkConnected: extra.networkConnected ?? trip.driverTracking?.networkConnected ?? null,
+    appState: extra.appState ?? trip.driverTracking?.appState ?? null,
+    batteryLevel: extra.batteryLevel ?? trip.driverTracking?.batteryLevel ?? null
+  })
+}
+
+const buildSocketDisconnectTrackingStatus = reason =>
+  resolveTrackingStatusFromTelemetry({
+    socketReason: reason
+  })
+
+const sweepDriverTrackingStaleTrips = async () => {
+  if (!io) {
+    return
+  }
+
+  const threshold = new Date(Date.now() - DRIVER_TRACKING_STALE_SECONDS * 1000)
+  const staleTrips = await Trip.find({
+    status: TRIP_STATUS.ACTIVE,
+    driverId: { $ne: null },
+    'driverTracking.status': {
+      $in: [
+        DRIVER_TRACKING_STATUS.ONLINE,
+        DRIVER_TRACKING_STATUS.GPS_OFF,
+        DRIVER_TRACKING_STATUS.OFFLINE
+      ]
+    },
+    'driverTracking.updatedAt': {
+      $lt: threshold
+    }
+  })
+    .populate('transporterId', 'name company mobile')
+    .populate('driverId', 'name mobile')
+    .populate('customerId', 'name mobile')
+    .populate('vehicleId', 'vehicleNumber trailerType')
+
+  for (const trip of staleTrips) {
+    const { previousTracking, currentTracking, changed } = await persistTrackingUpdate({
+      trip,
+      patch: {
+        status: DRIVER_TRACKING_STATUS.STALE,
+        reason: 'heartbeat_timeout',
+        source: 'stale-monitor',
+        updatedAt: new Date()
+      },
+      actor: {
+        userId: null,
+        userType: 'system'
+      }
+    })
+
+    if (changed) {
+      emitDriverTrackingChanged(trip, {
+        previousStatus: previousTracking.status || null,
+        status: currentTracking.status,
+        reason: currentTracking.reason,
+        source: currentTracking.source,
+        lastSeenAt: currentTracking.updatedAt,
+        lastHeartbeatAt: currentTracking.lastHeartbeatAt,
+        lastLocationAt: currentTracking.lastLocationAt,
+        gpsEnabled: currentTracking.gpsEnabled ?? null,
+        networkConnected: currentTracking.networkConnected ?? null,
+        appState: currentTracking.appState || null,
+        batteryLevel: currentTracking.batteryLevel ?? null,
+        updatedAt: currentTracking.updatedAt
+      })
+    }
+  }
+}
+
+const startDriverTrackingStaleMonitor = () => {
+  if (staleDriverTrackingTimer) {
+    return
+  }
+
+  staleDriverTrackingTimer = setInterval(() => {
+    sweepDriverTrackingStaleTrips().catch(error => {
+      logger.error('driver tracking stale sweep failed', {
+        message: error.message
+      })
+    })
+  }, Math.max(TRACKING_UPDATE_INTERVAL_SECONDS * 1000 * 2, 30000))
+
+  if (typeof staleDriverTrackingTimer.unref === 'function') {
+    staleDriverTrackingTimer.unref()
+  }
+}
+
 /**
  * Initialize Socket.IO server
  * @param {Object} httpServer - HTTP server instance
@@ -231,6 +346,8 @@ const initializeSocketIO = httpServer => {
       credentials: true
     }
   })
+
+  startDriverTrackingStaleMonitor()
 
   // Authentication middleware for Socket.IO
   io.use(async (socket, next) => {
@@ -649,6 +766,10 @@ const initializeSocketIO = httpServer => {
 
         // Update trip status
         trip.status = TRIP_STATUS.ACTIVE
+        setTripDriverTrackingOnline(trip, 'socket.trip.start', {
+          reason: 'trip_started',
+          lastHeartbeatAt: new Date()
+        })
         await trip.save()
         logSocketEvent('trip:start', socket, {
           tripId: trip._id.toString(),
@@ -1099,11 +1220,18 @@ const initializeSocketIO = httpServer => {
           })
         }
 
+        const previousDriverTrackingStatus = trip.driverTracking?.status || null
         trip.lastDriverLocation = {
           latitude: lat,
           longitude: lng,
           updatedAt: new Date()
         }
+        setTripDriverTrackingOnline(trip, 'driver.location.update', {
+          reason: 'location_update',
+          lastHeartbeatAt: new Date(),
+          lastLocationAt: new Date(),
+          updatedAt: new Date()
+        })
         await trip.save()
         logTripLocationUpdate({
           trip,
@@ -1140,6 +1268,22 @@ const initializeSocketIO = httpServer => {
           timestamp: new Date().toISOString()
         }
 
+        if (previousDriverTrackingStatus !== DRIVER_TRACKING_STATUS.ONLINE) {
+          emitDriverTrackingChanged(trip, {
+            previousStatus: previousDriverTrackingStatus,
+            status: trip.driverTracking?.status || DRIVER_TRACKING_STATUS.ONLINE,
+            reason: trip.driverTracking?.reason || 'location_update',
+            source: trip.driverTracking?.source || 'driver.location.update',
+            lastSeenAt: trip.driverTracking?.updatedAt || new Date(),
+            lastHeartbeatAt: trip.driverTracking?.lastHeartbeatAt || new Date(),
+            lastLocationAt: trip.driverTracking?.lastLocationAt || new Date(),
+            gpsEnabled: trip.driverTracking?.gpsEnabled ?? null,
+            networkConnected: trip.driverTracking?.networkConnected ?? null,
+            appState: trip.driverTracking?.appState || null,
+            batteryLevel: trip.driverTracking?.batteryLevel ?? null
+          })
+        }
+
         emitToTripAudience('driver:location:updated', payload)
       } catch (error) {
         console.error('Error handling driver:location:update:', error)
@@ -1149,6 +1293,203 @@ const initializeSocketIO = httpServer => {
         }, 'error')
         socket.emit('error', {
           message: error.message || 'Failed to update location'
+        })
+      }
+    })
+
+    // Handle driver heartbeat / health update (GPS + connectivity status)
+    socket.on('driver:health:heartbeat', async data => {
+      try {
+        const {
+          tripId,
+          gpsEnabled,
+          networkConnected,
+          appState = null,
+          batteryLevel = null
+        } = data || {}
+
+        logSocketEvent('driver:health:heartbeat', socket, {
+          tripId,
+          phase: 'attempt'
+        })
+
+        if (!tripId) {
+          return socket.emit('error', { message: 'Trip ID is required' })
+        }
+
+        if (socket.user.userType !== 'driver') {
+          return socket.emit('error', {
+            message: 'Only drivers can send heartbeat updates'
+          })
+        }
+
+        const trip = await Trip.findById(tripId)
+        if (!trip) {
+          return socket.emit('error', { message: 'Trip not found' })
+        }
+
+        if (!trip.driverId || trip.driverId.toString() !== socket.user.id) {
+          return socket.emit('error', {
+            message: 'Access denied. This trip is not assigned to you.'
+          })
+        }
+
+        if (trip.status !== TRIP_STATUS.ACTIVE) {
+          return socket.emit('error', {
+            message: `Heartbeat updates only allowed for ACTIVE trips. Current status: ${trip.status}`
+          })
+        }
+
+        const previousDriverTrackingStatus = trip.driverTracking?.status || null
+        const status = resolveTrackingStatusFromTelemetry({
+          gpsEnabled,
+          networkConnected
+        })
+
+        setTripDriverTrackingOnline(trip, 'driver.health.heartbeat', {
+          reason:
+            status === DRIVER_TRACKING_STATUS.GPS_OFF
+              ? 'gps_disabled'
+              : status === DRIVER_TRACKING_STATUS.OFFLINE
+                ? 'network_lost'
+                : 'heartbeat_received',
+          gpsEnabled: gpsEnabled ?? null,
+          networkConnected: networkConnected ?? null,
+          appState,
+          batteryLevel,
+          lastHeartbeatAt: new Date(),
+          updatedAt: new Date()
+        })
+
+        if (status !== DRIVER_TRACKING_STATUS.ONLINE) {
+          trip.driverTracking.status = status
+          trip.driverTracking.reason =
+            status === DRIVER_TRACKING_STATUS.GPS_OFF
+              ? 'gps_disabled'
+              : 'network_lost'
+        }
+
+        trip.driverTracking.gpsEnabled =
+          typeof gpsEnabled === 'boolean' ? gpsEnabled : trip.driverTracking.gpsEnabled
+        trip.driverTracking.networkConnected =
+          typeof networkConnected === 'boolean'
+            ? networkConnected
+            : trip.driverTracking.networkConnected
+        trip.driverTracking.appState = appState || trip.driverTracking.appState || null
+        trip.driverTracking.batteryLevel =
+          batteryLevel !== null && batteryLevel !== undefined
+            ? Number(batteryLevel)
+            : trip.driverTracking.batteryLevel
+
+        await trip.save()
+
+        if (previousDriverTrackingStatus !== trip.driverTracking.status) {
+          emitDriverTrackingChanged(trip, {
+            previousStatus: previousDriverTrackingStatus,
+            status: trip.driverTracking.status,
+            reason: trip.driverTracking.reason,
+            source: trip.driverTracking.source,
+            lastSeenAt: trip.driverTracking.updatedAt,
+            lastHeartbeatAt: trip.driverTracking.lastHeartbeatAt,
+            lastLocationAt: trip.driverTracking.lastLocationAt,
+            gpsEnabled: trip.driverTracking.gpsEnabled ?? null,
+            networkConnected: trip.driverTracking.networkConnected ?? null,
+            appState: trip.driverTracking.appState || null,
+            batteryLevel: trip.driverTracking.batteryLevel ?? null
+          })
+        }
+
+        logSocketEvent('driver:health:heartbeat', socket, {
+          tripId: trip._id.toString(),
+          result: 'success',
+          status: trip.driverTracking.status,
+          gpsEnabled: trip.driverTracking.gpsEnabled,
+          networkConnected: trip.driverTracking.networkConnected
+        })
+      } catch (error) {
+        console.error('Error handling driver:health:heartbeat:', error)
+        logSocketEvent('driver:health:heartbeat', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
+        socket.emit('error', {
+          message: error.message || 'Failed to process heartbeat'
+        })
+      }
+    })
+
+    // Handle explicit driver logout from the app
+    socket.on('driver:session:logout', async data => {
+      try {
+        const { tripId = null } = data || {}
+        logSocketEvent('driver:session:logout', socket, {
+          tripId,
+          phase: 'attempt'
+        })
+
+        if (socket.user.userType !== 'driver') {
+          return socket.emit('error', {
+            message: 'Only drivers can log out from the driver app'
+          })
+        }
+
+        const trip =
+          tripId
+            ? await Trip.findById(tripId)
+            : await Trip.findOne({
+                driverId: socket.user.id,
+                status: TRIP_STATUS.ACTIVE
+              })
+
+        if (trip && trip.driverId && trip.driverId.toString() === socket.user.id) {
+          const { previousTracking, currentTracking } = await persistTrackingUpdate({
+            trip,
+            patch: {
+              status: DRIVER_TRACKING_STATUS.LOGGED_OUT,
+              reason: 'driver_requested_logout',
+              source: 'socket.driver.session.logout',
+              lastLogoutAt: new Date(),
+              updatedAt: new Date()
+            },
+            actor: {
+              userId: socket.user.id,
+              userType: socket.user.userType
+            }
+          })
+
+          emitDriverTrackingChanged(trip, {
+            previousStatus: previousTracking.status || null,
+            status: currentTracking.status,
+            reason: currentTracking.reason,
+            source: currentTracking.source,
+            lastSeenAt: currentTracking.updatedAt,
+            lastHeartbeatAt: currentTracking.lastHeartbeatAt,
+            lastLocationAt: currentTracking.lastLocationAt,
+            gpsEnabled: currentTracking.gpsEnabled ?? null,
+            networkConnected: currentTracking.networkConnected ?? null,
+            appState: currentTracking.appState || null,
+            batteryLevel: currentTracking.batteryLevel ?? null,
+            updatedAt: currentTracking.updatedAt
+          })
+        }
+
+        const driver = await Driver.findById(socket.user.id)
+        if (driver) {
+          driver.lastSeen = new Date()
+          await driver.save({ validateBeforeSave: false })
+        }
+
+        socket.emit('driver:session:logged-out', {
+          tripId: trip?._id?.toString?.() || tripId || null
+        })
+      } catch (error) {
+        console.error('Error handling driver:session:logout:', error)
+        logSocketEvent('driver:session:logout', socket, {
+          result: 'error',
+          message: error.message
+        }, 'error')
+        socket.emit('error', {
+          message: error.message || 'Failed to log out driver session'
         })
       }
     })
@@ -1747,6 +2088,56 @@ const initializeSocketIO = httpServer => {
           result: 'emitted'
         })
       }
+
+      if (socket.user.userType === 'driver') {
+        const driverId = socket.user.id
+        Trip.findOne({
+          driverId,
+          status: TRIP_STATUS.ACTIVE
+        })
+          .then(async trip => {
+            if (!trip) {
+              return
+            }
+
+            const { previousTracking, currentTracking } = await persistTrackingUpdate({
+              trip,
+              patch: {
+                status: buildSocketDisconnectTrackingStatus(reason),
+                reason: reason ? `socket_${reason.replace(/\s+/g, '_')}` : 'socket_disconnect',
+                source: 'socket.disconnect',
+                lastDisconnectAt: new Date(),
+                updatedAt: new Date()
+              },
+              actor: {
+                userId: driverId,
+                userType: 'driver'
+              }
+            })
+
+            emitDriverTrackingChanged(trip, {
+              previousStatus: previousTracking.status || null,
+              status: currentTracking.status,
+              reason: currentTracking.reason,
+              source: currentTracking.source,
+              lastSeenAt: currentTracking.updatedAt,
+              lastHeartbeatAt: currentTracking.lastHeartbeatAt,
+              lastLocationAt: currentTracking.lastLocationAt,
+              gpsEnabled: currentTracking.gpsEnabled ?? null,
+              networkConnected: currentTracking.networkConnected ?? null,
+              appState: currentTracking.appState || null,
+              batteryLevel: currentTracking.batteryLevel ?? null,
+              updatedAt: currentTracking.updatedAt
+            })
+          })
+          .catch(error => {
+            logger.error('driver disconnect tracking update failed', {
+              message: error.message,
+              socketId: socket.id,
+              driverId
+            })
+          })
+      }
     })
   })
 
@@ -2114,6 +2505,7 @@ module.exports = {
   emitTripPaused,
   emitTripResumed,
   emitTripMilestoneUpdated,
+  emitDriverTrackingChanged,
   emitTripPodUploaded,
   emitTripPodApproved,
   emitTripCompleted,
