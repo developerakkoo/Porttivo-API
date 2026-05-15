@@ -10,7 +10,16 @@ const LEVEL_TO_STREAM = {
 let consoleFormatterInstalled = false
 
 function formatTimestamp(date = new Date()) {
-  return date.toISOString().replace('T', ' ').slice(0, 19)
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(date)
 }
 
 function formatValue(value) {
