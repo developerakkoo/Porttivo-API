@@ -4,6 +4,7 @@ const http = require('http');
 const path = require('path');
 const os = require('os');
 const { engine } = require('express-handlebars');
+const logger = require('./src/utils/logger');
 const connectDB = require('./src/config/database');
 const { port } = require('./src/config/env');
 const { errorHandler, notFound } = require('./src/middleware/error.middleware');
@@ -32,6 +33,8 @@ const messageRoutes = require('./src/routes/message.routes');
 const { getCustomerDetails } = require('./src/controllers/admin.controller');
 const { authenticate } = require('./src/middleware/auth.middleware');
 const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability');
+
+logger.installConsoleFormatter();
 
 function requireAdminUser(req, res, next) {
   if (req.user?.userType !== 'admin') {
@@ -153,7 +156,7 @@ const startServer = async () => {
       console.log(`\n💡 To access from your device, use: http://${localIP}:${port}/api`);
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    logger.error('Failed to start server', { message: error.message });
     process.exit(1);
   }
 };
@@ -162,13 +165,16 @@ startServer();
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Promise Rejection:', err);
+  logger.error('Unhandled Promise Rejection', {
+    message: err.message,
+    stack: err.stack
+  });
   // Close server gracefully
   process.exit(1);
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+  logger.error('Uncaught Exception', { message: err.message, stack: err.stack });
   process.exit(1);
 });

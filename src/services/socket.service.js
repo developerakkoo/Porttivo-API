@@ -22,6 +22,7 @@ const {
   TRACKING_UPDATE_INTERVAL_SECONDS,
   logTripLocationUpdate
 } = require('./tripLocationLog.service')
+const logger = require('../utils/logger')
 
 const TransporterMessage = require('../models/TransporterMessage')
 const Notification = require('../models/Notification')
@@ -92,14 +93,50 @@ const safeSocketMeta = socket => {
   }
 }
 
+const describeSocketEvent = (event, details = {}) => {
+  const parts = [event]
+
+  if (details.phase) {
+    parts.push(details.phase)
+  }
+
+  if (details.result) {
+    parts.push(details.result)
+  }
+
+  if (details.reason) {
+    parts.push(details.reason)
+  }
+
+  if (details.room) {
+    parts.push(`room=${details.room}`)
+  }
+
+  if (details.tripId) {
+    parts.push(`tripId=${details.tripId}`)
+  }
+
+  if (details.bookingId) {
+    parts.push(`bookingId=${details.bookingId}`)
+  }
+
+  if (details.vehicleId) {
+    parts.push(`vehicleId=${details.vehicleId}`)
+  }
+
+  if (details.message) {
+    parts.push(details.message)
+  }
+
+  return parts.join(' - ')
+}
+
 const logSocketEvent = (event, socket, details = {}, level = 'log') => {
   const payload = {
-    event,
-    ...safeSocketMeta(socket),
-    ...details
+    ...safeSocketMeta(socket)
   }
-  const logger = console[level] || console.log
-  logger('[Socket]', JSON.stringify(payload))
+  const logFn = level === 'error' ? logger.error : level === 'warn' ? logger.warn : logger.info
+  logFn(describeSocketEvent(event, details), payload)
 }
 
 /**
@@ -131,7 +168,7 @@ const logTransporterSocketLifecycle = (event, socket, extra = {}) => {
     userAgent: ua ? String(ua).slice(0, 160) : null,
     ...extra
   }
-  console.log('[Socket/transporter]', JSON.stringify(row))
+  logger.info(`socket ${event}`, row)
 }
 
 const emitToTripAudience = (eventName, payload, options = {}) => {
@@ -174,14 +211,10 @@ const emitToTripAudience = (eventName, payload, options = {}) => {
   recipientRooms.push('admin:all')
   io.to('admin:all').emit(eventName, payload)
 
-  console.log(
-    '[Socket/broadcast]',
-    JSON.stringify({
-      event: eventName,
-      tripId: trip._id || trip.id,
-      recipients: recipientRooms
-    })
-  )
+  logger.info(`broadcast ${eventName}`, {
+    tripId: trip._id || trip.id,
+    recipients: recipientRooms.join(', ')
+  })
 }
 
 /**
@@ -207,18 +240,14 @@ const initializeSocketIO = httpServer => {
         socket.handshake.headers.authorization?.replace('Bearer ', '')
 
       if (!token) {
-        console.warn(
-          '[Socket/auth]',
-          JSON.stringify({
-            event: 'authentication_failed',
-            reason: 'no_token',
-            socketId: socket.id,
-            clientIp:
-              socket.handshake.address ||
-              socket.handshake.headers['x-forwarded-for'] ||
-              null
-          })
-        )
+        logger.warn('socket authentication failed', {
+          reason: 'no_token',
+          socketId: socket.id,
+          clientIp:
+            socket.handshake.address ||
+            socket.handshake.headers['x-forwarded-for'] ||
+            null
+        })
         return next(new Error('Authentication error: No token provided'))
       }
 
@@ -240,31 +269,23 @@ const initializeSocketIO = httpServer => {
         }
 
         if (!user) {
-          console.warn(
-            '[Socket/auth]',
-            JSON.stringify({
-              event: 'authentication_failed',
-              reason: 'user_not_found',
-              socketId: socket.id,
-              userType: decoded.userType,
-              userId: decoded.userId
-            })
-          )
+          logger.warn('socket authentication failed', {
+            reason: 'user_not_found',
+            socketId: socket.id,
+            userType: decoded.userType,
+            userId: decoded.userId
+          })
           return next(new Error('Authentication error: User not found'))
         }
 
         if (user.status === 'blocked' || user.status === 'inactive') {
-          console.warn(
-            '[Socket/auth]',
-            JSON.stringify({
-              event: 'authentication_failed',
-              reason: 'account_inactive',
-              socketId: socket.id,
-              userType: decoded.userType,
-              userId: decoded.userId,
-              status: user.status
-            })
-          )
+          logger.warn('socket authentication failed', {
+            reason: 'account_inactive',
+            socketId: socket.id,
+            userType: decoded.userType,
+            userId: decoded.userId,
+            status: user.status
+          })
           return next(
             new Error('Authentication error: Account blocked or inactive')
           )
@@ -290,27 +311,19 @@ const initializeSocketIO = httpServer => {
 
         next()
       } catch (tokenError) {
-        console.warn(
-          '[Socket/auth]',
-          JSON.stringify({
-            event: 'authentication_failed',
-            reason: 'invalid_token',
-            socketId: socket.id,
-            message: tokenError.message
-          })
-        )
+        logger.warn('socket authentication failed', {
+          reason: 'invalid_token',
+          socketId: socket.id,
+          message: tokenError.message
+        })
         return next(new Error(`Authentication error: ${tokenError.message}`))
       }
     } catch (error) {
-      console.error(
-        '[Socket/auth]',
-        JSON.stringify({
-          event: 'authentication_failed',
-          reason: 'unexpected_error',
-          socketId: socket.id,
-          message: error.message
-        })
-      )
+      logger.error('socket authentication failed', {
+        reason: 'unexpected_error',
+        socketId: socket.id,
+        message: error.message
+      })
       next(new Error(`Authentication error: ${error.message}`))
     }
   })
@@ -1716,7 +1729,7 @@ const initializeSocketIO = httpServer => {
 
     // Disconnection handler
     socket.on('disconnect', reason => {
-      console.log(`Socket disconnected: ${socket.id} (${reason})`)
+      logger.info('Socket disconnected', { socketId: socket.id, reason })
       logSocketEvent('disconnect', socket, {
         reason: reason || null
       })
@@ -1761,14 +1774,10 @@ const emitTripCreated = (transporterId, trip) => {
     io.to(`transporter:${transporterId}`).emit('trip:created', {
       trip: trip.toObject ? trip.toObject() : trip
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'trip:created',
-        recipient: `transporter:${transporterId}`,
-        tripId: trip?._id?.toString?.() || trip?.id || null
-      })
-    )
+    logger.info('broadcast trip:created', {
+      recipient: `transporter:${transporterId}`,
+      tripId: trip?._id?.toString?.() || trip?.id || null
+    })
   }
 }
 
@@ -1782,14 +1791,10 @@ const emitTripCreatedForCustomer = (customerId, trip) => {
     io.to(`customer:${customerId}`).emit('trip:created', {
       trip: trip.toObject ? trip.toObject() : trip
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'trip:created',
-        recipient: `customer:${customerId}`,
-        tripId: trip?._id?.toString?.() || trip?.id || null
-      })
-    )
+    logger.info('broadcast trip:created', {
+      recipient: `customer:${customerId}`,
+      tripId: trip?._id?.toString?.() || trip?.id || null
+    })
   }
 }
 
@@ -1813,26 +1818,18 @@ const emitBookingRejected = ({ trip, transporterId }) => {
         transporterId
       }
     )
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'trip:customer:rejected',
-        recipient: `customer:${tripData.customerId._id || tripData.customerId}`,
-        tripId: tripData._id || tripData.id || null
-      })
-    )
+    logger.info('broadcast trip:customer:rejected', {
+      recipient: `customer:${tripData.customerId._id || tripData.customerId}`,
+      tripId: tripData._id || tripData.id || null
+    })
   }
   io.to(`transporter:${transporterId}`).emit('trip:customer:rejected', {
     tripId: tripData._id || tripData.id
   })
-  console.log(
-    '[Socket/broadcast]',
-    JSON.stringify({
-      event: 'trip:customer:rejected',
-      recipient: `transporter:${transporterId}`,
-      tripId: tripData._id || tripData.id || null
-    })
-  )
+  logger.info('broadcast trip:customer:rejected', {
+    recipient: `transporter:${transporterId}`,
+    tripId: tripData._id || tripData.id || null
+  })
 }
 
 const emitTripVehicleAssigned = (trip, assignment) => {
@@ -1970,14 +1967,10 @@ const emitVehicleStatusUpdated = (vehicleId, transporterId, vehicle) => {
     io.to(`transporter:${transporterId}`).emit('vehicle:status:updated', {
       vehicle: vehicle.toObject ? vehicle.toObject() : vehicle
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'vehicle:status:updated',
-        recipients: [`vehicle:${vehicleId}`, `transporter:${transporterId}`],
-        vehicleId
-      })
-    )
+    logger.info('broadcast vehicle:status:updated', {
+      recipients: [`vehicle:${vehicleId}`, `transporter:${transporterId}`].join(', '),
+      vehicleId
+    })
   }
 }
 
@@ -1991,14 +1984,10 @@ const emitBookingRequested = (sellerId, booking) => {
     io.to(`transporter:${sellerId}`).emit('booking:requested', {
       booking: booking.toObject ? booking.toObject() : booking
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'booking:requested',
-        recipient: `transporter:${sellerId}`,
-        bookingId: booking?._id?.toString?.() || booking?.id || null
-      })
-    )
+    logger.info('broadcast booking:requested', {
+      recipient: `transporter:${sellerId}`,
+      bookingId: booking?._id?.toString?.() || booking?.id || null
+    })
   }
 }
 
@@ -2014,14 +2003,10 @@ const emitPriceProposed = (recipientId, booking, message) => {
       booking: booking.toObject ? booking.toObject() : booking,
       message: message.toObject ? message.toObject() : message
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'booking:price-proposed',
-        recipient: `transporter:${recipientId}`,
-        bookingId: booking?._id?.toString?.() || booking?.id || null
-      })
-    )
+    logger.info('broadcast booking:price-proposed', {
+      recipient: `transporter:${recipientId}`,
+      bookingId: booking?._id?.toString?.() || booking?.id || null
+    })
   }
 }
 
@@ -2039,14 +2024,10 @@ const emitBookingConfirmed = (buyerId, sellerId, booking) => {
     io.to(`transporter:${sellerId}`).emit('booking:confirmed', {
       booking: booking.toObject ? booking.toObject() : booking
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'booking:confirmed',
-        recipients: [`transporter:${buyerId}`, `transporter:${sellerId}`],
-        bookingId: booking?._id?.toString?.() || booking?.id || null
-      })
-    )
+    logger.info('broadcast booking:confirmed', {
+      recipients: [`transporter:${buyerId}`, `transporter:${sellerId}`].join(', '),
+      bookingId: booking?._id?.toString?.() || booking?.id || null
+    })
   }
 }
 
@@ -2073,14 +2054,10 @@ const emitBookingCancelled = (sellerId, booking) => {
     io.to(`transporter:${sellerId}`).emit('booking:cancelled', {
       booking: booking.toObject ? booking.toObject() : booking
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'booking:cancelled',
-        recipient: `transporter:${sellerId}`,
-        bookingId: booking?._id?.toString?.() || booking?.id || null
-      })
-    )
+    logger.info('broadcast booking:cancelled', {
+      recipient: `transporter:${sellerId}`,
+      bookingId: booking?._id?.toString?.() || booking?.id || null
+    })
   }
 }
 
@@ -2096,15 +2073,11 @@ const emitNewMessage = (recipientId, bookingId, message) => {
       bookingId,
       message: message.toObject ? message.toObject() : message
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'message:new',
-        recipient: `transporter:${recipientId}`,
-        bookingId,
-        messageId: message?._id?.toString?.() || message?.id || null
-      })
-    )
+    logger.info('broadcast message:new', {
+      recipient: `transporter:${recipientId}`,
+      bookingId,
+      messageId: message?._id?.toString?.() || message?.id || null
+    })
   }
 }
 
@@ -2120,14 +2093,10 @@ const emitMessageRead = (senderId, messageId, readAt) => {
       messageId,
       readAt
     })
-    console.log(
-      '[Socket/broadcast]',
-      JSON.stringify({
-        event: 'message:read',
-        recipient: `transporter:${senderId}`,
-        messageId
-      })
-    )
+    logger.info('broadcast message:read', {
+      recipient: `transporter:${senderId}`,
+      messageId
+    })
   }
 }
 

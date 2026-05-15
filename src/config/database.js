@@ -1,11 +1,12 @@
 const mongoose = require('mongoose');
 const { mongodbUri } = require('./env');
+const logger = require('../utils/logger');
 
 let isConnected = false;
 
 const connectDB = async () => {
   if (isConnected) {
-    console.log('MongoDB already connected');
+    logger.info('MongoDB already connected');
     return;
   }
 
@@ -13,9 +14,9 @@ const connectDB = async () => {
     const conn = await mongoose.connect(mongodbUri);
 
     isConnected = true;
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
+    logger.info(`MongoDB Connected: ${conn.connection.host}`);
   } catch (error) {
-    console.error('MongoDB connection error:', error);
+    logger.error('MongoDB connection error', { message: error.message });
     isConnected = false;
     // Retry connection after 5 seconds
     setTimeout(connectDB, 5000);
@@ -24,12 +25,12 @@ const connectDB = async () => {
 
 // Handle connection events
 mongoose.connection.on('disconnected', () => {
-  console.log('MongoDB disconnected');
+  logger.info('MongoDB disconnected');
   isConnected = false;
 });
 
 mongoose.connection.on('error', (err) => {
-  console.error('MongoDB connection error:', err);
+  logger.error('MongoDB connection error', { message: err.message });
   isConnected = false;
 });
 
