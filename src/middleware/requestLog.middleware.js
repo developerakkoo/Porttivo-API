@@ -1,14 +1,17 @@
-const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
-
-function safeBodySummary(body) {
-  if (!body || typeof body !== 'object') {
+function serializePayload(payload) {
+  if (payload === undefined) {
     return null
   }
 
-  return {
-    keys: Object.keys(body).slice(0, 12),
-    hasFiles: Boolean(body.files || body.file || body.attachments)
+  if (Buffer.isBuffer(payload)) {
+    return payload.toString('utf8')
   }
+
+  if (typeof payload === 'string') {
+    return payload
+  }
+
+  return payload
 }
 
 function getClientIp(req) {
@@ -23,6 +26,7 @@ function getClientIp(req) {
 function logApiRequest(req, res, next) {
   const startedAt = Date.now()
   const requestPath = req.originalUrl || req.url || req.path || ''
+  let responsePayload
 
   console.log(
     '[API][START]',
@@ -37,6 +41,23 @@ function logApiRequest(req, res, next) {
         : null
     })
   )
+
+  const originalJson = res.json.bind(res)
+  const originalSend = res.send.bind(res)
+
+  res.json = function (body) {
+    responsePayload = body
+    res.json = originalJson
+    res.send = originalSend
+    return originalJson(body)
+  }
+
+  res.send = function (body) {
+    responsePayload = body
+    res.json = originalJson
+    res.send = originalSend
+    return originalSend(body)
+  }
 
   res.once('finish', () => {
     const durationMs = Date.now() - startedAt
@@ -59,9 +80,7 @@ function logApiRequest(req, res, next) {
           ? String(req.headers['user-agent']).slice(0, 160)
           : null,
         result: statusCode >= 500 ? 'ERROR' : statusCode >= 400 ? 'FAILURE' : 'SUCCESS',
-        ...(MUTATING_METHODS.has(req.method)
-          ? { body: safeBodySummary(req.body) }
-          : {})
+        response: serializePayload(responsePayload)
       })
     )
   })
