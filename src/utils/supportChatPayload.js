@@ -44,6 +44,7 @@ function buildSupportTicketUpdatedPayload(ticketLean, extra = {}) {
           : undefined,
       subject: t.subject,
       category: t.category,
+      categoryDetail: t.categoryDetail ?? '',
       priority: t.priority,
       status: t.status,
       lastMessageAt: t.lastMessageAt,

@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const {
   getNotifications,
+  getUnreadSummary,
   markAsRead,
   markAllAsRead,
   sendNotification,
@@ -10,6 +11,8 @@ const {
 
 // All routes require authentication
 router.use(authenticate);
+
+router.get('/unread-summary', getUnreadSummary);
 
 /**
  * @route   GET /api/notifications

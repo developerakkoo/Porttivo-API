@@ -13,6 +13,10 @@ const {
   buildSupportMessageSocketPayload,
   buildSupportTicketUpdatedPayload
 } = require('../utils/supportChatPayload')
+const {
+  validateCreatePayload,
+  buildSubject
+} = require('../constants/supportTicketCategories')
 const MSG_MAX_LEN = 2000
 
 async function allocateTicketSeq() {
@@ -44,7 +48,7 @@ function toMessagePlain(m) {
   return o
 }
 
-async function notifyAllActiveAdmins({ type, title, message, data }) {
+async function notifyAllActiveAdmins({ type, title, message, data }, io = null) {
   const admins = await Admin.find({ status: 'active' }).select('_id').lean()
   const docs = admins.map(a => ({
     userId: a._id,
@@ -57,6 +61,18 @@ async function notifyAllActiveAdmins({ type, title, message, data }) {
   }))
   if (docs.length) {
     await Notification.insertMany(docs)
+  }
+  if (io && docs.length) {
+    io.to('admin:all').emit('admin:notification', {
+      type,
+      title,
+      message,
+      ticketId:
+        data?.ticketId != null && data.ticketId.toString
+          ? data.ticketId.toString()
+          : data?.ticketId,
+      ticketNumber: data?.ticketNumber
+    })
   }
 }
 
@@ -110,13 +126,17 @@ function broadcastTicketUpdated(io, ticketLean, transporterId) {
 async function createTicket(io, transporterId, body) {
   const {
     subject: subjRaw,
-    category = '',
     priority = 'medium',
     message: initialMessage = '',
     attachments: attachmentsRaw
   } = body || {}
 
-  const subject = String(subjRaw || '').trim()
+  const { category, categoryDetail } = validateCreatePayload(body)
+
+  let subject = String(subjRaw || '').trim()
+  if (!subject) {
+    subject = buildSubject(category, categoryDetail)
+  }
   if (!subject) {
     const err = new Error('subject is required')
     err.status = 400
@@ -149,7 +169,8 @@ async function createTicket(io, transporterId, body) {
     ticketSeq,
     transporterId,
     subject,
-    category: String(category || '').trim(),
+    category,
+    categoryDetail,
     priority: ['low', 'medium', 'high', 'urgent'].includes(priority)
       ? priority
       : 'medium',
@@ -182,21 +203,25 @@ async function createTicket(io, transporterId, body) {
     type: 'created',
     actorType: 'transporter',
     actorId: transporterId,
-    payload: { subject }
+    payload: { subject, category, categoryDetail }
   })
 
   const populatedMessage = await SupportMessage.findById(message._id).lean()
 
-  await notifyAllActiveAdmins({
-    type: 'SUPPORT_TICKET_CREATED',
-    title: 'New support ticket',
-    message: `${ticketNumber}: ${subject}`,
-    data: {
-      ticketId: ticket._id.toString(),
-      ticketNumber,
-      transporterId: transporterId.toString()
-    }
-  })
+  await notifyAllActiveAdmins(
+    {
+      type: 'SUPPORT_TICKET_CREATED',
+      title: 'New support ticket',
+      message: `${ticketNumber}: ${subject}`,
+      data: {
+        ticketId: ticket._id.toString(),
+        ticketNumber,
+        transporterId: transporterId.toString(),
+        category
+      }
+    },
+    io
+  )
 
   const freshTicket = await SupportTicket.findById(ticket._id).lean()
   broadcastTicketUpdated(io, freshTicket, transporterId.toString())
@@ -317,16 +342,19 @@ async function appendMessage(io, ticket, { senderType, senderId, content, attach
       }
     })
   } else {
-    await notifyAllActiveAdmins({
-      type: 'SUPPORT_MESSAGE',
-      title: `Ticket ${ticket.ticketNumber}`,
-      message: contentTrim.slice(0, 200) || 'New message from transporter',
-      data: {
-        ticketId: ticket._id.toString(),
-        ticketNumber: ticket.ticketNumber,
-        transporterId: tId
-      }
-    })
+    await notifyAllActiveAdmins(
+      {
+        type: 'SUPPORT_MESSAGE',
+        title: `Ticket ${ticket.ticketNumber}`,
+        message: contentTrim.slice(0, 200) || 'New message from transporter',
+        data: {
+          ticketId: ticket._id.toString(),
+          ticketNumber: ticket.ticketNumber,
+          transporterId: tId
+        }
+      },
+      io
+    )
   }
 
   const freshTicket = await SupportTicket.findById(ticket._id).lean()

@@ -114,6 +114,7 @@ router.get('/audit-logs', getAuditLogs);
 router.get('/system-audit-logs', getSystemAuditLogs);
 
 /** Support tickets (transporter ↔ admin) */
+router.get('/support/categories', supportTicketCtrl.getSupportCategoriesAdmin);
 router.get('/support/tickets', supportTicketCtrl.listTicketsAdmin);
 router.get('/support/tickets/:id/messages', supportTicketCtrl.getMessagesAdmin);
 router.get('/support/tickets/:id/events', supportTicketCtrl.getTicketEventsAdmin);

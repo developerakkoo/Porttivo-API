@@ -4,6 +4,10 @@ const SupportTicketEvent = require('../models/SupportTicketEvent')
 const { getIO } = require('../services/socket.service')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const supportTicketService = require('../services/supportTicket.service')
+const {
+  buildCategoryFilter,
+  getCategoriesMetadata
+} = require('../constants/supportTicketCategories')
 
 function safeIO() {
   try {
@@ -208,6 +212,17 @@ exports.markMessageReadTransporter = async (req, res, next) => {
   }
 }
 
+exports.getSupportCategoriesAdmin = async (req, res, next) => {
+  try {
+    return res.json({
+      success: true,
+      data: { categories: getCategoriesMetadata() }
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
 exports.listTicketsAdmin = async (req, res, next) => {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1)
@@ -217,6 +232,10 @@ exports.listTicketsAdmin = async (req, res, next) => {
     if (req.query.status) filter.status = req.query.status
     if (req.query.transporterId && mongoose.Types.ObjectId.isValid(req.query.transporterId)) {
       filter.transporterId = req.query.transporterId
+    }
+    const categoryFilter = buildCategoryFilter(req.query)
+    if (categoryFilter) {
+      Object.assign(filter, categoryFilter)
     }
 
     const [tickets, total] = await Promise.all([

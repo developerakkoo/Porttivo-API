@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { ALL_CODES } = require('../constants/supportTicketCategories');
 
 const supportTicketSchema = new mongoose.Schema(
   {
@@ -31,6 +32,14 @@ const supportTicketSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: '',
+      enum: ['', ...ALL_CODES],
+      index: true,
+    },
+    categoryDetail: {
+      type: String,
+      trim: true,
+      default: '',
+      maxlength: 200,
     },
     priority: {
       type: String,
@@ -84,5 +93,6 @@ const supportTicketSchema = new mongoose.Schema(
 
 supportTicketSchema.index({ transporterId: 1, updatedAt: -1 });
 supportTicketSchema.index({ status: 1, updatedAt: -1 });
+supportTicketSchema.index({ category: 1, updatedAt: -1 });
 
 module.exports = mongoose.model('SupportTicket', supportTicketSchema);

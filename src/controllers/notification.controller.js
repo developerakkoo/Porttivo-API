@@ -3,26 +3,41 @@ const Notification = require('../models/Notification');
 /**
  * Get user notifications
  * GET /api/notifications
+ * Query: page, limit (max 100), read, type (single), types (comma-separated, overrides type)
  */
 const getNotifications = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, read, type } = req.query;
-    const userId = req.user.id;
-    const userType = req.user.userType.toUpperCase();
+    const { page = 1, read, type, types: typesQ } = req.query
+    let limit = parseInt(req.query.limit, 10) || 20
+    if (limit > 100) limit = 100
+    if (limit < 1) limit = 20
 
-    const query = { userId, userType };
-    if (read !== undefined) query.read = read === 'true';
-    if (type) query.type = type;
+    const userId = req.user.id
+    const userType = req.user.userType.toUpperCase()
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const query = { userId, userType }
+    if (read !== undefined) query.read = read === 'true'
+    if (typesQ) {
+      const arr = String(typesQ)
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+      if (arr.length) query.type = { $in: arr }
+    } else if (type) {
+      query.type = type
+    }
+
+    const skip = (parseInt(page, 10) - 1) * limit
 
     const notifications = await Notification.find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(parseInt(limit));
+      .limit(limit)
 
-    const total = await Notification.countDocuments(query);
-    const unreadCount = await Notification.countDocuments({ userId, userType, read: false });
+    const total = await Notification.countDocuments(query)
+    const unreadFilter = { userId, userType, read: false }
+    if (query.type) unreadFilter.type = query.type
+    const unreadCount = await Notification.countDocuments(unreadFilter)
 
     return res.status(200).json({
       success: true,
@@ -41,17 +56,53 @@ const getNotifications = async (req, res, next) => {
         })),
         unreadCount,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: parseInt(page, 10),
+          limit,
           total,
-          pages: Math.ceil(total / parseInt(limit)),
+          pages: Math.ceil(total / limit),
         },
       },
-    });
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
+
+/**
+ * GET /api/notifications/unread-summary
+ * Unread counts for selected types (default: support-related types).
+ */
+const getUnreadSummary = async (req, res, next) => {
+  try {
+    const userId = req.user.id
+    const userType = req.user.userType.toUpperCase()
+    const defaultTypes = [
+      'SUPPORT_TICKET_CREATED',
+      'SUPPORT_MESSAGE',
+      'SUPPORT_STATUS_CHANGED',
+    ]
+    let types = defaultTypes
+    if (req.query.types) {
+      const arr = String(req.query.types)
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+      if (arr.length) types = arr
+    }
+    const unreadCount = await Notification.countDocuments({
+      userId,
+      userType,
+      read: false,
+      type: { $in: types },
+    })
+    return res.status(200).json({
+      success: true,
+      data: { unreadCount, types },
+    })
+  } catch (error) {
+    next(error)
+  }
+}
 
 /**
  * Mark notification as read
@@ -93,16 +144,27 @@ const markAsRead = async (req, res, next) => {
 /**
  * Mark all notifications as read
  * PUT /api/notifications/read-all
+ * Optional query: types=comma-separated or type=single (limit which unread rows are updated)
  */
 const markAllAsRead = async (req, res, next) => {
   try {
-    const userId = req.user.id;
-    const userType = req.user.userType.toUpperCase();
+    const userId = req.user.id
+    const userType = req.user.userType.toUpperCase()
 
-    const result = await Notification.updateMany(
-      { userId, userType, read: false },
-      { $set: { read: true, readAt: new Date() } }
-    );
+    const filter = { userId, userType, read: false }
+    if (req.query.types) {
+      const arr = String(req.query.types)
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+      if (arr.length) filter.type = { $in: arr }
+    } else if (req.query.type) {
+      filter.type = req.query.type
+    }
+
+    const result = await Notification.updateMany(filter, {
+      $set: { read: true, readAt: new Date() },
+    })
 
     return res.status(200).json({
       success: true,
@@ -110,11 +172,11 @@ const markAllAsRead = async (req, res, next) => {
       data: {
         modifiedCount: result.modifiedCount,
       },
-    });
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Send notification (Admin/System only)
@@ -171,7 +233,8 @@ const sendNotification = async (req, res, next) => {
 
 module.exports = {
   getNotifications,
+  getUnreadSummary,
   markAsRead,
   markAllAsRead,
   sendNotification,
-};
+}

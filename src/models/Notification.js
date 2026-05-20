@@ -77,6 +77,7 @@ const notificationSchema = new mongoose.Schema(
 notificationSchema.index({ userId: 1, userType: 1, read: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, userType: 1, createdAt: -1 });
 notificationSchema.index({ type: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, userType: 1, type: 1, read: 1, createdAt: -1 });
 
 // Method to mark as read
 notificationSchema.methods.markAsRead = function () {
