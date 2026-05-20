@@ -53,16 +53,16 @@ const supportMessageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-supportMessageSchema.pre('validate', function validateSender(next) {
+// Mongoose 9+: pre hooks must not use `next`; throw or return a Promise instead.
+supportMessageSchema.pre('validate', function validateSender() {
   if (this.senderType === 'system') {
     this.senderId = undefined;
     if (!['SYSTEM_STATUS', 'SYSTEM_RATING_THANKS'].includes(this.messageType)) {
       this.messageType = 'SYSTEM_STATUS';
     }
   } else if (!this.senderId) {
-    return next(new Error('senderId is required for non-system messages'));
+    throw new Error('senderId is required for non-system messages');
   }
-  return next();
 });
 
 supportMessageSchema.index({ ticketId: 1, createdAt: -1 });
