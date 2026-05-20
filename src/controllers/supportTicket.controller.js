@@ -135,6 +135,31 @@ exports.postMessageTransporter = async (req, res, next) => {
   }
 }
 
+exports.postTicketRatingTransporter = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterActorId(req.user)
+    if (!transporterId) {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
+    }
+    await supportTicketService.assertTicketAccess(req.params.id, {
+      transporterId
+    })
+    const io = safeIO()
+    const ticket = await supportTicketService.submitTicketRating(
+      io,
+      req.params.id,
+      transporterId,
+      { score: req.body.score, comment: req.body.comment }
+    )
+    return res.json({ success: true, data: { ticket } })
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({ success: false, message: err.message })
+    }
+    next(err)
+  }
+}
+
 exports.patchTicketTransporter = async (req, res, next) => {
   try {
     const transporterId = getTransporterActorId(req.user)

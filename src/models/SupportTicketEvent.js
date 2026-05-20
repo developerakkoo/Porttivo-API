@@ -10,7 +10,7 @@ const supportTicketEventSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['created', 'status_changed'],
+      enum: ['created', 'status_changed', 'rated'],
       required: true,
     },
     actorType: {

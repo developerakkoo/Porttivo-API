@@ -63,6 +63,21 @@ const supportTicketSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    ratingScore: {
+      type: Number,
+      default: null,
+    },
+    ratingComment: {
+      type: String,
+      trim: true,
+      default: '',
+      maxlength: 500,
+    },
+    ratedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
   },
   { timestamps: true }
 );

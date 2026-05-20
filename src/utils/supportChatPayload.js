@@ -52,6 +52,9 @@ function buildSupportTicketUpdatedPayload(ticketLean, extra = {}) {
       unreadByAdmin: t.unreadByAdmin,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
+      ratingScore: t.ratingScore ?? null,
+      ratingComment: t.ratingComment ?? null,
+      ratedAt: t.ratedAt ?? null,
     },
     ...extra,
   }

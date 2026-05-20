@@ -79,13 +79,17 @@ function effectiveMessageType(contentTrim, attachments) {
 
 function broadcastMessage(io, ticket, transporterId, populatedLean) {
   if (!io) return
+  const senderType = populatedLean.senderType
   const payload = buildSupportMessageSocketPayload(
     ticket._id,
     populatedLean,
-    populatedLean.senderType
+    senderType
   )
   io.to(`support:${ticket._id}`).emit('support:message:new', payload)
-  if (populatedLean.senderType === 'admin') {
+  if (senderType === 'system') {
+    io.to(`transporter:${transporterId}`).emit('support:message:new', payload)
+    io.to('admin:all').emit('support:message:new', payload)
+  } else if (senderType === 'admin') {
     io.to(`transporter:${transporterId}`).emit('support:message:new', payload)
   } else {
     io.to('admin:all').emit('support:message:new', payload)
@@ -230,6 +234,24 @@ async function assertTicketAccess(ticketId, { transporterId, adminUserId }) {
  * @returns {Promise<{ message: object, ticket: object }>}
  */
 async function appendMessage(io, ticket, { senderType, senderId, content, attachmentsRaw }) {
+  if (senderType === 'system') {
+    const err = new Error('Invalid message')
+    err.status = 400
+    throw err
+  }
+  if (!['transporter', 'admin'].includes(senderType)) {
+    const err = new Error('Invalid senderType')
+    err.status = 400
+    throw err
+  }
+  if (senderType === 'transporter' && ticket.status === 'resolved') {
+    const err = new Error(
+      'This ticket is resolved. Open a new support ticket to continue.'
+    )
+    err.status = 400
+    throw err
+  }
+
   const attachments = normalizeAttachmentsInput(attachmentsRaw)
   if (attachments.length > MAX_CHAT_ATTACHMENTS) {
     const err = new Error(`At most ${MAX_CHAT_ATTACHMENTS} attachments`)
@@ -313,6 +335,54 @@ async function appendMessage(io, ticket, { senderType, senderId, content, attach
   return { message: populatedMessage, ticket: freshTicket }
 }
 
+/**
+ * Insert an automated thread line (resolve, thanks, etc.). Updates preview and optional unread.
+ * @returns {Promise<{ message: object, ticket: object }>}
+ */
+async function insertSystemMessage(
+  io,
+  ticketDoc,
+  {
+    messageType,
+    content,
+    preview,
+    systemMeta,
+    incrementTransporterUnread = false,
+    incrementAdminUnread = false
+  }
+) {
+  const message = await SupportMessage.create({
+    ticketId: ticketDoc._id,
+    senderType: 'system',
+    messageType,
+    content,
+    systemMeta,
+    attachments: [],
+    status: 'READ',
+    readAt: new Date()
+  })
+  if (incrementTransporterUnread) {
+    ticketDoc.unreadByTransporter = (ticketDoc.unreadByTransporter || 0) + 1
+  }
+  if (incrementAdminUnread) {
+    ticketDoc.unreadByAdmin = (ticketDoc.unreadByAdmin || 0) + 1
+  }
+  ticketDoc.lastMessageAt = new Date()
+  ticketDoc.lastMessagePreview = (preview != null
+    ? String(preview)
+    : String(content || '')
+  ).slice(0, 120)
+  await ticketDoc.save()
+
+  let populatedMessage = await SupportMessage.findById(message._id).lean()
+  populatedMessage = { ...populatedMessage, senderType: 'system' }
+  const tId = ticketDoc.transporterId.toString()
+  broadcastMessage(io, ticketDoc, tId, populatedMessage)
+  const freshTicket = await SupportTicket.findById(ticketDoc._id).lean()
+  broadcastTicketUpdated(io, freshTicket, tId)
+  return { message: populatedMessage, ticket: freshTicket }
+}
+
 async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
   const prev = ticket.status
   let statusChanged = false
@@ -344,6 +414,42 @@ async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
 
   const tId = ticket.transporterId.toString()
 
+  if (statusChanged && ticket.status === 'resolved') {
+    await notifyTransporter(tId, {
+      type: 'SUPPORT_STATUS_CHANGED',
+      title: `Ticket ${ticket.ticketNumber} resolved`,
+      message:
+        'Your support ticket was marked resolved. Please rate your experience in the app.',
+      data: {
+        ticketId: ticket._id.toString(),
+        ticketNumber: ticket.ticketNumber,
+        status: ticket.status
+      }
+    })
+    const ticketReload = await SupportTicket.findById(ticket._id)
+    if (ticketReload) {
+      const preview = 'Ticket marked resolved'
+      const content = `This conversation was marked resolved by support (ticket ${ticketReload.ticketNumber}). You can leave a rating to help us improve.`
+      await insertSystemMessage(io, ticketReload, {
+        messageType: 'SYSTEM_STATUS',
+        content,
+        preview,
+        systemMeta: {
+          kind: 'status_change',
+          from: prev,
+          to: 'resolved',
+          actorAdminId:
+            adminId != null && adminId.toString
+              ? adminId.toString()
+              : String(adminId)
+        },
+        incrementTransporterUnread: true,
+        incrementAdminUnread: false
+      })
+    }
+    return SupportTicket.findById(ticket._id).lean()
+  }
+
   if (statusChanged) {
     await notifyTransporter(tId, {
       type: 'SUPPORT_STATUS_CHANGED',
@@ -360,6 +466,68 @@ async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
   const freshTicket = await SupportTicket.findById(ticket._id).lean()
   broadcastTicketUpdated(io, freshTicket, tId)
   return freshTicket
+}
+
+/**
+ * One-time CSAT for a resolved ticket (transporter scope).
+ * @param {import('socket.io').Server | null} io
+ */
+async function submitTicketRating(io, ticketId, transporterId, { score, comment }) {
+  const ticket = await SupportTicket.findById(ticketId)
+  if (!ticket) {
+    const err = new Error('Ticket not found')
+    err.status = 404
+    throw err
+  }
+  if (ticket.transporterId.toString() !== transporterId.toString()) {
+    const err = new Error('Forbidden')
+    err.status = 403
+    throw err
+  }
+  if (ticket.status !== 'resolved') {
+    const err = new Error('You can only rate resolved tickets')
+    err.status = 400
+    throw err
+  }
+  if (ticket.ratedAt) {
+    const err = new Error('This ticket has already been rated')
+    err.status = 409
+    throw err
+  }
+  const s = Number(score)
+  if (!Number.isInteger(s) || s < 1 || s > 5) {
+    const err = new Error('score must be an integer from 1 to 5')
+    err.status = 400
+    throw err
+  }
+  const commentTrim =
+    comment != null ? String(comment).trim().slice(0, 500) : ''
+  ticket.ratingScore = s
+  ticket.ratingComment = commentTrim
+  ticket.ratedAt = new Date()
+  await ticket.save()
+
+  await SupportTicketEvent.create({
+    ticketId: ticket._id,
+    type: 'rated',
+    actorType: 'transporter',
+    actorId: transporterId,
+    payload: { score: s, hasComment: !!commentTrim }
+  })
+
+  const tReload = await SupportTicket.findById(ticket._id)
+  if (tReload) {
+    await insertSystemMessage(io, tReload, {
+      messageType: 'SYSTEM_RATING_THANKS',
+      content: 'Thank you for your feedback.',
+      preview: 'Thank you for your feedback',
+      systemMeta: { kind: 'rating_thanks' },
+      incrementTransporterUnread: false,
+      incrementAdminUnread: true
+    })
+  }
+
+  return SupportTicket.findById(ticket._id).lean()
 }
 
 async function markDeliveredForOthers(ticketId, joinedUserIsAdmin) {
@@ -415,6 +583,11 @@ async function markMessageRead(messageId, reader) {
       err.status = 403
       throw err
     }
+    if (message.senderType === 'system') {
+      const err = new Error('System messages cannot be marked read')
+      err.status = 400
+      throw err
+    }
     if (message.senderType !== 'admin') {
       const err = new Error('Only admin messages can be marked read by transporter')
       err.status = 400
@@ -450,7 +623,9 @@ module.exports = {
   createTicket,
   assertTicketAccess,
   appendMessage,
+  insertSystemMessage,
   updateTicketStatus,
+  submitTicketRating,
   markDeliveredForOthers,
   clearUnreadForViewer,
   markMessageRead,

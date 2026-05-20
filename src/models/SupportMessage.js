@@ -10,24 +10,33 @@ const supportMessageSchema = new mongoose.Schema(
     },
     senderType: {
       type: String,
-      enum: ['transporter', 'admin'],
+      enum: ['transporter', 'admin', 'system'],
       required: true,
       index: true,
     },
     senderId: {
       type: mongoose.Schema.Types.ObjectId,
-      required: true,
+      default: null,
       index: true,
     },
     messageType: {
       type: String,
-      enum: ['TEXT', 'ATTACHMENT'],
+      enum: [
+        'TEXT',
+        'ATTACHMENT',
+        'SYSTEM_STATUS',
+        'SYSTEM_RATING_THANKS',
+      ],
       default: 'TEXT',
     },
     content: {
       type: String,
       trim: true,
       default: '',
+    },
+    systemMeta: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
     },
     attachments: [{ type: mongoose.Schema.Types.Mixed }],
     status: {
@@ -43,6 +52,18 @@ const supportMessageSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+supportMessageSchema.pre('validate', function validateSender(next) {
+  if (this.senderType === 'system') {
+    this.senderId = undefined;
+    if (!['SYSTEM_STATUS', 'SYSTEM_RATING_THANKS'].includes(this.messageType)) {
+      this.messageType = 'SYSTEM_STATUS';
+    }
+  } else if (!this.senderId) {
+    return next(new Error('senderId is required for non-system messages'));
+  }
+  return next();
+});
 
 supportMessageSchema.index({ ticketId: 1, createdAt: -1 });
 supportMessageSchema.index({ ticketId: 1, status: 1 });

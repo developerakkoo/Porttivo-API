@@ -24,6 +24,7 @@ router.get('/tickets', ctrl.listTicketsTransporter)
 router.get('/tickets/:id', ctrl.getTicketTransporter)
 router.get('/tickets/:id/messages', ctrl.getMessagesTransporter)
 router.post('/tickets/:id/messages', ctrl.postMessageTransporter)
+router.post('/tickets/:id/rating', ctrl.postTicketRatingTransporter)
 router.patch('/tickets/:id', ctrl.patchTicketTransporter)
 router.put('/messages/:messageId/read', ctrl.markMessageReadTransporter)
 
