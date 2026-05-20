@@ -19,7 +19,7 @@ async function allocateTicketSeq() {
   const doc = await SupportTicketCounter.findOneAndUpdate(
     { _id: 'support_ticket' },
     [{ $set: { seq: { $add: [{ $ifNull: ['$seq', 99999] }, 1] } } }],
-    { new: true, upsert: true }
+    { new: true, upsert: true, updatePipeline: true }
   )
   const seq = doc?.seq
   if (seq == null) throw new Error('Failed to allocate ticket sequence')
