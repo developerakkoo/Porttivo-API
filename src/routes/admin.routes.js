@@ -45,6 +45,7 @@ const {
 } = require('../controllers/admin.controller');
 
 const { listVehicleTypes, createVehicleType, updateVehicleType, deleteVehicleType } = require('../controllers/vehicleType.controller');
+const supportTicketCtrl = require('../controllers/supportTicket.controller');
 
 // All routes require authentication
 router.use(authenticate);
@@ -111,6 +112,15 @@ router.get('/fraud/review-queue', getFraudReviewQueue);
 router.get('/settlements/oversight', getSettlementOversight);
 router.get('/audit-logs', getAuditLogs);
 router.get('/system-audit-logs', getSystemAuditLogs);
+
+/** Support tickets (transporter ↔ admin) */
+router.get('/support/tickets', supportTicketCtrl.listTicketsAdmin);
+router.get('/support/tickets/:id/messages', supportTicketCtrl.getMessagesAdmin);
+router.get('/support/tickets/:id/events', supportTicketCtrl.getTicketEventsAdmin);
+router.get('/support/tickets/:id', supportTicketCtrl.getTicketAdmin);
+router.post('/support/tickets/:id/messages', supportTicketCtrl.postMessageAdmin);
+router.patch('/support/tickets/:id', supportTicketCtrl.patchTicketAdmin);
+router.put('/support/messages/:messageId/read', supportTicketCtrl.markMessageReadAdmin);
 
 // User Management Routes
 

@@ -30,6 +30,7 @@ const notificationRoutes = require('./src/routes/notification.routes');
 const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
 const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
 const messageRoutes = require('./src/routes/message.routes');
+const supportTransporterRoutes = require('./src/routes/supportTransporter.routes');
 const { getCustomerDetails } = require('./src/controllers/admin.controller');
 const { authenticate } = require('./src/middleware/auth.middleware');
 const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability');
@@ -87,6 +88,7 @@ app.get('/health', (req, res) => {
 
 // API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/transporters/support', supportTransporterRoutes);
 app.use('/api/transporters', transporterRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/vehicles', vehicleRoutes);

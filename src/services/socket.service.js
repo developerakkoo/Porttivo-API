@@ -46,6 +46,8 @@ const {
   effectiveChatMessageType
 } = require('../utils/marketplaceChatAttachments')
 const { canTransporterPartyViewTripExecution } = require('./tripAccess.service')
+const SupportTicket = require('../models/SupportTicket')
+const supportTicketService = require('./supportTicket.service')
 const env = require('../config/env')
 let io = null
 let staleDriverTrackingTimer = null
@@ -1953,6 +1955,155 @@ const initializeSocketIO = httpServer => {
       logSocketEvent('chat:typing', socket, {
         bookingId,
         result: 'emitted'
+      })
+    })
+
+    // ================= SUPPORT TICKET CHAT =================
+    socket.on('support:join', async ({ ticketId }) => {
+      try {
+        logSocketEvent('support:join', socket, { ticketId, phase: 'attempt' })
+        if (!ticketId) {
+          return socket.emit('error', { message: 'ticketId required' })
+        }
+        const ticket = await SupportTicket.findById(ticketId)
+        if (!ticket) {
+          return socket.emit('error', { message: 'Ticket not found' })
+        }
+        const scopeId = getTransporterScopeId(socket.user)
+        const isAdmin = socket.user.userType === 'admin'
+        if (!isAdmin) {
+          if (!scopeId || ticket.transporterId.toString() !== scopeId) {
+            return socket.emit('error', { message: 'Forbidden' })
+          }
+        }
+
+        socket.join(`support:${ticketId}`)
+        await supportTicketService.markDeliveredForOthers(ticket._id, isAdmin)
+        const fresh = await supportTicketService.clearUnreadForViewer(
+          ticket._id,
+          isAdmin
+        )
+        if (fresh) {
+          supportTicketService.broadcastTicketUpdated(
+            io,
+            fresh,
+            ticket.transporterId.toString()
+          )
+        }
+        logSocketEvent('support:join', socket, { ticketId, result: 'joined' })
+        socket.emit('support:joined', { ticketId })
+      } catch (err) {
+        logSocketEvent(
+          'support:join',
+          socket,
+          { result: 'error', message: err.message },
+          'error'
+        )
+        socket.emit('error', { message: err.message })
+      }
+    })
+
+    socket.on('support:leave', ({ ticketId }) => {
+      if (ticketId) socket.leave(`support:${ticketId}`)
+    })
+
+    socket.on('support:message:send', async data => {
+      try {
+        const { ticketId, content, attachments: attachmentsRaw } = data || {}
+        logSocketEvent('support:message:send', socket, {
+          ticketId,
+          phase: 'attempt'
+        })
+        if (!ticketId) {
+          return socket.emit('error', { message: 'ticketId required' })
+        }
+        if (!socket.rooms.has(`support:${ticketId}`)) {
+          return socket.emit('error', {
+            message: 'Join support thread before sending'
+          })
+        }
+
+        const ticket = await SupportTicket.findById(ticketId)
+        if (!ticket) {
+          return socket.emit('error', { message: 'Ticket not found' })
+        }
+
+        const scopeId = getTransporterScopeId(socket.user)
+        const isAdmin = socket.user.userType === 'admin'
+        if (isAdmin) {
+          await supportTicketService.appendMessage(io, ticket, {
+            senderType: 'admin',
+            senderId: socket.user.id,
+            content,
+            attachmentsRaw
+          })
+        } else {
+          if (!scopeId || ticket.transporterId.toString() !== scopeId) {
+            return socket.emit('error', { message: 'Forbidden' })
+          }
+          await supportTicketService.appendMessage(io, ticket, {
+            senderType: 'transporter',
+            senderId: scopeId,
+            content,
+            attachmentsRaw
+          })
+        }
+        logSocketEvent('support:message:send', socket, {
+          ticketId,
+          result: 'success'
+        })
+      } catch (err) {
+        logSocketEvent(
+          'support:message:send',
+          socket,
+          { result: 'error', message: err.message },
+          'error'
+        )
+        socket.emit('error', { message: err.message })
+      }
+    })
+
+    socket.on('support:message:read', async ({ messageId }) => {
+      try {
+        if (!messageId) {
+          return socket.emit('error', { message: 'messageId required' })
+        }
+        const isAdmin = socket.user.userType === 'admin'
+        const reader = isAdmin
+          ? { userType: 'admin', transporterScopeId: null }
+          : {
+              userType: 'transporter',
+              transporterScopeId: getTransporterScopeId(socket.user)
+            }
+        if (!isAdmin && !reader.transporterScopeId) {
+          return socket.emit('error', { message: 'Forbidden' })
+        }
+        const { message } = await supportTicketService.markMessageRead(
+          messageId,
+          reader
+        )
+        const readPayload = {
+          ticketId: message.ticketId.toString(),
+          messageId: message._id.toString(),
+          readAt: message.readAt
+        }
+        io.to(`support:${message.ticketId}`).emit(
+          'support:message:read',
+          readPayload
+        )
+      } catch (err) {
+        socket.emit('error', { message: err.message })
+      }
+    })
+
+    socket.on('support:typing', ({ ticketId }) => {
+      if (!ticketId || !socket.rooms.has(`support:${ticketId}`)) return
+      const isAdmin = socket.user.userType === 'admin'
+      const scopeId = getTransporterScopeId(socket.user)
+      if (!isAdmin && !scopeId) return
+      socket.to(`support:${ticketId}`).emit('support:typing', {
+        ticketId,
+        senderType: isAdmin ? 'admin' : 'transporter'
       })
     })
 
