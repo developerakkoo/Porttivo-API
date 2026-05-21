@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Admin = require('../models/Admin');
 const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
@@ -7,6 +8,9 @@ const CompanyUser = require('../models/CompanyUser');
 const Customer = require('../models/Customer');
 const Trip = require('../models/Trip');
 const Vehicle = require('../models/Vehicle');
+const VehicleRouteAvailability = require('../models/VehicleRouteAvailability');
+const VehicleRouteAssignment = require('../models/VehicleRouteAssignment');
+const VehicleBooking = require('../models/VehicleBooking');
 const FuelTransaction = require('../models/FuelTransaction');
 const Settlement = require('../models/Settlement');
 const Wallet = require('../models/Wallet');
@@ -43,6 +47,38 @@ const buildAdminTripSort = (sortBy, sortOrder) => {
   const order = String(sortOrder || '').toLowerCase() === 'asc' ? 1 : -1;
   return { [field]: order };
 };
+
+const buildRoutePostDestinationFields = (post) => {
+  const destination = post.destination || null;
+  const destinations = Array.isArray(post.destinations) ? post.destinations : [];
+  const destinationsAll = [destination, ...destinations].filter(
+    (entry) => entry && String(entry.formattedAddress ?? entry.address ?? '').trim().length > 0
+  );
+
+  return {
+    destination,
+    destinations,
+    destinationsAll,
+    destinationQuantities: Array.isArray(post.destinationQuantities) ? post.destinationQuantities : [],
+  };
+};
+
+const mapRouteAssignmentForAdmin = (assignment) => ({
+  id: assignment._id,
+  vehicleId: assignment.vehicleId?._id || assignment.vehicleId,
+  vehicleNumber: assignment.vehicleId?.vehicleNumber || null,
+  price: assignment.price === undefined || assignment.price === null ? null : assignment.price,
+  servedStopIndexes: Array.isArray(assignment.servedStopIndexes) ? assignment.servedStopIndexes : [],
+  transporter: assignment.transporterId
+    ? {
+        id: assignment.transporterId._id || assignment.transporterId,
+        name: assignment.transporterId.name || null,
+        mobile: assignment.transporterId.mobile || null,
+      }
+    : null,
+  createdAt: assignment.createdAt,
+  updatedAt: assignment.updatedAt,
+});
 
 const isFiniteLocationCoordinate = (value) => Number.isFinite(Number(value));
 
@@ -992,11 +1028,325 @@ const listAllTransporters = async (req, res, next) => {
 };
 
 /**
+ * Get all transporters with their vehicles grouped underneath
+ * GET /api/admin/transporters/with-vehicles
+ */
+const listTransportersWithVehicles = async (req, res, next) => {
+  try {
+    const [transporters, vehicles] = await Promise.all([
+      Transporter.find({})
+        .select('mobile name email company status hasAccess walletBalance createdAt updatedAt pin')
+        .sort({ createdAt: -1 })
+        .lean(),
+      Vehicle.find({})
+        .select('vehicleNumber status trailerType vehicleType ownerType transporterId driverId createdAt updatedAt')
+        .populate('driverId', 'name mobile status')
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
+
+    const transporterGroups = new Map(
+      transporters.map((transporter) => [
+        transporter._id.toString(),
+        {
+          id: transporter._id,
+          mobile: transporter.mobile,
+          name: transporter.name,
+          email: transporter.email,
+          company: transporter.company,
+          status: transporter.status,
+          hasAccess: transporter.hasAccess,
+          hasPinSet: !!transporter.pin,
+          walletBalance: transporter.walletBalance,
+          createdAt: transporter.createdAt,
+          updatedAt: transporter.updatedAt,
+          vehicles: [],
+        },
+      ])
+    );
+
+    vehicles.forEach((vehicle) => {
+      const group = transporterGroups.get(vehicle.transporterId?.toString());
+      if (!group) return;
+
+      group.vehicles.push({
+        id: vehicle._id,
+        vehicleNumber: vehicle.vehicleNumber,
+        status: vehicle.status,
+        ownerType: vehicle.ownerType,
+        vehicleType: vehicle.vehicleType,
+        trailerType: vehicle.trailerType,
+        driver: vehicle.driverId
+          ? {
+              id: vehicle.driverId._id,
+              name: vehicle.driverId.name,
+              mobile: vehicle.driverId.mobile,
+              status: vehicle.driverId.status,
+            }
+          : null,
+        createdAt: vehicle.createdAt,
+        updatedAt: vehicle.updatedAt,
+      });
+    });
+
+    const groupedTransporters = transporters.map((transporter) => {
+      const group = transporterGroups.get(transporter._id.toString());
+      return {
+        ...group,
+        vehicleCount: group.vehicles.length,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        transporters: groupedTransporters,
+        totals: {
+          transporters: groupedTransporters.length,
+          vehicles: vehicles.length,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get transporter route posts with bookings attached
+ * GET /api/admin/transporters/:id/route-posts
+ */
+const getTransporterRoutePosts = async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ID format',
+      });
+    }
+
+    const transporter = await Transporter.findById(req.params.id)
+      .select('mobile name email company status hasAccess walletBalance createdAt updatedAt pin')
+      .lean();
+
+    if (!transporter) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transporter not found',
+      });
+    }
+
+    const routePosts = await VehicleRouteAvailability.find({ transporterId: transporter._id })
+      .populate('vehicleId', 'vehicleNumber vehicleType trailerType status isBusy')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const postIds = routePosts.map((post) => post._id);
+    const [assignments, bookings] = await Promise.all([
+      postIds.length
+        ? VehicleRouteAssignment.find({
+            postId: { $in: postIds },
+            isReleased: { $ne: true },
+          })
+            .populate('vehicleId', 'vehicleNumber vehicleType trailerType status isBusy')
+            .populate('transporterId', 'name company mobile status')
+            .sort({ createdAt: -1 })
+            .lean()
+        : Promise.resolve([]),
+      postIds.length
+        ? VehicleBooking.find({ postId: { $in: postIds } })
+            .populate('buyerId', 'name mobile company status')
+            .populate('sellerId', 'name mobile company status')
+            .populate('vehicleId', 'vehicleNumber vehicleType trailerType status isBusy')
+            .populate('tripId', 'tripId status closedAt closedReason')
+            .sort({ createdAt: -1 })
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    const assignmentsByPost = assignments.reduce((acc, assignment) => {
+      const key = assignment.postId?.toString();
+      if (!key) return acc;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(assignment);
+      return acc;
+    }, {});
+
+    const bookingsByPost = bookings.reduce((acc, booking) => {
+      const key = booking.postId?._id?.toString() || booking.postId?.toString();
+      if (!key) return acc;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(booking);
+      return acc;
+    }, {});
+
+    const routePostsWithBookings = routePosts.map((post) => {
+      const postKey = post._id.toString();
+      const postAssignments = assignmentsByPost[postKey] || [];
+      const postBookings = bookingsByPost[postKey] || [];
+      const destination = post.destination || null;
+      const destinations = Array.isArray(post.destinations) ? post.destinations : [];
+
+      return {
+        id: post._id,
+        transporter: {
+          id: transporter._id,
+          mobile: transporter.mobile,
+          name: transporter.name,
+          email: transporter.email,
+          company: transporter.company,
+          status: transporter.status,
+          hasAccess: transporter.hasAccess,
+          hasPinSet: !!transporter.pin,
+          walletBalance: transporter.walletBalance,
+        },
+        vehicle: post.vehicleId
+          ? {
+              id: post.vehicleId._id,
+              vehicleNumber: post.vehicleId.vehicleNumber,
+              vehicleType: post.vehicleId.vehicleType || post.vehicleType,
+              trailerType: post.vehicleId.trailerType || null,
+              status: post.vehicleId.status,
+              isBusy: post.vehicleId.isBusy,
+            }
+          : null,
+        vehicleType: post.vehicleType,
+        origin: post.origin,
+        destination,
+        destinations,
+        destinationsAll: [destination, ...destinations].filter(
+          (entry) => entry && String(entry.formattedAddress ?? entry.address ?? '').trim().length > 0
+        ),
+        destinationQuantities: Array.isArray(post.destinationQuantities) ? post.destinationQuantities : [],
+        quantity: post.quantity,
+        slotsLeft: post.slotsLeft,
+        pricePerVehicle: post.pricePerVehicle || null,
+        availableFrom: post.availableFrom,
+        availableTo: post.availableTo,
+        note: post.note,
+        status: post.status,
+        availableVehicles: postAssignments.map((assignment) => ({
+          id: assignment._id,
+          vehicleId: assignment.vehicleId?._id || assignment.vehicleId,
+          vehicleNumber: assignment.vehicleId?.vehicleNumber || null,
+          price: assignment.price === undefined || assignment.price === null ? null : assignment.price,
+          servedStopIndexes: Array.isArray(assignment.servedStopIndexes) ? assignment.servedStopIndexes : [],
+          transporter: assignment.transporterId
+            ? {
+                id: assignment.transporterId._id || assignment.transporterId,
+                name: assignment.transporterId.name || null,
+                mobile: assignment.transporterId.mobile || null,
+              }
+            : null,
+          createdAt: assignment.createdAt,
+          updatedAt: assignment.updatedAt,
+        })),
+        bookings: postBookings.map((booking) => ({
+          id: booking._id,
+          postId: booking.postId?._id || booking.postId,
+          assignmentId: booking.assignmentId,
+          vehicle: booking.vehicleId
+            ? {
+                id: booking.vehicleId._id,
+                vehicleNumber: booking.vehicleId.vehicleNumber,
+                vehicleType: booking.vehicleId.vehicleType,
+                trailerType: booking.vehicleId.trailerType,
+                status: booking.vehicleId.status,
+                isBusy: booking.vehicleId.isBusy,
+              }
+            : null,
+          buyer: booking.buyerId
+            ? {
+                id: booking.buyerId._id,
+                name: booking.buyerId.name,
+                mobile: booking.buyerId.mobile,
+                company: booking.buyerId.company,
+                status: booking.buyerId.status,
+              }
+            : null,
+          seller: booking.sellerId
+            ? {
+                id: booking.sellerId._id,
+                name: booking.sellerId.name,
+                mobile: booking.sellerId.mobile,
+                company: booking.sellerId.company,
+                status: booking.sellerId.status,
+              }
+            : null,
+          status: booking.status,
+          estimatedPrice: booking.estimatedPrice,
+          agreedPrice: booking.agreedPrice,
+          negotiationRound: booking.negotiationRound,
+          lastPriceProposal: booking.lastPriceProposal || null,
+          proposalAcknowledgedBy: booking.proposalAcknowledgedBy || null,
+          proposalAcknowledgedAt: booking.proposalAcknowledgedAt || null,
+          tripId: booking.tripId
+            ? {
+                id: booking.tripId._id,
+                tripId: booking.tripId.tripId,
+                status: booking.tripId.status,
+                closedAt: booking.tripId.closedAt,
+                closedReason: booking.tripId.closedReason,
+              }
+            : null,
+          submittedAt: booking.submittedAt,
+          acceptedAt: booking.acceptedAt,
+          rejectedAt: booking.rejectedAt,
+          confirmedAt: booking.confirmedAt,
+          completedAt: booking.completedAt,
+          note: booking.note,
+          paymentStatus: booking.paymentStatus,
+          createdAt: booking.createdAt,
+          updatedAt: booking.updatedAt,
+        })),
+        bookingCount: postBookings.length,
+        createdAt: post.createdAt,
+        updatedAt: post.updatedAt,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        transporter: {
+          id: transporter._id,
+          mobile: transporter.mobile,
+          name: transporter.name,
+          email: transporter.email,
+          company: transporter.company,
+          status: transporter.status,
+          hasAccess: transporter.hasAccess,
+          hasPinSet: !!transporter.pin,
+          walletBalance: transporter.walletBalance,
+        },
+        routePosts: routePostsWithBookings,
+        totals: {
+          routePosts: routePostsWithBookings.length,
+          vehicleAssignments: assignments.length,
+          bookings: bookings.length,
+          confirmedBookings: bookings.filter((booking) => booking.status === 'CONFIRMED').length,
+          completedBookings: bookings.filter((booking) => booking.status === 'COMPLETED').length,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get transporter details (Admin only)
  * GET /api/transporters/:id (when accessed by admin)
  */
 const getTransporterDetails = async (req, res, next) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ID format',
+      });
+    }
+
     // Vehicles/drivers are not embedded on Transporter; they reference transporterId.
     const transporter = await Transporter.findById(req.params.id).select('-pin');
 
@@ -1914,12 +2264,182 @@ const listAllCustomers = async (req, res, next) => {
 };
 
 /**
+ * Get all customers with their trips and activities grouped underneath
+ * GET /api/admin/customers/with-trips-activities
+ */
+const listCustomersWithTripsAndActivities = async (req, res, next) => {
+  try {
+    const { status, search } = req.query;
+
+    const query = {};
+    if (status) query.status = status;
+    if (search && search.trim()) {
+      const searchRegex = { $regex: search.trim(), $options: 'i' };
+      query.$or = [
+        { mobile: searchRegex },
+        { name: searchRegex },
+        { email: searchRegex },
+      ];
+    }
+
+    const customers = await Customer.find(query).sort({ createdAt: -1 }).lean();
+    const customerIds = customers.map((customer) => customer._id);
+
+    const [trips, activities] = await Promise.all([
+      customerIds.length
+        ? Trip.find({ customerId: { $in: customerIds } })
+            .select(
+              'customerId tripId status bookingStatus tripType containerNumber reference pickupLocation dropLocation customerName customerMobile transporterId vehicleId driverId createdAt updatedAt completedAt closedAt closureStatus audit'
+            )
+            .populate('transporterId', 'name company mobile status')
+            .populate('vehicleId', 'vehicleNumber trailerType vehicleType status')
+            .populate('driverId', 'name mobile status')
+            .sort({ createdAt: -1 })
+            .lean()
+        : Promise.resolve([]),
+      customerIds.length
+        ? AuditLog.find({ userType: 'CUSTOMER', userId: { $in: customerIds } })
+            .sort({ createdAt: -1 })
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    const groupedCustomers = new Map(
+      customers.map((customer) => [
+        customer._id.toString(),
+        {
+          id: customer._id,
+          mobile: customer.mobile,
+          name: customer.name,
+          email: customer.email,
+          status: customer.status,
+          isRegistered: customer.isRegistered,
+          createdAt: customer.createdAt,
+          updatedAt: customer.updatedAt,
+          trips: [],
+          activities: [],
+        },
+      ])
+    );
+
+    trips.forEach((trip) => {
+      const customerGroup = groupedCustomers.get(trip.customerId?.toString());
+      if (!customerGroup) return;
+
+      customerGroup.trips.push({
+        id: trip._id,
+        tripId: trip.tripId,
+        status: trip.status,
+        bookingStatus: trip.bookingStatus,
+        tripType: trip.tripType,
+        closureStatus: trip.closureStatus,
+        containerNumber: trip.containerNumber,
+        reference: trip.reference,
+        customerName: trip.customerName,
+        customerMobile: trip.customerMobile,
+        pickupLocation: trip.pickupLocation || null,
+        dropLocation: trip.dropLocation || null,
+        transporter: trip.transporterId
+          ? {
+              id: trip.transporterId._id,
+              name: trip.transporterId.name,
+              company: trip.transporterId.company,
+              mobile: trip.transporterId.mobile,
+              status: trip.transporterId.status,
+            }
+          : null,
+        vehicle: trip.vehicleId
+          ? {
+              id: trip.vehicleId._id,
+              vehicleNumber: trip.vehicleId.vehicleNumber,
+              trailerType: trip.vehicleId.trailerType,
+              vehicleType: trip.vehicleId.vehicleType,
+              status: trip.vehicleId.status,
+            }
+          : null,
+        driver: trip.driverId
+          ? {
+              id: trip.driverId._id,
+              name: trip.driverId.name,
+              mobile: trip.driverId.mobile,
+              status: trip.driverId.status,
+            }
+          : null,
+        audit: trip.audit
+          ? {
+              lastStatusChangedAt: trip.audit.lastStatusChangedAt || null,
+              statusHistory: Array.isArray(trip.audit.statusHistory) ? trip.audit.statusHistory : [],
+              createdBy: trip.audit.createdBy || null,
+              updatedBy: trip.audit.updatedBy || null,
+              acceptedBy: trip.audit.acceptedBy || null,
+            }
+          : null,
+        completedAt: trip.completedAt,
+        closedAt: trip.closedAt,
+        createdAt: trip.createdAt,
+        updatedAt: trip.updatedAt,
+      });
+    });
+
+    activities.forEach((activity) => {
+      const customerGroup = groupedCustomers.get(activity.userId?.toString());
+      if (!customerGroup) return;
+
+      customerGroup.activities.push({
+        id: activity._id,
+        action: activity.action,
+        resource: activity.resource,
+        resourceId: activity.resourceId,
+        result: activity.result,
+        requestMethod: activity.requestMethod,
+        requestPath: activity.requestPath,
+        responseStatus: activity.responseStatus,
+        errorMessage: activity.errorMessage,
+        metadata: activity.metadata || {},
+        createdAt: activity.createdAt,
+      });
+    });
+
+    const customersWithRelations = customers.map((customer) => {
+      const group = groupedCustomers.get(customer._id.toString());
+      return {
+        ...group,
+        tripCount: group.trips.length,
+        activityCount: group.activities.length,
+        latestTripAt: group.trips[0]?.createdAt || null,
+        latestActivityAt: group.activities[0]?.createdAt || null,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        customers: customersWithRelations,
+        totals: {
+          customers: customersWithRelations.length,
+          trips: trips.length,
+          activities: activities.length,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get single customer (Admin only)
  * GET /api/admin/customers/:id
  */
 const getCustomerDetails = async (req, res, next) => {
   try {
     const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ID format',
+      });
+    }
     const customer = await Customer.findById(id).lean();
     if (!customer) {
       return res.status(404).json({
@@ -2671,6 +3191,8 @@ module.exports = {
   getSavedLocationDetails,
   // User management
   listAllTransporters,
+  listTransportersWithVehicles,
+  getTransporterRoutePosts,
   getTransporterDetails,
   updateTransporterStatus,
   listAllDrivers,
@@ -2686,6 +3208,7 @@ module.exports = {
   getCompanyUserDetails,
   updateCompanyUserStatus,
   updatePumpStaffStatus,
+  listCustomersWithTripsAndActivities,
   listAllCustomers,
   getCustomerDetails,
   updateCustomerStatus,

@@ -14,8 +14,11 @@ const {
   getSavedLocationDetails,
   // User management
   listAllTransporters,
+  listTransportersWithVehicles,
+  getTransporterRoutePosts,
   getTransporterDetails,
   updateTransporterStatus,
+  listCustomersWithTripsAndActivities,
   listAllDrivers,
   getDriverDetails,
   getDriverTimeline,
@@ -95,6 +98,12 @@ router.post('/locations/saved', createSavedLocation);
 router.get('/locations/saved', listSavedLocationCatalog);
 router.get('/locations/saved/:id', getSavedLocationDetails);
 router.get('/customers/list', listAllCustomers);
+/**
+ * @route   GET /api/admin/customers/with-trips-activities
+ * @desc    Get all customers with their trips and activities grouped underneath (Admin only)
+ * @access  Private (Admin only)
+ */
+router.get('/customers/with-trips-activities', listCustomersWithTripsAndActivities);
 router.get('/customers/duplicates', getDuplicateCustomers);
 router.put('/customers/:id/status', updateCustomerStatus);
 router.post('/customers/merge', mergeCustomers);
@@ -131,6 +140,20 @@ router.put('/support/messages/:messageId/read', supportTicketCtrl.markMessageRea
  * @access  Private (Admin only)
  */
 router.get('/transporters', listAllTransporters);
+
+/**
+ * @route   GET /api/admin/transporters/with-vehicles
+ * @desc    Get all transporters with their vehicles grouped underneath (Admin only)
+ * @access  Private (Admin only)
+ */
+router.get('/transporters/with-vehicles', listTransportersWithVehicles);
+
+/**
+ * @route   GET /api/admin/transporters/:id/route-posts
+ * @desc    Get transporter route posts with bookings (Admin only)
+ * @access  Private (Admin only)
+ */
+router.get('/transporters/:id/route-posts', getTransporterRoutePosts);
 
 /**
  * @route   GET /api/admin/transporters/:id
