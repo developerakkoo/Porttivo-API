@@ -407,6 +407,30 @@ const serializeTrip = (trip, options = {}) => {
   return base;
 };
 
+const buildTripAdminDetail = (trip) => {
+  const serialized = serializeTrip(trip, { includeCurrentMilestone: true });
+  if (!serialized) {
+    return null;
+  }
+
+  return {
+    ...serialized,
+    customer: trip.customerId
+      ? {
+          id: trip.customerId._id || trip.customerId,
+          name: trip.customerId.name || null,
+          mobile: trip.customerId.mobile || null,
+          email: trip.customerId.email || null,
+          isRegistered: trip.customerId.isRegistered ?? null,
+        }
+      : null,
+    locations: {
+      pickup: serialized.pickupLocation || null,
+      drop: serialized.dropLocation || null,
+    },
+  };
+};
+
 const serializeTrips = (trips, options = {}) => trips.map((trip) => serializeTrip(trip, options));
 
 const sanitizeSerializedTripForMarketplaceBuyer = (serialized) => {
@@ -936,6 +960,11 @@ const getTripById = async (req, res, next) => {
         const meta = await getMarketplaceTripMetaForUser(trip, req.user);
         const sanitized = sanitizeSerializedTripForMarketplaceBuyer(raw);
         return meta ? { ...sanitized, ...meta } : sanitized;
+      }
+      if (isAdmin) {
+        const raw = buildTripAdminDetail(trip);
+        const meta = await getMarketplaceTripMetaForUser(trip, req.user);
+        return meta ? { ...raw, ...meta } : raw;
       }
       if (req.user?.userType === 'customer') {
         return getTripVisibilityResponse(trip, {

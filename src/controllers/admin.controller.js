@@ -714,7 +714,24 @@ const getAdminTripDetails = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      data: { trip },
+      data: {
+        trip: {
+          ...trip.toObject(),
+          customer: trip.customerId
+            ? {
+                id: trip.customerId._id || trip.customerId,
+                name: trip.customerId.name || null,
+                mobile: trip.customerId.mobile || null,
+                email: trip.customerId.email || null,
+                isRegistered: trip.customerId.isRegistered ?? null,
+              }
+            : null,
+          locations: {
+            pickup: trip.pickupLocation || null,
+            drop: trip.dropLocation || null,
+          },
+        },
+      },
     });
   } catch (error) {
     next(error);
