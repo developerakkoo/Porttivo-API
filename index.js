@@ -31,7 +31,7 @@ const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
 const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
 const messageRoutes = require('./src/routes/message.routes');
 const supportTransporterRoutes = require('./src/routes/supportTransporter.routes');
-const { getCustomerDetails, listCustomersWithTripsAndActivities } = require('./src/controllers/admin.controller');
+const { getCustomerDetails, listAllCustomers, getDuplicateCustomers, listCustomersWithTripsAndActivities } = require('./src/controllers/admin.controller');
 const { authenticate } = require('./src/middleware/auth.middleware');
 const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability');
 
@@ -99,6 +99,8 @@ app.use('/api/company-users', companyUserRoutes);
 app.use('/api/pump-owners', pumpOwnerRoutes);
 app.use('/api/pump-staff', pumpStaffRoutes);
 // Customer detail must be registered before mounting admin router so GET always matches
+app.get('/api/admin/customers/list', authenticate, requireAdminUser, listAllCustomers);
+app.get('/api/admin/customers/duplicates', authenticate, requireAdminUser, getDuplicateCustomers);
 app.get('/api/admin/customers/with-trips-activities', authenticate, requireAdminUser, listCustomersWithTripsAndActivities);
 app.get('/api/admin/customers/:id', authenticate, requireAdminUser, getCustomerDetails);
 app.get('/api/admins/customers/:id', authenticate, requireAdminUser, getCustomerDetails);
