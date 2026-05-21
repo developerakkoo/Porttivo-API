@@ -1675,6 +1675,14 @@ const getDriverTimeline = async (req, res, next) => {
 const updateDriverStatus = async (req, res, next) => {
   try {
     const { status } = req.body;
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ID format',
+      });
+    }
 
     if (!status || !['pending', 'active', 'inactive', 'blocked'].includes(status)) {
       return res.status(400).json({
@@ -1684,7 +1692,7 @@ const updateDriverStatus = async (req, res, next) => {
     }
 
     const driver = await Driver.findByIdAndUpdate(
-      req.params.id,
+      id,
       { status },
       { new: true }
     );
@@ -1695,6 +1703,14 @@ const updateDriverStatus = async (req, res, next) => {
         message: 'Driver not found',
       });
     }
+
+    await logAdminAction({
+      adminId: req.user.id,
+      action: 'DRIVER_STATUS_UPDATED',
+      entityType: 'DRIVER',
+      entityId: driver._id,
+      metadata: { status },
+    });
 
     return res.status(200).json({
       success: true,
