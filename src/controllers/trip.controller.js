@@ -50,6 +50,7 @@ const {
 } = require('../services/wati.service');
 const { syncTripLocationsToSavedCatalog } = require('../services/savedLocation.service');
 const { buildVisibleTrip } = require('../services/tripVisibility.service');
+const { validateContainerNumber, normalizeContainerNumber } = require('../utils/validation');
 
 const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
   bookedBy: 'CUSTOMER',
@@ -117,6 +118,22 @@ const validateTripType = (tripType) => {
     return null;
   }
   return normalized;
+};
+
+const normalizeAndValidateContainerNumber = (containerNumber) => {
+  const normalized = normalizeContainerNumber(containerNumber);
+  if (!normalized) {
+    return { value: null, error: null };
+  }
+
+  if (!validateContainerNumber(normalized)) {
+    return {
+      value: normalized,
+      error: 'Container number must be 4 letters followed by 6 digits (e.g. ABCD123456)',
+    };
+  }
+
+  return { value: normalized, error: null };
 };
 
 const validateUniqueAssignments = (assignmentsInput) => {
@@ -642,13 +659,19 @@ const createTrip = async (req, res, next) => {
       const assignments = [];
       for (let i = 0; i < assignmentsInput.length; i++) {
         const a = assignmentsInput[i];
-        const cn = a?.containerNumber?.trim().toUpperCase();
+        const { value: cn, error: containerError } = normalizeAndValidateContainerNumber(a?.containerNumber);
         const vid = a?.vehicleId;
         const did = a?.driverId;
         if (!cn) {
           return res.status(400).json({
             success: false,
             message: `Assignment ${i + 1}: containerNumber is required`,
+          });
+        }
+        if (containerError) {
+          return res.status(400).json({
+            success: false,
+            message: `Assignment ${i + 1}: ${containerError}`,
           });
         }
         if (!vid || !did) {
@@ -729,7 +752,14 @@ const createTrip = async (req, res, next) => {
         tripPayload.driverId = driverId;
       }
 
-      tripPayload.containerNumber = containerNumber?.trim().toUpperCase() || null;
+      const { value: normalizedContainerNumber, error: containerError } = normalizeAndValidateContainerNumber(containerNumber);
+      if (containerError) {
+        return res.status(400).json({
+          success: false,
+          message: containerError,
+        });
+      }
+      tripPayload.containerNumber = normalizedContainerNumber;
       if ((vehicleId || normalizedHiredVehicle) && driverId) {
         tripPayload.assignedAt = new Date();
       }
@@ -1023,7 +1053,14 @@ const updateTrip = async (req, res, next) => {
       }
       // Driver can only update containerNumber
       if (containerNumber !== undefined) {
-        trip.containerNumber = containerNumber?.trim().toUpperCase() || null;
+        const { value: normalizedContainerNumber, error: containerError } = normalizeAndValidateContainerNumber(containerNumber);
+        if (containerError) {
+          return res.status(400).json({
+            success: false,
+            message: containerError,
+          });
+        }
+        trip.containerNumber = normalizedContainerNumber;
       }
       setAuditActor(trip, req.user);
       await trip.save();
@@ -1191,7 +1228,13 @@ const updateTrip = async (req, res, next) => {
 
     // Update other fields
     if (containerNumber !== undefined) {
-      const normalized = containerNumber?.trim().toUpperCase() || null;
+      const { value: normalized, error: containerError } = normalizeAndValidateContainerNumber(containerNumber);
+      if (containerError) {
+        return res.status(400).json({
+          success: false,
+          message: containerError,
+        });
+      }
       trip.containerNumber = normalized;
       if (trip.assignments?.length > 0) {
         trip.assignments[0].containerNumber = normalized;
@@ -1923,6 +1966,14 @@ const bookCustomerTrip = async (req, res, next) => {
       });
     }
 
+    const { error: containerError } = normalizeAndValidateContainerNumber(containerNumber);
+    if (containerError) {
+      return res.status(400).json({
+        success: false,
+        message: containerError,
+      });
+    }
+
     const photoRules = await getDefaultPhotoRules();
 
     const trip = await Trip.create({
@@ -1931,7 +1982,13 @@ const bookCustomerTrip = async (req, res, next) => {
       bookingStatus: BOOKING_STATUS.OPEN,
       status: TRIP_STATUS.BOOKED,
       tripType: normalizedTripType,
-      containerNumber: containerNumber?.trim().toUpperCase() || null,
+      containerNumber: (() => {
+        const { value, error } = normalizeAndValidateContainerNumber(containerNumber);
+        if (error) {
+          return null;
+        }
+        return value;
+      })(),
       reference: reference?.trim() || null,
       pickupLocation: normalizeLocation(pickupLocation),
       dropLocation: normalizeLocation(dropLocation),
@@ -1957,6 +2014,7 @@ const bookCustomerTrip = async (req, res, next) => {
         },
       },
     });
+
     await syncTripLocationsToSavedCatalog({
       trip,
       actor: {

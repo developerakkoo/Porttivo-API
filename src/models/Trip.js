@@ -9,6 +9,7 @@ const locationSchema = require('./schemas/location.schema')
 const {
   DRIVER_TRACKING_STATUS
 } = require('../services/driverTracking.service')
+const { validateContainerNumber, normalizeContainerNumber } = require('../utils/validation')
 
 // Milestone Schema
 const milestoneSchema = new mongoose.Schema(
@@ -230,7 +231,13 @@ const assignmentSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      uppercase: true
+      uppercase: true,
+      validate: {
+        validator: function (v) {
+          return validateContainerNumber(v);
+        },
+        message: 'Container number must be 4 letters followed by 6 digits (e.g. ABCD123456)'
+      }
     },
     vehicleId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -298,7 +305,14 @@ const tripSchema = new mongoose.Schema(
     containerNumber: {
       type: String,
       trim: true,
-      uppercase: true
+      uppercase: true,
+      validate: {
+        validator: function (v) {
+          if (v == null || v === '') return true
+          return validateContainerNumber(v)
+        },
+        message: 'Container number must be 4 letters followed by 6 digits (e.g. ABCD123456)'
+      }
     },
     bookingId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -643,6 +657,18 @@ tripSchema.methods.getMilestoneTypeByNumber = function (number) {
 tripSchema.pre('save', function () {
   const now = new Date()
   const containerNumberChanged = this.isModified('containerNumber')
+
+  if (this.containerNumber) {
+    this.containerNumber = normalizeContainerNumber(this.containerNumber)
+  }
+
+  if (Array.isArray(this.assignments) && this.assignments.length > 0) {
+    this.assignments.forEach((assignment) => {
+      if (assignment?.containerNumber) {
+        assignment.containerNumber = normalizeContainerNumber(assignment.containerNumber)
+      }
+    })
+  }
 
   if (!this.audit?.statusHistory?.length) {
     this.audit.statusHistory = [

@@ -1,5 +1,6 @@
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s]).{8,}$/;
+const CONTAINER_NUMBER_REGEX = /^[A-Z]{4}[0-9]{6}$/;
 
 /**
  * Clean and format mobile number (remove spaces, special chars)
@@ -54,6 +55,28 @@ const validatePassword = (password) => {
 };
 
 /**
+ * Normalize container number (trim and uppercase)
+ * @param {String} containerNumber - Container number to normalize
+ * @returns {String} Normalized container number
+ */
+const normalizeContainerNumber = (containerNumber) => {
+  if (!containerNumber) return '';
+  return String(containerNumber).trim().toUpperCase();
+};
+
+/**
+ * Validate container number format
+ * Required format: first 4 alphabetic characters followed by 6 digits
+ * Example: ABCD123456
+ * @param {String} containerNumber - Container number to validate
+ * @returns {Boolean} True if valid
+ */
+const validateContainerNumber = (containerNumber) => {
+  const normalized = normalizeContainerNumber(containerNumber);
+  return CONTAINER_NUMBER_REGEX.test(normalized);
+};
+
+/**
  * Validate user type
  * @param {String} userType - User type to validate
  * @returns {Boolean} True if valid
@@ -78,6 +101,8 @@ module.exports = {
   normalizeEmail,
   validateEmail,
   validatePassword,
+  normalizeContainerNumber,
+  validateContainerNumber,
   validateUserType,
   validatePin,
 };

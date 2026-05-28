@@ -6,6 +6,134 @@ const { createMockRes } = require('../tests/helpers/http');
 
 const tests = [
   {
+    name: 'shared validation enforces container number format',
+    run() {
+      const {
+        normalizeContainerNumber,
+        validateContainerNumber,
+      } = require('../src/utils/validation');
+
+      assert.equal(normalizeContainerNumber(' abcd123456 '), 'ABCD123456');
+      assert.equal(validateContainerNumber('ABCD123456'), true);
+      assert.equal(validateContainerNumber('AB12CD3456'), false);
+      assert.equal(validateContainerNumber('ABCDE12345'), false);
+    },
+  },
+  {
+    name: 'customer trip booking rejects invalid container number format',
+    async run() {
+      const controller = loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
+        '../models/Trip': {
+          create: async () => {
+            throw new Error('Trip should not be created for invalid container numbers');
+          },
+        },
+        '../models/Vehicle': {},
+        '../models/Driver': {},
+        '../models/Customer': {
+          findById: async () => ({
+            _id: 'customer-1',
+            name: 'Test Customer',
+            mobile: '9876543210',
+          }),
+        },
+        '../models/Transporter': {
+          find: async () => [],
+        },
+        '../models/Notification': {
+          create: async () => ({}),
+        },
+        '../models/SystemConfig': {
+          findOne: async () => null,
+        },
+        '../utils/vehicleValidation': {
+          checkVehicleHasAssignedTrip: async () => false,
+          normalizeIndianVehicleRegistration: (value) => value,
+          isValidIndianVehicleRegistration: () => true,
+        },
+        '../utils/tripResourceState': {
+          markTripResourcesBusy: async () => {},
+          releaseTripResources: async () => {},
+          syncTripResourceBusyState: async () => {},
+        },
+        '../utils/tripState': {
+          TRIP_STATUS: {
+            ACCEPTED: 'ACCEPTED',
+            PLANNED: 'PLANNED',
+            ACTIVE: 'ACTIVE',
+            PAUSED: 'PAUSED',
+            BOOKED: 'BOOKED',
+            POD_PENDING: 'POD_PENDING',
+            CLOSED_WITH_POD: 'CLOSED_WITH_POD',
+            CLOSED_WITHOUT_POD: 'CLOSED_WITHOUT_POD',
+            CANCELLED: 'CANCELLED',
+          },
+          BOOKING_STATUS: { OPEN: 'OPEN', ASSIGNED: 'ASSIGNED' },
+          TRIP_STATUS_VALUES: [],
+          TRIP_TYPE_VALUES: ['IMPORT', 'EXPORT', 'LOCAL'],
+        },
+        '../services/socket.service': {
+          emitTripCreated: () => {},
+          emitTripCreatedForCustomer: () => {},
+          emitBookingAccepted: () => {},
+          emitBookingRejected: () => {},
+          emitTripVehicleAssigned: () => {},
+          emitTripDriverAssigned: () => {},
+          emitTripAssigned: () => {},
+          emitTripCancelled: () => {},
+          emitTripUpdated: () => {},
+        },
+        '../middleware/permission.middleware': {
+          getTransporterId: () => 'transporter-1',
+          hasPermission: () => true,
+        },
+        '../services/tripAccess.service': {
+          canBookingBuyerViewTrip: async () => false,
+          getMarketplaceTripMetaForUser: async () => null,
+          getMarketplaceTripMetaForViewerId: async () => null,
+          transporterPartyScopeCondition: () => ({}),
+        },
+        '../services/wati.service': {
+          sendTripCreatedConfirmation: async () => {},
+          sendBookingAcceptedTemplate: async () => {},
+          sendDriverVehicleAssignedTemplate: async () => {},
+          sendBookingRejectedTemplate: async () => {},
+          sendBookingRequestReceivedTemplate: async () => {},
+        },
+        '../services/savedLocation.service': {
+          syncTripLocationsToSavedCatalog: async () => {},
+        },
+        '../services/tripVisibility.service': {
+          buildVisibleTrip: (trip) => trip,
+        },
+      });
+
+      const req = {
+        user: { id: 'customer-1', userType: 'customer' },
+        body: {
+          tripType: 'IMPORT',
+          containerNumber: 'AB12CD3456',
+          pickupLocation: {
+            formattedAddress: 'Pickup Address',
+            coordinates: [72.8777, 19.076],
+          },
+          dropLocation: {
+            formattedAddress: 'Drop Address',
+            coordinates: [72.8777, 19.076],
+          },
+        },
+      };
+      const res = createMockRes();
+
+      await controller.bookCustomerTrip(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.message, /container number must be 4 letters followed by 6 digits/i);
+    },
+  },
+  {
     name: 'shared validation normalizes mobile and email and enforces strong password',
     run() {
       const {
