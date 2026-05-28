@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { validateEmail, validatePassword } = require('../utils/validation');
 
 const adminSchema = new mongoose.Schema(
   {
@@ -20,7 +21,7 @@ const adminSchema = new mongoose.Schema(
       lowercase: true,
       validate: {
         validator: function (v) {
-          return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+          return validateEmail(v);
         },
         message: 'Please provide a valid email',
       },
@@ -29,7 +30,13 @@ const adminSchema = new mongoose.Schema(
       type: String,
       required: [true, 'Password is required'],
       select: false, // Don't return password by default
-      minlength: [6, 'Password must be at least 6 characters'],
+      validate: {
+        validator: function (v) {
+          return validatePassword(v);
+        },
+        message:
+          'Password must be at least 8 characters and include uppercase, lowercase, number, and special character',
+      },
     },
     role: {
       type: String,

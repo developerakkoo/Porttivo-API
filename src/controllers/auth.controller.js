@@ -13,7 +13,14 @@ const {
 const {
   emitDriverTrackingChanged
 } = require('../services/socket.service');
-const { validateMobile, cleanMobile, validateUserType, validatePin } = require('../utils/validation');
+const {
+  validateMobile,
+  cleanMobile,
+  normalizeEmail,
+  validateEmail,
+  validateUserType,
+  validatePin,
+} = require('../utils/validation');
 
 /**
  * Send OTP endpoint (simplified - returns tokens directly)
@@ -348,7 +355,8 @@ const customerMobileAuth = async (req, res, next) => {
       });
     }
 
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    const normalizedEmail = email ? normalizeEmail(email) : '';
+    if (normalizedEmail && !validateEmail(normalizedEmail)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid email format',
@@ -362,7 +370,7 @@ const customerMobileAuth = async (req, res, next) => {
       customer = await Customer.create({
         mobile: cleanedMobile,
         name: name?.trim() || '',
-        email: email ? email.trim().toLowerCase() : null,
+        email: normalizedEmail || null,
         isRegistered: !!name,
       });
       isRegistered = false;
@@ -378,7 +386,7 @@ const customerMobileAuth = async (req, res, next) => {
         customer.name = name.trim();
       }
       if (email && !customer.email) {
-        customer.email = email.trim().toLowerCase();
+        customer.email = normalizedEmail || null;
       }
       if (name && !customer.isRegistered) {
         customer.isRegistered = true;
@@ -471,7 +479,8 @@ const register = async (req, res, next) => {
     }
 
     // Validate email format if provided
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    const normalizedEmail = email ? normalizeEmail(email) : '';
+    if (normalizedEmail && !validateEmail(normalizedEmail)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid email format',
@@ -482,7 +491,7 @@ const register = async (req, res, next) => {
     const transporter = await Transporter.create({
       mobile: cleanedMobile,
       name: name.trim(),
-      email: email ? email.trim().toLowerCase() : undefined,
+      email: normalizedEmail || undefined,
       company: company.trim(),
       status: 'pending',
       hasAccess: false,
@@ -802,7 +811,8 @@ const registerPumpOwner = async (req, res, next) => {
     }
 
     // Validate email format if provided
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    const normalizedEmail = email ? normalizeEmail(email) : '';
+    if (normalizedEmail && !validateEmail(normalizedEmail)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid email format',
@@ -828,7 +838,7 @@ const registerPumpOwner = async (req, res, next) => {
     const pumpOwner = await PumpOwner.create({
       mobile: cleanedMobile,
       name: name.trim(),
-      email: email ? email.trim().toLowerCase() : undefined,
+      email: normalizedEmail || undefined,
       pumpName: pumpName.trim(),
       location: locationData,
       status: 'pending',

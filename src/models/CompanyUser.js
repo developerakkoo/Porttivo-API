@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { validateMobile, validateEmail } = require('../utils/validation');
 
 const companyUserSchema = new mongoose.Schema(
   {
@@ -11,7 +12,7 @@ const companyUserSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (v) {
-          return /^[0-9]{10}$/.test(v);
+          return validateMobile(v);
         },
         message: 'Mobile number must be 10 digits',
       },
@@ -25,6 +26,13 @@ const companyUserSchema = new mongoose.Schema(
       type: String,
       trim: true,
       lowercase: true,
+      validate: {
+        validator: function (v) {
+          if (v == null || v === '') return true;
+          return validateEmail(v);
+        },
+        message: 'Please provide a valid email',
+      },
     },
     transporterId: {
       type: mongoose.Schema.Types.ObjectId,

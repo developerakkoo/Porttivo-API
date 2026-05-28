@@ -1,5 +1,6 @@
 const CompanyUser = require('../models/CompanyUser');
 const { getTransporterId } = require('../middleware/permission.middleware');
+const { cleanMobile, validateMobile, validateEmail, normalizeEmail } = require('../utils/validation');
 
 // Create new company user
 const createUser = async (req, res, next) => {
@@ -14,8 +15,8 @@ const createUser = async (req, res, next) => {
     }
 
     // Validate mobile number
-    const cleanedMobile = mobile.replace(/\D/g, '');
-    if (cleanedMobile.length !== 10) {
+    const cleanedMobile = cleanMobile(mobile);
+    if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
         message: 'Mobile number must be 10 digits',
@@ -64,7 +65,14 @@ const createUser = async (req, res, next) => {
     };
 
     if (email) {
-      userData.email = email.trim().toLowerCase();
+      const normalizedEmail = normalizeEmail(email);
+      if (!validateEmail(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email',
+        });
+      }
+      userData.email = normalizedEmail;
     }
 
     if (pin && hasAccess) {
@@ -226,7 +234,14 @@ const updateUser = async (req, res, next) => {
     }
 
     if (email !== undefined) {
-      user.email = email ? email.trim().toLowerCase() : null;
+      const normalizedEmail = normalizeEmail(email);
+      if (normalizedEmail && !validateEmail(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email',
+        });
+      }
+      user.email = normalizedEmail || null;
     }
 
     if (status) {

@@ -6,6 +6,108 @@ const { createMockRes } = require('../tests/helpers/http');
 
 const tests = [
   {
+    name: 'shared validation normalizes mobile and email and enforces strong password',
+    run() {
+      const {
+        cleanMobile,
+        normalizeEmail,
+        validateMobile,
+        validateEmail,
+        validatePassword,
+      } = require('../src/utils/validation');
+
+      assert.equal(cleanMobile('+91 98765-43210'), '919876543210');
+      assert.equal(normalizeEmail('  Admin@Example.COM '), 'admin@example.com');
+      assert.equal(validateMobile('9876543210'), true);
+      assert.equal(validateMobile('+91 98765 43210'), false);
+      assert.equal(validateEmail('admin@example.com'), true);
+      assert.equal(validateEmail('bad-email'), false);
+      assert.equal(validatePassword('Weak123'), false);
+      assert.equal(validatePassword('StrongPass1!'), true);
+    },
+  },
+  {
+    name: 'admin schema rejects weak passwords and invalid emails',
+    run() {
+      const Admin = require('../src/models/Admin');
+
+      const weakPasswordAdmin = new Admin({
+        username: 'admin-weak',
+        email: 'weak@example.com',
+        password: 'Weak123',
+      });
+      const weakPasswordError = weakPasswordAdmin.validateSync();
+
+      assert.ok(weakPasswordError);
+      assert.match(weakPasswordError.errors.password.message, /uppercase, lowercase, number, and special character/i);
+
+      const invalidEmailAdmin = new Admin({
+        username: 'admin-email',
+        email: 'invalid-email',
+        password: 'StrongPass1!',
+      });
+      const invalidEmailError = invalidEmailAdmin.validateSync();
+
+      assert.ok(invalidEmailError);
+      assert.match(invalidEmailError.errors.email.message, /valid email/i);
+    },
+  },
+  {
+    name: 'admin login rejects invalid email before database lookup',
+    async run() {
+      const controller = loadWithMocks(path.resolve(process.cwd(), 'src/controllers/admin.controller.js'), {
+        '../models/Admin': {},
+        '../models/Transporter': {},
+        '../models/Driver': {},
+        '../models/PumpOwner': {},
+        '../models/PumpStaff': {},
+        '../models/CompanyUser': {},
+        '../models/Customer': {},
+        '../models/Trip': {},
+        '../models/Vehicle': {},
+        '../models/VehicleRouteAvailability': {},
+        '../models/VehicleRouteAssignment': {},
+        '../models/VehicleBooking': {},
+        '../models/FuelTransaction': {},
+        '../models/Settlement': {},
+        '../models/Wallet': {},
+        '../models/SystemConfig': {},
+        '../models/AdminAuditLog': {},
+        '../models/AuditLog': {},
+        '../models/SavedLocation': {},
+        '../services/jwt.service': { generateTokens: () => ({}) },
+        '../utils/tripState': {
+          TRIP_STATUS: { ACTIVE: 'ACTIVE', PAUSED: 'PAUSED', PLANNED: 'PLANNED', POD_PENDING: 'POD_PENDING' },
+          CLOSED_TRIP_STATUSES: [],
+        },
+        '../utils/tripResourceState': {
+          releaseTripResources: async () => {},
+          syncTripResourceBusyState: async () => {},
+        },
+        '../services/adminAudit.service': { logAdminAction: async () => {} },
+        '../services/socket.service': {
+          emitTripAssigned: () => {},
+          emitTripVehicleAssigned: () => {},
+          emitTripDriverAssigned: () => {},
+          emitTripCancelled: () => {},
+          emitTripClosedWithoutPOD: () => {},
+        },
+      });
+
+      const req = {
+        body: { email: 'not-an-email', password: 'StrongPass1!' },
+      };
+      const res = createMockRes();
+
+      await controller.adminLogin(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.message, /invalid email format/i);
+    },
+  },
+  {
     name: 'customer gets full execution visibility when customer is payer',
     run() {
       const { buildVisibleTrip } = require('../src/services/tripVisibility.service');

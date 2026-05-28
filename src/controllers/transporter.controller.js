@@ -2,7 +2,7 @@ const Transporter = require('../models/Transporter');
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
 const Driver = require('../models/Driver');
-const { validateMobile, cleanMobile, validatePin } = require('../utils/validation');
+const { validateMobile, cleanMobile, validatePin, validateEmail, normalizeEmail } = require('../utils/validation');
 const { TRIP_STATUS } = require('../utils/tripState');
 
 /**
@@ -56,14 +56,14 @@ const updateProfile = async (req, res, next) => {
     const updateData = {};
     if (name !== undefined) updateData.name = name?.trim();
     if (email !== undefined) {
-      updateData.email = email?.trim().toLowerCase();
-      // Basic email validation
-      if (updateData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(updateData.email)) {
+      const normalizedEmail = normalizeEmail(email);
+      if (normalizedEmail && !validateEmail(normalizedEmail)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid email format',
         });
       }
+      updateData.email = normalizedEmail || null;
     }
     if (company !== undefined) updateData.company = company?.trim();
 

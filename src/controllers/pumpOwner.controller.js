@@ -1,6 +1,6 @@
 const PumpOwner = require('../models/PumpOwner');
 const FuelTransaction = require('../models/FuelTransaction');
-const { validateMobile, cleanMobile } = require('../utils/validation');
+const { validateMobile, cleanMobile, validateEmail, normalizeEmail } = require('../utils/validation');
 
 /**
  * Get pump owner profile
@@ -63,7 +63,16 @@ const updateProfile = async (req, res, next) => {
 
     // Update fields
     if (name !== undefined) pumpOwner.name = name;
-    if (email !== undefined) pumpOwner.email = email;
+    if (email !== undefined) {
+      const normalizedEmail = normalizeEmail(email);
+      if (normalizedEmail && !validateEmail(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid email format',
+        });
+      }
+      pumpOwner.email = normalizedEmail || null;
+    }
     if (pumpName !== undefined) pumpOwner.pumpName = pumpName;
     if (location !== undefined) pumpOwner.location = location;
 

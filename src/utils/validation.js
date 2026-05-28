@@ -1,13 +1,5 @@
-/**
- * Validate mobile number format (10 digits, Indian format)
- * @param {String} mobile - Mobile number to validate
- * @returns {Boolean} True if valid
- */
-const validateMobile = (mobile) => {
-  if (!mobile) return false;
-  const cleaned = mobile.trim().replace(/\D/g, '');
-  return /^[0-9]{10}$/.test(cleaned);
-};
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s]).{8,}$/;
 
 /**
  * Clean and format mobile number (remove spaces, special chars)
@@ -16,7 +8,49 @@ const validateMobile = (mobile) => {
  */
 const cleanMobile = (mobile) => {
   if (!mobile) return '';
-  return mobile.trim().replace(/\D/g, '');
+  return String(mobile).trim().replace(/\D/g, '');
+};
+
+/**
+ * Normalize email (trim and lowercase)
+ * @param {String} email - Email to normalize
+ * @returns {String} Normalized email
+ */
+const normalizeEmail = (email) => {
+  if (!email) return '';
+  return String(email).trim().toLowerCase();
+};
+
+/**
+ * Validate mobile number format (10 digits, Indian format)
+ * @param {String} mobile - Mobile number to validate
+ * @returns {Boolean} True if valid
+ */
+const validateMobile = (mobile) => {
+  const cleaned = cleanMobile(mobile);
+  return /^[0-9]{10}$/.test(cleaned);
+};
+
+/**
+ * Validate email format
+ * @param {String} email - Email to validate
+ * @returns {Boolean} True if valid
+ */
+const validateEmail = (email) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  return EMAIL_REGEX.test(normalized);
+};
+
+/**
+ * Validate password format for admin accounts
+ * Policy: 8+ chars, uppercase, lowercase, number, special character
+ * @param {String} password - Password to validate
+ * @returns {Boolean} True if valid
+ */
+const validatePassword = (password) => {
+  if (typeof password !== 'string' || password.length === 0) return false;
+  return STRONG_PASSWORD_REGEX.test(password);
 };
 
 /**
@@ -41,6 +75,9 @@ const validatePin = (pin) => {
 module.exports = {
   validateMobile,
   cleanMobile,
+  normalizeEmail,
+  validateEmail,
+  validatePassword,
   validateUserType,
   validatePin,
 };

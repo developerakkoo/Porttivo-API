@@ -29,6 +29,7 @@ const {
   emitTripCancelled,
   emitTripClosedWithoutPOD,
 } = require('../services/socket.service');
+const { validateEmail, normalizeEmail } = require('../utils/validation');
 
 const ADMIN_LIST_SORT_FIELDS = ['createdAt', 'name', 'mobile'];
 const ADMIN_TRIP_SORT_FIELDS = ['createdAt', 'updatedAt', 'scheduledAt', 'status', 'tripType', 'tripId'];
@@ -164,7 +165,15 @@ const adminLogin = async (req, res, next) => {
       });
     }
 
-    const admin = await Admin.findOne({ email: email.toLowerCase() }).select('+password');
+    const normalizedEmail = normalizeEmail(email);
+    if (!validateEmail(normalizedEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format',
+      });
+    }
+
+    const admin = await Admin.findOne({ email: normalizedEmail }).select('+password');
 
     if (!admin) {
       return res.status(401).json({
@@ -279,7 +288,16 @@ const updateProfile = async (req, res, next) => {
     }
 
     if (username !== undefined) admin.username = username;
-    if (email !== undefined) admin.email = email.toLowerCase();
+    if (email !== undefined) {
+      const normalizedEmail = normalizeEmail(email);
+      if (!validateEmail(normalizedEmail)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid email format',
+        });
+      }
+      admin.email = normalizedEmail;
+    }
 
     await admin.save();
 
