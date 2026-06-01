@@ -4,7 +4,498 @@ const mongoose = require('mongoose');
 const { loadWithMocks } = require('../tests/helpers/loadWithMocks');
 const { createMockRes } = require('../tests/helpers/http');
 
+const buildTripCreateController = (overrides = {}) =>
+  loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
+    '../models/Trip': overrides.Trip,
+    '../models/Vehicle': overrides.Vehicle,
+    '../models/Driver': overrides.Driver,
+    '../models/Customer': {},
+    '../models/Transporter': {},
+    '../models/Notification': { create: async () => ({}) },
+    '../models/SystemConfig': {
+      findOne: () => ({
+        select: async () => null,
+      }),
+    },
+    '../utils/vehicleValidation': {
+      checkVehicleHasAssignedTrip: async () => false,
+      normalizeIndianVehicleRegistration: (value) => value,
+      isValidIndianVehicleRegistration: () => true,
+    },
+    '../utils/tripResourceState': {
+      markTripResourcesBusy: async () => {},
+      releaseTripResources: async () => {},
+      syncTripResourceBusyState: async () => {},
+    },
+    '../utils/tripState': {
+      TRIP_STATUS: {
+        ACCEPTED: 'ACCEPTED',
+        PLANNED: 'PLANNED',
+        ACTIVE: 'ACTIVE',
+        PAUSED: 'PAUSED',
+        BOOKED: 'BOOKED',
+        POD_PENDING: 'POD_PENDING',
+        CLOSED_WITH_POD: 'CLOSED_WITH_POD',
+        CLOSED_WITHOUT_POD: 'CLOSED_WITHOUT_POD',
+        CANCELLED: 'CANCELLED',
+      },
+      BOOKING_STATUS: { OPEN: 'OPEN', ASSIGNED: 'ASSIGNED' },
+      TRIP_STATUS_VALUES: [],
+      TRIP_TYPE_VALUES: ['IMPORT', 'EXPORT', 'LOCAL'],
+    },
+    '../services/socket.service': {
+      emitTripCreated: () => {},
+      emitTripCreatedForCustomer: () => {},
+      emitBookingAccepted: () => {},
+      emitBookingRejected: () => {},
+      emitTripVehicleAssigned: () => {},
+      emitTripDriverAssigned: () => {},
+      emitTripAssigned: () => {},
+      emitTripCancelled: () => {},
+      emitTripUpdated: () => {},
+    },
+    '../middleware/permission.middleware': {
+      getTransporterId: () => 'transporter-1',
+      hasPermission: () => true,
+    },
+    '../services/tripAccess.service': {
+      canBookingBuyerViewTrip: async () => false,
+      getMarketplaceTripMetaForUser: async () => null,
+      getMarketplaceTripMetaForViewerId: async () => null,
+      transporterPartyScopeCondition: () => ({}),
+    },
+    '../services/wati.service': {
+      sendTripCreatedConfirmation: async () => {},
+      sendBookingAcceptedTemplate: async () => {},
+      sendDriverVehicleAssignedTemplate: async () => {},
+      sendBookingRejectedTemplate: async () => {},
+      sendBookingRequestReceivedTemplate: async () => {},
+    },
+    '../services/savedLocation.service': {
+      syncTripLocationsToSavedCatalog: async () => {},
+    },
+    '../services/tripVisibility.service': {
+      buildVisibleTrip: (trip) => trip,
+    },
+  });
+
 const tests = [
+  {
+    name: 'trip creation auto-fills driver when vehicle is selected',
+    async run() {
+      let createdTrip = null;
+
+      class MockTrip {
+        constructor(payload) {
+          Object.assign(this, payload);
+          createdTrip = this;
+        }
+        async save() {
+          return this;
+        }
+        async populate() {
+          return this;
+        }
+      }
+      MockTrip.findOne = async () => null;
+
+      const vehicleDoc = {
+        _id: 'vehicle-1',
+        transporterId: 'transporter-1',
+        ownerType: 'OWN',
+        status: 'active',
+        driverId: 'driver-1',
+        select: async () => ({ isBusy: false }),
+      };
+
+      const controller = buildTripCreateController({
+        Trip: MockTrip,
+        Vehicle: {
+          findById: (id) => {
+            if (id === 'vehicle-1') return vehicleDoc;
+            return { select: async () => ({ isBusy: false }) };
+          },
+          find: () => ({
+            select: () => ({
+              limit: async () => [],
+            }),
+          }),
+        },
+        Driver: {
+          findById: async (id) => {
+            if (id === 'driver-1') {
+              return {
+                _id: 'driver-1',
+                transporterId: 'transporter-1',
+                status: 'active',
+                isBusy: false,
+              };
+            }
+            return null;
+          },
+        },
+      });
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        body: {
+          vehicleId: 'vehicle-1',
+          tripType: 'IMPORT',
+          customerName: 'Acme Ltd',
+          containerNumber: 'ABCD123456',
+          pickupLocation: {
+            formattedAddress: 'Pickup',
+            coordinates: [72.8777, 19.076],
+          },
+          dropLocation: {
+            formattedAddress: 'Drop',
+            coordinates: [72.8777, 19.076],
+          },
+        },
+      };
+      const res = createMockRes();
+
+      await controller.createTrip(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 201);
+      assert.equal(createdTrip.vehicleId, 'vehicle-1');
+      assert.equal(createdTrip.driverId, 'driver-1');
+      assert.ok(createdTrip.assignedAt instanceof Date);
+    },
+  },
+  {
+    name: 'trip creation auto-fills vehicle when driver is selected',
+    async run() {
+      let createdTrip = null;
+
+      class MockTrip {
+        constructor(payload) {
+          Object.assign(this, payload);
+          createdTrip = this;
+        }
+        async save() {
+          return this;
+        }
+        async populate() {
+          return this;
+        }
+      }
+      MockTrip.findOne = async () => null;
+
+      const linkedVehicle = {
+        _id: 'vehicle-1',
+        vehicleNumber: 'MH03EX1234',
+        transporterId: 'transporter-1',
+        ownerType: 'OWN',
+        status: 'active',
+      };
+
+      const controller = buildTripCreateController({
+        Trip: MockTrip,
+        Vehicle: {
+          findById: (id) => {
+            if (id === 'vehicle-1') {
+              return {
+                ...linkedVehicle,
+                select: async () => ({ isBusy: false }),
+              };
+            }
+            return { select: async () => ({ isBusy: false }) };
+          },
+          find: (query) => ({
+            select: () => ({
+              limit: async () => {
+                if (String(query.driverId) === 'driver-1') {
+                  return [linkedVehicle];
+                }
+                return [];
+              },
+            }),
+          }),
+        },
+        Driver: {
+          findById: async (id) => {
+            if (id === 'driver-1') {
+              return {
+                _id: 'driver-1',
+                transporterId: 'transporter-1',
+                status: 'active',
+                isBusy: false,
+              };
+            }
+            return null;
+          },
+        },
+      });
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        body: {
+          driverId: 'driver-1',
+          tripType: 'IMPORT',
+          customerName: 'Acme Ltd',
+          containerNumber: 'ABCD123456',
+          pickupLocation: {
+            formattedAddress: 'Pickup',
+            coordinates: [72.8777, 19.076],
+          },
+          dropLocation: {
+            formattedAddress: 'Drop',
+            coordinates: [72.8777, 19.076],
+          },
+        },
+      };
+      const res = createMockRes();
+
+      await controller.createTrip(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 201);
+      assert.equal(createdTrip.vehicleId, 'vehicle-1');
+      assert.equal(createdTrip.driverId, 'driver-1');
+      assert.ok(createdTrip.assignedAt instanceof Date);
+    },
+  },
+  {
+    name: 'trip creation rejects mismatched vehicle and driver',
+    async run() {
+      class MockTrip {
+        constructor(payload) {
+          Object.assign(this, payload);
+        }
+        async save() {
+          return this;
+        }
+        async populate() {
+          return this;
+        }
+      }
+      MockTrip.findOne = async () => null;
+
+      const controller = buildTripCreateController({
+        Trip: MockTrip,
+        Vehicle: {
+          findById: (id) => {
+            if (id === 'vehicle-1') {
+              return {
+                _id: 'vehicle-1',
+                transporterId: 'transporter-1',
+                ownerType: 'OWN',
+                status: 'active',
+                driverId: 'driver-1',
+                select: async () => ({ isBusy: false }),
+              };
+            }
+            return { select: async () => ({ isBusy: false }) };
+          },
+          find: () => ({
+            select: () => ({
+              limit: async () => [],
+            }),
+          }),
+        },
+        Driver: {
+          findById: async (id) => {
+            if (id === 'driver-1') {
+              return {
+                _id: 'driver-1',
+                transporterId: 'transporter-1',
+                status: 'active',
+                isBusy: false,
+              };
+            }
+            if (id === 'driver-2') {
+              return {
+                _id: 'driver-2',
+                transporterId: 'transporter-1',
+                status: 'active',
+                isBusy: false,
+              };
+            }
+            return null;
+          },
+        },
+      });
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        body: {
+          vehicleId: 'vehicle-1',
+          driverId: 'driver-2',
+          tripType: 'IMPORT',
+          customerName: 'Acme Ltd',
+          containerNumber: 'ABCD123456',
+          pickupLocation: {
+            formattedAddress: 'Pickup',
+            coordinates: [72.8777, 19.076],
+          },
+          dropLocation: {
+            formattedAddress: 'Drop',
+            coordinates: [72.8777, 19.076],
+          },
+        },
+      };
+      const res = createMockRes();
+
+      await controller.createTrip(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.message, /different driver/i);
+    },
+  },
+  {
+    name: 'trip creation rejects a driver without a linked vehicle',
+    async run() {
+      class MockTrip {
+        constructor(payload) {
+          Object.assign(this, payload);
+        }
+        async save() {
+          return this;
+        }
+        async populate() {
+          return this;
+        }
+      }
+      MockTrip.findOne = async () => null;
+
+      const controller = buildTripCreateController({
+        Trip: MockTrip,
+        Vehicle: {
+          findById: () => ({ select: async () => ({ isBusy: false }) }),
+          find: () => ({
+            select: () => ({
+              limit: async () => [],
+            }),
+          }),
+        },
+        Driver: {
+          findById: async (id) => {
+            if (id === 'driver-1') {
+              return {
+                _id: 'driver-1',
+                transporterId: 'transporter-1',
+                status: 'active',
+                isBusy: false,
+              };
+            }
+            return null;
+          },
+        },
+      });
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        body: {
+          driverId: 'driver-1',
+          tripType: 'IMPORT',
+          customerName: 'Acme Ltd',
+          containerNumber: 'ABCD123456',
+          pickupLocation: {
+            formattedAddress: 'Pickup',
+            coordinates: [72.8777, 19.076],
+          },
+          dropLocation: {
+            formattedAddress: 'Drop',
+            coordinates: [72.8777, 19.076],
+          },
+        },
+      };
+      const res = createMockRes();
+
+      await controller.createTrip(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.message, /does not have a vehicle assigned/i);
+    },
+  },
+  {
+    name: 'trip creation rejects a vehicle without an assigned driver',
+    async run() {
+      class MockTrip {
+        constructor(payload) {
+          Object.assign(this, payload);
+        }
+        async save() {
+          return this;
+        }
+        async populate() {
+          return this;
+        }
+      }
+      MockTrip.findOne = async () => null;
+
+      const controller = buildTripCreateController({
+        Trip: MockTrip,
+        Vehicle: {
+          findById: (id) => {
+            if (id === 'vehicle-1') {
+              return {
+                _id: 'vehicle-1',
+                transporterId: 'transporter-1',
+                ownerType: 'OWN',
+                status: 'active',
+                driverId: null,
+                select: async () => ({ isBusy: false }),
+              };
+            }
+            return { select: async () => ({ isBusy: false }) };
+          },
+          find: () => ({
+            select: () => ({
+              limit: async () => [],
+            }),
+          }),
+        },
+        Driver: {
+          findById: async (id) => {
+            if (id === 'driver-1') {
+              return {
+                _id: 'driver-1',
+                transporterId: 'transporter-1',
+                status: 'active',
+                isBusy: false,
+              };
+            }
+            return null;
+          },
+        },
+      });
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        body: {
+          vehicleId: 'vehicle-1',
+          tripType: 'IMPORT',
+          customerName: 'Acme Ltd',
+          containerNumber: 'ABCD123456',
+          pickupLocation: {
+            formattedAddress: 'Pickup',
+            coordinates: [72.8777, 19.076],
+          },
+          dropLocation: {
+            formattedAddress: 'Drop',
+            coordinates: [72.8777, 19.076],
+          },
+        },
+      };
+      const res = createMockRes();
+
+      await controller.createTrip(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.message, /does not have a driver assigned/i);
+    },
+  },
   {
     name: 'shared validation enforces container number format',
     run() {

@@ -1,11 +1,48 @@
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
+const Driver = require('../models/Driver');
 const {
   checkVehicleHasTripHistory,
   getVehicleAvailabilityState,
   validateIndianVehicleRegistrationFormat,
 } = require('../utils/vehicleValidation');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
+
+const validateDriverVehicleLink = async ({ driverId, transporterId, excludeVehicleId = null }) => {
+  const driver = await Driver.findOne({
+    _id: driverId,
+    transporterId,
+  });
+
+  if (!driver) {
+    return {
+      error: 'Driver not found or does not belong to your transporter account',
+      statusCode: 400,
+    };
+  }
+
+  if (driver.status !== 'active') {
+    return {
+      error: 'Only active drivers can be assigned to vehicles',
+      statusCode: 400,
+    };
+  }
+
+  const existingVehicle = await Vehicle.findOne({
+    driverId,
+    transporterId,
+    ...(excludeVehicleId ? { _id: { $ne: excludeVehicleId } } : {}),
+  }).select('_id vehicleNumber');
+
+  if (existingVehicle) {
+    return {
+      error: `Driver is already assigned to vehicle ${existingVehicle.vehicleNumber}. Please clear the existing assignment first.`,
+      statusCode: 400,
+    };
+  }
+
+  return { driver };
+};
 
 /**
  * Get all vehicles for authenticated transporter
@@ -195,16 +232,15 @@ const createVehicle = async (req, res, next) => {
 
     // Validate driver belongs to transporter (if provided)
     if (driverId) {
-      const Driver = require('../models/Driver');
-      const driver = await Driver.findOne({
-        _id: driverId,
-        transporterId: transporterId,
+      const driverValidation = await validateDriverVehicleLink({
+        driverId,
+        transporterId,
       });
 
-      if (!driver) {
-        return res.status(400).json({
+      if (driverValidation.error) {
+        return res.status(driverValidation.statusCode).json({
           success: false,
-          message: 'Driver not found or does not belong to your transporter account',
+          message: driverValidation.error,
         });
       }
     }
@@ -406,17 +442,16 @@ const updateVehicle = async (req, res, next) => {
       if (driverId === null || driverId === '') {
         updateData.driverId = null;
       } else {
-        // Validate driver belongs to transporter
-        const Driver = require('../models/Driver');
-        const driver = await Driver.findOne({
-          _id: driverId,
-          transporterId: transporterId,
+        const driverValidation = await validateDriverVehicleLink({
+          driverId,
+          transporterId,
+          excludeVehicleId: id,
         });
 
-        if (!driver) {
-          return res.status(400).json({
+        if (driverValidation.error) {
+          return res.status(driverValidation.statusCode).json({
             success: false,
-            message: 'Driver not found or does not belong to your transporter account',
+            message: driverValidation.error,
           });
         }
         updateData.driverId = driverId;

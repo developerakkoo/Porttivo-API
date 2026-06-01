@@ -60,4 +60,14 @@ const driverSchema = new mongoose.Schema(
   }
 );
 
+driverSchema.virtual('assignedVehicle', {
+  ref: 'Vehicle',
+  localField: '_id',
+  foreignField: 'driverId',
+  justOne: true,
+});
+
+driverSchema.set('toJSON', { virtuals: true });
+driverSchema.set('toObject', { virtuals: true });
+
 module.exports = mongoose.model('Driver', driverSchema);

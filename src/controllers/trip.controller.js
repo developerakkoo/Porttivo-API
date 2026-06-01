@@ -136,6 +136,151 @@ const normalizeAndValidateContainerNumber = (containerNumber) => {
   return { value: normalized, error: null };
 };
 
+const resolveTripVehicleDriverSelection = async ({
+  transporterId,
+  vehicleId,
+  driverId,
+  contextLabel = 'Trip',
+}) => {
+  const hasVehicle = vehicleId !== undefined && vehicleId !== null && vehicleId !== '';
+  const hasDriver = driverId !== undefined && driverId !== null && driverId !== '';
+
+  if (!hasVehicle && !hasDriver) {
+    return {
+      vehicleId: null,
+      driverId: null,
+      vehicle: null,
+      driver: null,
+    };
+  }
+
+  let selectedVehicle = null;
+  let selectedDriver = null;
+
+  if (hasVehicle) {
+    const vehicleValidation = await validateOwnedVehicleAccess(vehicleId, transporterId);
+    if (vehicleValidation.error) {
+      return {
+        error: vehicleValidation.error,
+        statusCode: vehicleValidation.statusCode,
+      };
+    }
+
+    selectedVehicle = vehicleValidation.vehicle;
+    const linkedDriverId = selectedVehicle.driverId?._id || selectedVehicle.driverId;
+
+    if (!linkedDriverId) {
+      return {
+        error: `${contextLabel}: selected vehicle does not have a driver assigned. Please link the vehicle to a driver first.`,
+        statusCode: 400,
+      };
+    }
+
+    const driverValidation = await validateDriverAccess(linkedDriverId.toString(), transporterId);
+    if (driverValidation.error) {
+      return {
+        error: `${contextLabel}: ${driverValidation.error}`,
+        statusCode: driverValidation.statusCode,
+      };
+    }
+
+    selectedDriver = driverValidation.driver;
+
+    const linkedVehicles = await Vehicle.find({
+      driverId: linkedDriverId,
+      transporterId,
+      ownerType: 'OWN',
+    })
+      .select('_id vehicleNumber')
+      .limit(2);
+
+    if (linkedVehicles.length > 1) {
+      return {
+        error: `${contextLabel}: selected driver is linked to multiple vehicles. Please fix the vehicle assignment first.`,
+        statusCode: 400,
+      };
+    }
+
+    if (hasDriver && String(driverId) !== String(linkedDriverId)) {
+      return {
+        error: `${contextLabel}: selected vehicle is assigned to a different driver.`,
+        statusCode: 400,
+      };
+    }
+
+    const activeTripError = await validateVehicleIsFreeForTrip(selectedVehicle._id.toString());
+    if (activeTripError) {
+      return {
+        error: activeTripError,
+        statusCode: 400,
+      };
+    }
+
+    return {
+      vehicleId: selectedVehicle._id,
+      driverId: selectedDriver._id,
+      vehicle: selectedVehicle,
+      driver: selectedDriver,
+    };
+  }
+
+  const driverValidation = await validateDriverAccess(driverId, transporterId);
+  if (driverValidation.error) {
+    return {
+      error: driverValidation.error,
+      statusCode: driverValidation.statusCode,
+    };
+  }
+
+  selectedDriver = driverValidation.driver;
+
+  const linkedVehicles = await Vehicle.find({
+    driverId: selectedDriver._id,
+    transporterId,
+    ownerType: 'OWN',
+  })
+    .select('_id vehicleNumber status')
+    .limit(2);
+
+  if (linkedVehicles.length === 0) {
+    return {
+      error: `${contextLabel}: selected driver does not have a vehicle assigned. Please link a vehicle to this driver first.`,
+      statusCode: 400,
+    };
+  }
+
+  if (linkedVehicles.length > 1) {
+    return {
+      error: `${contextLabel}: selected driver is linked to multiple vehicles. Please fix the vehicle assignment first.`,
+      statusCode: 400,
+    };
+  }
+
+  selectedVehicle = linkedVehicles[0];
+
+  if (selectedVehicle.status !== 'active') {
+    return {
+      error: `${contextLabel}: selected vehicle is not active.`,
+      statusCode: 400,
+    };
+  }
+
+  const activeTripError = await validateVehicleIsFreeForTrip(selectedVehicle._id.toString());
+  if (activeTripError) {
+    return {
+      error: activeTripError,
+      statusCode: 400,
+    };
+  }
+
+  return {
+    vehicleId: selectedVehicle._id,
+    driverId: selectedDriver._id,
+    vehicle: selectedVehicle,
+    driver: selectedDriver,
+  };
+};
+
 const validateUniqueAssignments = (assignmentsInput) => {
   if (!Array.isArray(assignmentsInput)) {
     return null;
@@ -674,34 +819,31 @@ const createTrip = async (req, res, next) => {
             message: `Assignment ${i + 1}: ${containerError}`,
           });
         }
-        if (!vid || !did) {
+        if (!vid && !did) {
           return res.status(400).json({
             success: false,
-            message: `Assignment ${i + 1}: vehicleId and driverId are required`,
+            message: `Assignment ${i + 1}: vehicleId or driverId is required`,
           });
         }
-        const vehicleValidation = await validateOwnedVehicleAccess(vid, transporterId);
-        if (vehicleValidation.error) {
-          return res.status(vehicleValidation.statusCode).json({
+        const resolution = await resolveTripVehicleDriverSelection({
+          transporterId,
+          vehicleId: vid,
+          driverId: did,
+          contextLabel: `Assignment ${i + 1}`,
+        });
+
+        if (resolution.error) {
+          return res.status(resolution.statusCode).json({
             success: false,
-            message: `Assignment ${i + 1}: ${vehicleValidation.error}`,
+            message: resolution.error,
           });
         }
-        const activeTripError = await validateVehicleIsFreeForTrip(vid);
-        if (activeTripError) {
-          return res.status(400).json({
-            success: false,
-            message: `Assignment ${i + 1}: ${activeTripError}`,
-          });
-        }
-        const driverValidation = await validateDriverAccess(did, transporterId);
-        if (driverValidation.error) {
-          return res.status(driverValidation.statusCode).json({
-            success: false,
-            message: `Assignment ${i + 1}: ${driverValidation.error}`,
-          });
-        }
-        assignments.push({ containerNumber: cn, vehicleId: vid, driverId: did });
+
+        assignments.push({
+          containerNumber: cn,
+          vehicleId: resolution.vehicleId,
+          driverId: resolution.driverId,
+        });
       }
       tripPayload.assignments = assignments;
       const first = assignments[0];
@@ -741,17 +883,6 @@ const createTrip = async (req, res, next) => {
         tripPayload.hiredVehicle = normalizedHiredVehicle;
       }
 
-      if (driverId) {
-        const driverValidation = await validateDriverAccess(driverId, transporterId);
-        if (driverValidation.error) {
-          return res.status(driverValidation.statusCode).json({
-            success: false,
-            message: driverValidation.error,
-          });
-        }
-        tripPayload.driverId = driverId;
-      }
-
       const { value: normalizedContainerNumber, error: containerError } = normalizeAndValidateContainerNumber(containerNumber);
       if (containerError) {
         return res.status(400).json({
@@ -760,7 +891,36 @@ const createTrip = async (req, res, next) => {
         });
       }
       tripPayload.containerNumber = normalizedContainerNumber;
-      if ((vehicleId || normalizedHiredVehicle) && driverId) {
+
+      if (!normalizedHiredVehicle) {
+        const resolution = await resolveTripVehicleDriverSelection({
+          transporterId,
+          vehicleId,
+          driverId,
+          contextLabel: 'Trip',
+        });
+
+        if (resolution.error) {
+          return res.status(resolution.statusCode).json({
+            success: false,
+            message: resolution.error,
+          });
+        }
+
+        tripPayload.vehicleId = resolution.vehicleId;
+        tripPayload.driverId = resolution.driverId;
+      } else if (driverId) {
+        const driverValidation = await validateDriverAccess(driverId, transporterId);
+        if (driverValidation.error) {
+          return res.status(driverValidation.statusCode).json({
+            success: false,
+            message: driverValidation.error,
+          });
+        }
+        tripPayload.driverId = driverValidation.driver._id;
+      }
+
+      if (tripPayload.vehicleId && tripPayload.driverId) {
         tripPayload.assignedAt = new Date();
       }
     }
