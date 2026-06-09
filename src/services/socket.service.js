@@ -1969,26 +1969,34 @@ const initializeSocketIO = httpServer => {
         if (!ticket) {
           return socket.emit('error', { message: 'Ticket not found' })
         }
-        const scopeId = getTransporterScopeId(socket.user)
         const isAdmin = socket.user.userType === 'admin'
+        const transporterScopeId = getTransporterScopeId(socket.user)
+        const customerScopeId =
+          socket.user.userType === 'customer' ? socket.user.id : null
+        const requesterType = ticket.requesterType || 'transporter'
+        const requesterId =
+          ticket.requesterId?.toString?.() ||
+          ticket.transporterId?.toString?.() ||
+          null
+
         if (!isAdmin) {
-          if (!scopeId || ticket.transporterId.toString() !== scopeId) {
+          if (requesterType === 'customer') {
+            if (!customerScopeId || requesterId !== customerScopeId) {
+              return socket.emit('error', { message: 'Forbidden' })
+            }
+          } else if (!transporterScopeId || requesterId !== transporterScopeId) {
             return socket.emit('error', { message: 'Forbidden' })
           }
         }
 
         socket.join(`support:${ticketId}`)
-        await supportTicketService.markDeliveredForOthers(ticket._id, isAdmin)
+        await supportTicketService.markDeliveredForOthers(ticket, socket.user.userType)
         const fresh = await supportTicketService.clearUnreadForViewer(
-          ticket._id,
-          isAdmin
+          ticket,
+          socket.user.userType
         )
         if (fresh) {
-          supportTicketService.broadcastTicketUpdated(
-            io,
-            fresh,
-            ticket.transporterId.toString()
-          )
+          supportTicketService.broadcastTicketUpdated(io, fresh)
         }
         logSocketEvent('support:join', socket, { ticketId, result: 'joined' })
         socket.emit('support:joined', { ticketId })
@@ -2028,8 +2036,14 @@ const initializeSocketIO = httpServer => {
           return socket.emit('error', { message: 'Ticket not found' })
         }
 
-        const scopeId = getTransporterScopeId(socket.user)
         const isAdmin = socket.user.userType === 'admin'
+        const requesterType = ticket.requesterType || 'transporter'
+        const requesterId =
+          ticket.requesterId?.toString?.() ||
+          ticket.transporterId?.toString?.() ||
+          null
+        const scopeId = getTransporterScopeId(socket.user)
+        const customerId = socket.user.userType === 'customer' ? socket.user.id : null
         if (isAdmin) {
           await supportTicketService.appendMessage(io, ticket, {
             senderType: 'admin',
@@ -2038,15 +2052,27 @@ const initializeSocketIO = httpServer => {
             attachmentsRaw
           })
         } else {
-          if (!scopeId || ticket.transporterId.toString() !== scopeId) {
-            return socket.emit('error', { message: 'Forbidden' })
+          if (requesterType === 'customer') {
+            if (!customerId || requesterId !== customerId) {
+              return socket.emit('error', { message: 'Forbidden' })
+            }
+            await supportTicketService.appendMessage(io, ticket, {
+              senderType: 'customer',
+              senderId: customerId,
+              content,
+              attachmentsRaw
+            })
+          } else {
+            if (!scopeId || requesterId !== scopeId) {
+              return socket.emit('error', { message: 'Forbidden' })
+            }
+            await supportTicketService.appendMessage(io, ticket, {
+              senderType: 'transporter',
+              senderId: scopeId,
+              content,
+              attachmentsRaw
+            })
           }
-          await supportTicketService.appendMessage(io, ticket, {
-            senderType: 'transporter',
-            senderId: scopeId,
-            content,
-            attachmentsRaw
-          })
         }
         logSocketEvent('support:message:send', socket, {
           ticketId,
@@ -2072,10 +2098,14 @@ const initializeSocketIO = httpServer => {
         const reader = isAdmin
           ? { userType: 'admin', transporterScopeId: null }
           : {
-              userType: 'transporter',
-              transporterScopeId: getTransporterScopeId(socket.user)
+              userType: socket.user.userType,
+              transporterScopeId: getTransporterScopeId(socket.user),
+              customerScopeId:
+                socket.user.userType === 'customer'
+                  ? socket.user.id
+                  : null
             }
-        if (!isAdmin && !reader.transporterScopeId) {
+        if (!isAdmin && !reader.transporterScopeId && !reader.customerScopeId) {
           return socket.emit('error', { message: 'Forbidden' })
         }
         const { message } = await supportTicketService.markMessageRead(
@@ -2100,10 +2130,15 @@ const initializeSocketIO = httpServer => {
       if (!ticketId || !socket.rooms.has(`support:${ticketId}`)) return
       const isAdmin = socket.user.userType === 'admin'
       const scopeId = getTransporterScopeId(socket.user)
-      if (!isAdmin && !scopeId) return
+      const customerId = socket.user.userType === 'customer' ? socket.user.id : null
+      if (!isAdmin && !scopeId && !customerId) return
       socket.to(`support:${ticketId}`).emit('support:typing', {
         ticketId,
-        senderType: isAdmin ? 'admin' : 'transporter'
+        senderType: isAdmin
+          ? 'admin'
+          : socket.user.userType === 'customer'
+            ? 'customer'
+            : 'transporter'
       })
     })
 

@@ -5,6 +5,7 @@ const SupportTicketEvent = require('../models/SupportTicketEvent')
 const SupportTicketCounter = require('../models/SupportTicketCounter')
 const Admin = require('../models/Admin')
 const Notification = require('../models/Notification')
+const Customer = require('../models/Customer')
 const {
   MAX_CHAT_ATTACHMENTS,
   normalizeAttachmentsInput
@@ -18,6 +19,7 @@ const {
   buildSubject
 } = require('../constants/supportTicketCategories')
 const MSG_MAX_LEN = 2000
+const REQUESTER_TYPES = new Set(['transporter', 'customer'])
 
 async function allocateTicketSeq() {
   const doc = await SupportTicketCounter.findOneAndUpdate(
@@ -30,10 +32,58 @@ async function allocateTicketSeq() {
   return { ticketSeq: seq, ticketNumber: `SUP-${seq}` }
 }
 
+function getRequesterInfoFromUser(user) {
+  if (!user) return null
+  if (user.userType === 'transporter' || user.userType === 'company-user') {
+    const transporterId =
+      user.userType === 'company-user' ? user.transporterId : user.id
+    if (!transporterId) return null
+    return {
+      requesterType: 'transporter',
+      requesterModel: 'Transporter',
+      requesterId: transporterId.toString()
+    }
+  }
+  if (user.userType === 'customer') {
+    return {
+      requesterType: 'customer',
+      requesterModel: 'Customer',
+      requesterId: user.id?.toString?.() ?? String(user.id)
+    }
+  }
+  return null
+}
+
+function getRequesterRoom(ticket) {
+  const requesterType = ticket?.requesterType || 'transporter'
+  const requesterId =
+    ticket?.requesterId || ticket?.transporterId || ticket?.requester?.id
+  if (!requesterId) return null
+  return `${requesterType}:${requesterId.toString()}`
+}
+
+function resolveTicketRequester(ticket) {
+  if (!ticket) return null
+  const requesterType = ticket.requesterType || 'transporter'
+  const requesterId =
+    ticket.requesterId || ticket.transporterId || ticket.requester?.id || null
+  return {
+    requesterType,
+    requesterId: requesterId ? requesterId.toString() : null,
+    requesterModel:
+      ticket.requesterModel ||
+      (requesterType === 'customer' ? 'Customer' : 'Transporter')
+  }
+}
+
 function toTicketPlain(t) {
   if (!t) return null
   const o = t.toObject ? t.toObject() : { ...t }
   o.id = o._id?.toString?.()
+  const requester = resolveTicketRequester(o)
+  o.requesterType = requester?.requesterType || o.requesterType || 'transporter'
+  o.requesterId = requester?.requesterId || o.requesterId?.toString?.() || o.requesterId
+  o.requesterModel = requester?.requesterModel || o.requesterModel || 'Transporter'
   o.transporterId =
     o.transporterId?._id?.toString?.() ?? o.transporterId?.toString?.() ?? o.transporterId
   return o
@@ -76,10 +126,12 @@ async function notifyAllActiveAdmins({ type, title, message, data }, io = null) 
   }
 }
 
-async function notifyTransporter(transporterId, { type, title, message, data }) {
+async function notifyRequester(requesterType, requesterId, { type, title, message, data }) {
+  if (!requesterId) return
+  const userType = requesterType === 'customer' ? 'CUSTOMER' : 'TRANSPORTER'
   await Notification.create({
-    userId: transporterId,
-    userType: 'TRANSPORTER',
+    userId: requesterId,
+    userType,
     type,
     title,
     message,
@@ -88,13 +140,28 @@ async function notifyTransporter(transporterId, { type, title, message, data }) 
   })
 }
 
+async function notifyTransporter(transporterId, payload) {
+  await notifyRequester('transporter', transporterId, payload)
+}
+
+async function notifyCustomer(customerId, payload) {
+  await notifyRequester('customer', customerId, payload)
+}
+
+async function notifyTargetRequester(ticket, payload) {
+  const requester = resolveTicketRequester(ticket)
+  if (!requester?.requesterId) return
+  await notifyRequester(requester.requesterType, requester.requesterId, payload)
+}
+
 function effectiveMessageType(contentTrim, attachments) {
   if (attachments.length > 0) return 'ATTACHMENT'
   return 'TEXT'
 }
 
-function broadcastMessage(io, ticket, transporterId, populatedLean) {
+function broadcastMessage(io, ticket, populatedLean) {
   if (!io) return
+  const requester = resolveTicketRequester(ticket)
   const senderType = populatedLean.senderType
   const payload = buildSupportMessageSocketPayload(
     ticket._id,
@@ -103,27 +170,43 @@ function broadcastMessage(io, ticket, transporterId, populatedLean) {
   )
   io.to(`support:${ticket._id}`).emit('support:message:new', payload)
   if (senderType === 'system') {
-    io.to(`transporter:${transporterId}`).emit('support:message:new', payload)
+    if (requester?.requesterId) {
+      io.to(`${requester.requesterType}:${requester.requesterId}`).emit(
+        'support:message:new',
+        payload
+      )
+    }
     io.to('admin:all').emit('support:message:new', payload)
   } else if (senderType === 'admin') {
-    io.to(`transporter:${transporterId}`).emit('support:message:new', payload)
+    if (requester?.requesterId) {
+      io.to(`${requester.requesterType}:${requester.requesterId}`).emit(
+        'support:message:new',
+        payload
+      )
+    }
   } else {
     io.to('admin:all').emit('support:message:new', payload)
   }
 }
 
-function broadcastTicketUpdated(io, ticketLean, transporterId) {
+function broadcastTicketUpdated(io, ticketLean) {
   if (!io) return
+  const requester = resolveTicketRequester(ticketLean)
   const payload = buildSupportTicketUpdatedPayload(ticketLean)
   io.to(`support:${ticketLean._id}`).emit('support:ticket:updated', payload)
-  io.to(`transporter:${transporterId}`).emit('support:ticket:updated', payload)
+  if (requester?.requesterId) {
+    io.to(`${requester.requesterType}:${requester.requesterId}`).emit(
+      'support:ticket:updated',
+      payload
+    )
+  }
   io.to('admin:all').emit('support:ticket:updated', payload)
 }
 
 /**
  * @param {import('socket.io').Server | null} io
  */
-async function createTicket(io, transporterId, body) {
+async function createTicketForRequester(io, requesterInfo, body) {
   const {
     subject: subjRaw,
     priority = 'medium',
@@ -132,6 +215,13 @@ async function createTicket(io, transporterId, body) {
   } = body || {}
 
   const { category, categoryDetail } = validateCreatePayload(body)
+  const requesterType = requesterInfo?.requesterType || 'transporter'
+  const requesterId = requesterInfo?.requesterId
+  if (!REQUESTER_TYPES.has(requesterType) || !requesterId) {
+    const err = new Error('Invalid support requester')
+    err.status = 400
+    throw err
+  }
 
   let subject = String(subjRaw || '').trim()
   if (!subject) {
@@ -167,7 +257,10 @@ async function createTicket(io, transporterId, body) {
   const ticket = await SupportTicket.create({
     ticketNumber,
     ticketSeq,
-    transporterId,
+    requesterType,
+    requesterModel: requesterInfo.requesterModel || (requesterType === 'customer' ? 'Customer' : 'Transporter'),
+    requesterId,
+    transporterId: requesterType === 'transporter' ? requesterId : null,
     subject,
     category,
     categoryDetail,
@@ -179,7 +272,8 @@ async function createTicket(io, transporterId, body) {
     lastMessagePreview:
       contentTrim.slice(0, 120) ||
       (attachments.length ? `[${attachments.length} attachment(s)]` : ''),
-    unreadByTransporter: 0,
+    unreadByTransporter: requesterType === 'transporter' ? 0 : 0,
+    unreadByRequester: 0,
     unreadByAdmin: 1
   })
 
@@ -189,8 +283,8 @@ async function createTicket(io, transporterId, body) {
   )
   const message = await SupportMessage.create({
     ticketId: ticket._id,
-    senderType: 'transporter',
-    senderId: transporterId,
+    senderType: requesterType,
+    senderId: requesterId,
     messageType: msgType,
     content: contentTrim,
     attachments,
@@ -201,8 +295,8 @@ async function createTicket(io, transporterId, body) {
   await SupportTicketEvent.create({
     ticketId: ticket._id,
     type: 'created',
-    actorType: 'transporter',
-    actorId: transporterId,
+    actorType: requesterType,
+    actorId: requesterId,
     payload: { subject, category, categoryDetail }
   })
 
@@ -216,7 +310,10 @@ async function createTicket(io, transporterId, body) {
       data: {
         ticketId: ticket._id.toString(),
         ticketNumber,
-        transporterId: transporterId.toString(),
+        requesterType,
+        requesterId: requesterId.toString(),
+        transporterId:
+          requesterType === 'transporter' ? requesterId.toString() : undefined,
         category
       }
     },
@@ -224,16 +321,28 @@ async function createTicket(io, transporterId, body) {
   )
 
   const freshTicket = await SupportTicket.findById(ticket._id).lean()
-  broadcastTicketUpdated(io, freshTicket, transporterId.toString())
-  broadcastMessage(io, ticket, transporterId.toString(), {
+  broadcastTicketUpdated(io, freshTicket)
+  broadcastMessage(io, ticket, {
     ...populatedMessage,
-    senderType: 'transporter'
+    senderType: requesterType
   })
 
   return { ticket: freshTicket, message: populatedMessage }
 }
 
-async function assertTicketAccess(ticketId, { transporterId, adminUserId }) {
+async function createTicket(io, transporterId, body) {
+  return createTicketForRequester(
+    io,
+    {
+      requesterType: 'transporter',
+      requesterModel: 'Transporter',
+      requesterId: transporterId
+    },
+    body
+  )
+}
+
+async function assertTicketAccess(ticketId, { transporterId, customerId, adminUserId }) {
   const ticket = await SupportTicket.findById(ticketId)
   if (!ticket) {
     const err = new Error('Ticket not found')
@@ -242,6 +351,16 @@ async function assertTicketAccess(ticketId, { transporterId, adminUserId }) {
   }
   if (transporterId) {
     if (ticket.transporterId.toString() !== transporterId.toString()) {
+      const err = new Error('Forbidden')
+      err.status = 403
+      throw err
+    }
+  } else if (customerId) {
+    const requester = resolveTicketRequester(ticket)
+    if (
+      requester?.requesterType !== 'customer' ||
+      requester.requesterId?.toString?.() !== customerId.toString()
+    ) {
       const err = new Error('Forbidden')
       err.status = 403
       throw err
@@ -264,12 +383,12 @@ async function appendMessage(io, ticket, { senderType, senderId, content, attach
     err.status = 400
     throw err
   }
-  if (!['transporter', 'admin'].includes(senderType)) {
+  if (!['transporter', 'customer', 'admin'].includes(senderType)) {
     const err = new Error('Invalid senderType')
     err.status = 400
     throw err
   }
-  if (senderType === 'transporter' && ticket.status === 'resolved') {
+  if (senderType !== 'admin' && ticket.status === 'resolved') {
     const err = new Error(
       'This ticket is resolved. Open a new support ticket to continue.'
     )
@@ -296,11 +415,15 @@ async function appendMessage(io, ticket, { senderType, senderId, content, attach
     throw err
   }
 
-  const tId = ticket.transporterId.toString()
+  const requester = resolveTicketRequester(ticket)
+  const requesterId = requester?.requesterId || ticket.transporterId?.toString?.()
   const msgType = effectiveMessageType(contentTrim, attachments)
 
   if (senderType === 'admin') {
-    ticket.unreadByTransporter = (ticket.unreadByTransporter || 0) + 1
+    ticket.unreadByRequester = (ticket.unreadByRequester || 0) + 1
+    if (requester?.requesterType === 'transporter') {
+      ticket.unreadByTransporter = (ticket.unreadByTransporter || 0) + 1
+    }
   } else {
     ticket.unreadByAdmin = (ticket.unreadByAdmin || 0) + 1
   }
@@ -329,16 +452,17 @@ async function appendMessage(io, ticket, { senderType, senderId, content, attach
     senderType
   }
 
-  broadcastMessage(io, ticket, tId, populatedMessage)
+  broadcastMessage(io, ticket, populatedMessage)
 
   if (senderType === 'admin') {
-    await notifyTransporter(tId, {
+    await notifyTargetRequester(ticket, {
       type: 'SUPPORT_MESSAGE',
       title: `Support: ${ticket.ticketNumber}`,
       message: contentTrim.slice(0, 200) || 'New message from support',
       data: {
         ticketId: ticket._id.toString(),
-        ticketNumber: ticket.ticketNumber
+        ticketNumber: ticket.ticketNumber,
+        requesterType: requester?.requesterType || 'transporter'
       }
     })
   } else {
@@ -346,11 +470,14 @@ async function appendMessage(io, ticket, { senderType, senderId, content, attach
       {
         type: 'SUPPORT_MESSAGE',
         title: `Ticket ${ticket.ticketNumber}`,
-        message: contentTrim.slice(0, 200) || 'New message from transporter',
+        message:
+          contentTrim.slice(0, 200) ||
+          `New message from ${senderType === 'customer' ? 'customer' : 'transporter'}`,
         data: {
           ticketId: ticket._id.toString(),
           ticketNumber: ticket.ticketNumber,
-          transporterId: tId
+          requesterType: requester?.requesterType || senderType,
+          requesterId: requesterId
         }
       },
       io
@@ -358,7 +485,7 @@ async function appendMessage(io, ticket, { senderType, senderId, content, attach
   }
 
   const freshTicket = await SupportTicket.findById(ticket._id).lean()
-  broadcastTicketUpdated(io, freshTicket, tId)
+  broadcastTicketUpdated(io, freshTicket)
 
   return { message: populatedMessage, ticket: freshTicket }
 }
@@ -375,7 +502,7 @@ async function insertSystemMessage(
     content,
     preview,
     systemMeta,
-    incrementTransporterUnread = false,
+    incrementRequesterUnread = false,
     incrementAdminUnread = false
   }
 ) {
@@ -389,8 +516,11 @@ async function insertSystemMessage(
     status: 'READ',
     readAt: new Date()
   })
-  if (incrementTransporterUnread) {
-    ticketDoc.unreadByTransporter = (ticketDoc.unreadByTransporter || 0) + 1
+  if (incrementRequesterUnread) {
+    ticketDoc.unreadByRequester = (ticketDoc.unreadByRequester || 0) + 1
+    if ((ticketDoc.requesterType || 'transporter') === 'transporter') {
+      ticketDoc.unreadByTransporter = (ticketDoc.unreadByTransporter || 0) + 1
+    }
   }
   if (incrementAdminUnread) {
     ticketDoc.unreadByAdmin = (ticketDoc.unreadByAdmin || 0) + 1
@@ -404,16 +534,16 @@ async function insertSystemMessage(
 
   let populatedMessage = await SupportMessage.findById(message._id).lean()
   populatedMessage = { ...populatedMessage, senderType: 'system' }
-  const tId = ticketDoc.transporterId.toString()
-  broadcastMessage(io, ticketDoc, tId, populatedMessage)
+  broadcastMessage(io, ticketDoc, populatedMessage)
   const freshTicket = await SupportTicket.findById(ticketDoc._id).lean()
-  broadcastTicketUpdated(io, freshTicket, tId)
+  broadcastTicketUpdated(io, freshTicket)
   return { message: populatedMessage, ticket: freshTicket }
 }
 
 async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
   const prev = ticket.status
   let statusChanged = false
+  const requester = resolveTicketRequester(ticket)
   if (status) {
     if (!['open', 'pending', 'resolved'].includes(status)) {
       const err = new Error('Invalid status')
@@ -440,10 +570,8 @@ async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
     })
   }
 
-  const tId = ticket.transporterId.toString()
-
   if (statusChanged && ticket.status === 'resolved') {
-    await notifyTransporter(tId, {
+    await notifyTargetRequester(ticket, {
       type: 'SUPPORT_STATUS_CHANGED',
       title: `Ticket ${ticket.ticketNumber} resolved`,
       message:
@@ -451,7 +579,8 @@ async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
       data: {
         ticketId: ticket._id.toString(),
         ticketNumber: ticket.ticketNumber,
-        status: ticket.status
+        status: ticket.status,
+        requesterType: requester?.requesterType || 'transporter'
       }
     })
     const ticketReload = await SupportTicket.findById(ticket._id)
@@ -471,7 +600,7 @@ async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
               ? adminId.toString()
               : String(adminId)
         },
-        incrementTransporterUnread: true,
+        incrementRequesterUnread: true,
         incrementAdminUnread: false
       })
     }
@@ -479,35 +608,37 @@ async function updateTicketStatus(io, ticket, adminId, { status, subject }) {
   }
 
   if (statusChanged) {
-    await notifyTransporter(tId, {
+    await notifyTargetRequester(ticket, {
       type: 'SUPPORT_STATUS_CHANGED',
       title: `Ticket ${ticket.ticketNumber} updated`,
       message: `Status is now ${ticket.status}`,
       data: {
         ticketId: ticket._id.toString(),
         ticketNumber: ticket.ticketNumber,
-        status: ticket.status
+        status: ticket.status,
+        requesterType: requester?.requesterType || 'transporter'
       }
     })
   }
 
   const freshTicket = await SupportTicket.findById(ticket._id).lean()
-  broadcastTicketUpdated(io, freshTicket, tId)
+  broadcastTicketUpdated(io, freshTicket)
   return freshTicket
 }
 
 /**
- * One-time CSAT for a resolved ticket (transporter scope).
+ * One-time CSAT for a resolved ticket (requester scope).
  * @param {import('socket.io').Server | null} io
  */
-async function submitTicketRating(io, ticketId, transporterId, { score, comment }) {
+async function submitTicketRating(io, ticketId, requesterId, { score, comment }) {
   const ticket = await SupportTicket.findById(ticketId)
   if (!ticket) {
     const err = new Error('Ticket not found')
     err.status = 404
     throw err
   }
-  if (ticket.transporterId.toString() !== transporterId.toString()) {
+  const requester = resolveTicketRequester(ticket)
+  if (!requester?.requesterId || requester.requesterId !== requesterId.toString()) {
     const err = new Error('Forbidden')
     err.status = 403
     throw err
@@ -538,8 +669,8 @@ async function submitTicketRating(io, ticketId, transporterId, { score, comment 
   await SupportTicketEvent.create({
     ticketId: ticket._id,
     type: 'rated',
-    actorType: 'transporter',
-    actorId: transporterId,
+    actorType: requester.requesterType,
+    actorId: requesterId,
     payload: { score: s, hasComment: !!commentTrim }
   })
 
@@ -550,7 +681,7 @@ async function submitTicketRating(io, ticketId, transporterId, { score, comment 
       content: 'Thank you for your feedback.',
       preview: 'Thank you for your feedback',
       systemMeta: { kind: 'rating_thanks' },
-      incrementTransporterUnread: false,
+      incrementRequesterUnread: false,
       incrementAdminUnread: true
     })
   }
@@ -558,12 +689,13 @@ async function submitTicketRating(io, ticketId, transporterId, { score, comment 
   return SupportTicket.findById(ticket._id).lean()
 }
 
-async function markDeliveredForOthers(ticketId, joinedUserIsAdmin) {
+async function markDeliveredForOthers(ticket, viewerType) {
+  const requesterType = resolveTicketRequester(ticket)?.requesterType || 'transporter'
   const senderTypeToMark =
-    joinedUserIsAdmin === true ? 'transporter' : 'admin'
+    viewerType === 'admin' ? requesterType : 'admin'
   await SupportMessage.updateMany(
     {
-      ticketId,
+      ticketId: ticket._id,
       status: 'SENT',
       senderType: senderTypeToMark
     },
@@ -572,12 +704,16 @@ async function markDeliveredForOthers(ticketId, joinedUserIsAdmin) {
 }
 
 /** When a party opens the thread, clear their unread badge on the ticket. */
-async function clearUnreadForViewer(ticketId, viewerIsAdmin) {
-  const patch = viewerIsAdmin
-    ? { unreadByAdmin: 0 }
-    : { unreadByTransporter: 0 }
-  await SupportTicket.findByIdAndUpdate(ticketId, { $set: patch })
-  return SupportTicket.findById(ticketId).lean()
+async function clearUnreadForViewer(ticket, viewerType) {
+  const requesterType = resolveTicketRequester(ticket)?.requesterType || 'transporter'
+  const patch =
+    viewerType === 'admin'
+      ? { unreadByAdmin: 0 }
+      : requesterType === 'customer'
+        ? { unreadByRequester: 0 }
+        : { unreadByRequester: 0, unreadByTransporter: 0 }
+  await SupportTicket.findByIdAndUpdate(ticket._id, { $set: patch })
+  return SupportTicket.findById(ticket._id).lean()
 }
 
 async function markMessageRead(messageId, reader) {
@@ -595,18 +731,25 @@ async function markMessageRead(messageId, reader) {
     throw err
   }
 
-  const tId = ticket.transporterId.toString()
+  const requester = resolveTicketRequester(ticket)
   const isAdmin = reader.userType === 'admin'
   const scopeTransporter = reader.transporterScopeId
+  const scopeCustomer = reader.customerScopeId
 
   if (isAdmin) {
-    if (message.senderType !== 'transporter') {
-      const err = new Error('Only transporter messages can be marked read by admin')
+    if (!['transporter', 'customer'].includes(message.senderType)) {
+      const err = new Error('Only requester messages can be marked read by admin')
       err.status = 400
       throw err
     }
   } else {
-    if (!scopeTransporter || tId !== scopeTransporter) {
+    if (requester?.requesterType === 'customer') {
+      if (!scopeCustomer || requester.requesterId !== scopeCustomer.toString()) {
+        const err = new Error('Forbidden')
+        err.status = 403
+        throw err
+      }
+    } else if (!scopeTransporter || requester?.requesterId !== scopeTransporter) {
       const err = new Error('Forbidden')
       err.status = 403
       throw err
@@ -617,7 +760,7 @@ async function markMessageRead(messageId, reader) {
       throw err
     }
     if (message.senderType !== 'admin') {
-      const err = new Error('Only admin messages can be marked read by transporter')
+      const err = new Error('Only admin messages can be marked read by requester')
       err.status = 400
       throw err
     }
@@ -648,7 +791,9 @@ async function listMessages(ticketId, { limit = 40, before }) {
 
 module.exports = {
   allocateTicketSeq,
+  getRequesterInfoFromUser,
   createTicket,
+  createTicketForRequester,
   assertTicketAccess,
   appendMessage,
   insertSystemMessage,
@@ -661,6 +806,8 @@ module.exports = {
   broadcastMessage,
   broadcastTicketUpdated,
   notifyAllActiveAdmins,
+  notifyRequester,
+  notifyTargetRequester,
   toTicketPlain,
   toMessagePlain,
   MSG_MAX_LEN,

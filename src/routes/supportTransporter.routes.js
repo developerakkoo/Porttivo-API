@@ -19,6 +19,7 @@ router.use((req, res, next) => {
   next()
 })
 
+router.get('/categories', ctrl.getSupportCategoriesTransporter)
 router.post('/tickets', ctrl.createTicketTransporter)
 router.get('/tickets', ctrl.listTicketsTransporter)
 router.get('/tickets/:id', ctrl.getTicketTransporter)

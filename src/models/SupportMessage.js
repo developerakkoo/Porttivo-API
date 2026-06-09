@@ -10,7 +10,7 @@ const supportMessageSchema = new mongoose.Schema(
     },
     senderType: {
       type: String,
-      enum: ['transporter', 'admin', 'system'],
+      enum: ['transporter', 'customer', 'admin', 'system'],
       required: true,
       index: true,
     },

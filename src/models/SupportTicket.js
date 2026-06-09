@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
 const { ALL_CODES } = require('../constants/supportTicketCategories');
 
+const REQUESTER_TYPES = Object.freeze(['transporter', 'customer']);
+
 const supportTicketSchema = new mongoose.Schema(
   {
     ticketNumber: {
@@ -16,10 +18,27 @@ const supportTicketSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+    requesterType: {
+      type: String,
+      enum: REQUESTER_TYPES,
+      default: 'transporter',
+      index: true,
+    },
+    requesterModel: {
+      type: String,
+      enum: ['Transporter', 'Customer'],
+      default: 'Transporter',
+    },
+    requesterId: {
+      type: mongoose.Schema.Types.ObjectId,
+      refPath: 'requesterModel',
+      default: null,
+      index: true,
+    },
     transporterId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',
-      required: true,
+      default: null,
       index: true,
     },
     subject: {
@@ -67,6 +86,11 @@ const supportTicketSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    unreadByRequester: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     unreadByAdmin: {
       type: Number,
       default: 0,
@@ -92,7 +116,33 @@ const supportTicketSchema = new mongoose.Schema(
 );
 
 supportTicketSchema.index({ transporterId: 1, updatedAt: -1 });
+supportTicketSchema.index({ requesterType: 1, requesterId: 1, updatedAt: -1 });
 supportTicketSchema.index({ status: 1, updatedAt: -1 });
 supportTicketSchema.index({ category: 1, updatedAt: -1 });
+
+supportTicketSchema.pre('validate', function normalizeRequester() {
+  if (!this.requesterType) {
+    this.requesterType = 'transporter';
+  }
+
+  if (this.requesterType === 'customer') {
+    this.requesterModel = 'Customer';
+    if (!this.requesterId && this.transporterId) {
+      this.requesterId = this.transporterId;
+    }
+    if (!this.transporterId) {
+      this.transporterId = null;
+    }
+    return;
+  }
+
+  this.requesterModel = 'Transporter';
+  if (!this.requesterId && this.transporterId) {
+    this.requesterId = this.transporterId;
+  }
+  if (!this.transporterId && this.requesterId) {
+    this.transporterId = this.requesterId;
+  }
+});
 
 module.exports = mongoose.model('SupportTicket', supportTicketSchema);

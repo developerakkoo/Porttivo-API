@@ -32,12 +32,21 @@ function buildSupportTicketUpdatedPayload(ticketLean, extra = {}) {
   const t = ticketLean
   if (!t) return { ...extra }
 
+  const requesterId =
+    t.requesterId != null
+      ? (t.requesterId._id ?? t.requesterId).toString()
+      : t.transporterId != null
+        ? (t.transporterId._id ?? t.transporterId).toString()
+        : undefined
+
   return {
     ticket: {
       _id: t._id?.toString?.() ?? String(t._id),
       id: t._id?.toString?.() ?? String(t._id),
       ticketNumber: t.ticketNumber,
       ticketSeq: t.ticketSeq,
+      requesterType: t.requesterType || 'transporter',
+      requesterId,
       transporterId:
         t.transporterId != null
           ? (t.transporterId._id ?? t.transporterId).toString()
@@ -50,6 +59,7 @@ function buildSupportTicketUpdatedPayload(ticketLean, extra = {}) {
       lastMessageAt: t.lastMessageAt,
       lastMessagePreview: t.lastMessagePreview,
       unreadByTransporter: t.unreadByTransporter,
+      unreadByRequester: t.unreadByRequester,
       unreadByAdmin: t.unreadByAdmin,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,

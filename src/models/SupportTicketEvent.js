@@ -15,7 +15,7 @@ const supportTicketEventSchema = new mongoose.Schema(
     },
     actorType: {
       type: String,
-      enum: ['transporter', 'admin', 'system'],
+      enum: ['transporter', 'customer', 'admin', 'system'],
       required: true,
     },
     actorId: {
