@@ -216,6 +216,54 @@
             color: #666;
             font-size: 16px;
         }
+
+        .map-section {
+            margin-bottom: 30px;
+        }
+
+        #tracking-map {
+            width: 100%;
+            height: 320px;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #e5e5e5;
+        }
+
+        .map-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-top: 12px;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-line {
+            width: 22px;
+            height: 3px;
+            border-radius: 2px;
+        }
+
+        .legend-line.route {
+            background: #000;
+        }
+
+        .legend-line.trail {
+            background: #6B6B6B;
+            height: 4px;
+        }
+
+        .waiting-location {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
         
         @media (max-width: 600px) {
             .header h1 {
@@ -360,6 +408,24 @@
                 {{/if}}
             </div>
             {{/if}}
+
+            {{#if tracking}}
+            <div class="section map-section">
+                <div class="section-title">Live Tracking</div>
+                <div id="tracking-map"></div>
+                <div class="map-legend">
+                    <div class="legend-item">
+                        <span class="legend-line route"></span>
+                        <span>Planned route</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-line trail"></span>
+                        <span>Driver path</span>
+                    </div>
+                </div>
+                <p id="waiting-location" class="waiting-location" style="display:none;">Waiting for driver location...</p>
+            </div>
+            {{/if}}
             
             {{#if trip.transporterId}}
             <div class="section">
@@ -379,6 +445,164 @@
             Powered by Porttivo • Trip Tracking System
         </div>
     </div>
+    {{/if}}
+
+    {{#if tracking}}
+    <script>
+      window.__PORTTIVO_TRACKING__ = {
+        shareToken: '{{tracking.shareToken}}',
+        googleMapsApiKey: '{{tracking.googleMapsApiKey}}',
+        pickup: { lat: {{tracking.pickup.lat}}, lng: {{tracking.pickup.lng}} },
+        drop: { lat: {{tracking.drop.lat}}, lng: {{tracking.drop.lng}} },
+        lastDriverLocation: {{#if tracking.lastDriverLocation}}{ latitude: {{tracking.lastDriverLocation.latitude}}, longitude: {{tracking.lastDriverLocation.longitude}} }{{else}}null{{/if}}
+      };
+    </script>
+    <script src="https://maps.googleapis.com/maps/api/js?key={{tracking.googleMapsApiKey}}&libraries=geometry"></script>
+    <script>
+      (function () {
+        const cfg = window.__PORTTIVO_TRACKING__;
+        if (!cfg || !window.google || !google.maps) return;
+
+        const mapEl = document.getElementById('tracking-map');
+        const waitingEl = document.getElementById('waiting-location');
+        if (!mapEl) return;
+
+        const map = new google.maps.Map(mapEl, {
+          center: cfg.pickup,
+          zoom: 12,
+          mapTypeId: google.maps.MapTypeId.ROADMAP,
+        });
+
+        new google.maps.Marker({ map, position: cfg.pickup, title: 'Pickup' });
+        new google.maps.Marker({ map, position: cfg.drop, title: 'Drop' });
+
+        let driverMarker = null;
+        let routePolyline = null;
+        let trailPolyline = null;
+        let driverTrail = [];
+
+        function fitAll() {
+          const bounds = new google.maps.LatLngBounds();
+          bounds.extend(cfg.pickup);
+          bounds.extend(cfg.drop);
+          driverTrail.forEach(p => bounds.extend(p));
+          if (driverMarker) bounds.extend(driverMarker.getPosition());
+          map.fitBounds(bounds);
+        }
+
+        function drawRoute(points) {
+          if (routePolyline) routePolyline.setMap(null);
+          if (!points || points.length < 2) return;
+          const isFallback = points.length === 2;
+          routePolyline = new google.maps.Polyline({
+            map,
+            path: points,
+            strokeColor: '#000000',
+            strokeOpacity: 1,
+            strokeWeight: isFallback ? 5 : 4,
+            geodesic: true,
+            icons: isFallback ? undefined : [{
+              icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 },
+              offset: '0',
+              repeat: '16px',
+            }],
+          });
+        }
+
+        function drawTrail() {
+          if (trailPolyline) trailPolyline.setMap(null);
+          if (driverTrail.length < 2) return;
+          trailPolyline = new google.maps.Polyline({
+            map,
+            path: driverTrail,
+            strokeColor: '#6B6B6B',
+            strokeOpacity: 1,
+            strokeWeight: 5,
+            geodesic: true,
+          });
+        }
+
+        function setDriver(lat, lng) {
+          if (typeof lat !== 'number' || typeof lng !== 'number') return;
+          const pos = { lat, lng };
+          if (!driverMarker) {
+            driverMarker = new google.maps.Marker({ map, position: pos, title: 'Driver' });
+            if (waitingEl) waitingEl.style.display = 'none';
+          } else {
+            driverMarker.setPosition(pos);
+          }
+          const last = driverTrail[driverTrail.length - 1];
+          if (!last || last.lat !== lat || last.lng !== lng) {
+            driverTrail.push(pos);
+            if (driverTrail.length > 500) driverTrail.shift();
+            drawTrail();
+          }
+          fitAll();
+        }
+
+        async function loadRoute() {
+          const service = new google.maps.DirectionsService();
+          service.route(
+            {
+              origin: cfg.pickup,
+              destination: cfg.drop,
+              travelMode: google.maps.TravelMode.DRIVING,
+            },
+            function (result, status) {
+              if (status === 'OK' && result && result.routes && result.routes[0]) {
+                const path = result.routes[0].overview_path.map(function (p) {
+                  return { lat: p.lat(), lng: p.lng() };
+                });
+                drawRoute(path);
+              } else {
+                drawRoute([cfg.pickup, cfg.drop]);
+              }
+              fitAll();
+            }
+          );
+        }
+
+        async function loadTrail() {
+          try {
+            const res = await fetch('/api/trips/shared/' + encodeURIComponent(cfg.shareToken) + '/location-trail');
+            const data = await res.json();
+            if (data.success && Array.isArray(data.data?.points)) {
+              driverTrail = data.data.points
+                .filter(p => p && typeof p.latitude === 'number' && typeof p.longitude === 'number')
+                .map(p => ({ lat: p.latitude, lng: p.longitude }));
+              if (driverTrail.length > 0) {
+                const last = driverTrail[driverTrail.length - 1];
+                setDriver(last.lat, last.lng);
+              }
+              drawTrail();
+            }
+          } catch (_) { /* ignore */ }
+        }
+
+        async function pollTrip() {
+          try {
+            const res = await fetch('/api/trips/shared/' + encodeURIComponent(cfg.shareToken));
+            const data = await res.json();
+            const loc = data?.data?.lastDriverLocation;
+            if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
+              setDriver(loc.latitude, loc.longitude);
+            }
+          } catch (_) { /* ignore */ }
+        }
+
+        if (cfg.lastDriverLocation) {
+          setDriver(cfg.lastDriverLocation.latitude, cfg.lastDriverLocation.longitude);
+        } else if (waitingEl) {
+          waitingEl.style.display = 'block';
+        }
+
+        loadRoute();
+        loadTrail();
+        pollTrip();
+        setInterval(loadTrail, 20000);
+        setInterval(pollTrip, 8000);
+      })();
+    </script>
     {{/if}}
 </body>
 </html>

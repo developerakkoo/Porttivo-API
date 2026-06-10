@@ -578,9 +578,61 @@ const getTripLocationTrail = async (req, res, next) => {
   }
 }
 
+/**
+ * GET /api/trips/shared/:token/location-trail
+ * Public GPS trail for shared tracking links (valid share token required).
+ */
+const getSharedTripLocationTrail = async (req, res, next) => {
+  try {
+    const { token } = req.params
+
+    const trip = await Trip.findOne({
+      shareToken: token,
+      shareTokenExpiry: { $gt: new Date() },
+    }).select('_id status')
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Shared trip not found or link has expired',
+      })
+    }
+
+    if (!TRACKABLE_STATUSES.includes(trip.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Location trail is only available for active trips',
+      })
+    }
+
+    const { points, total, returned } = await getLocationTrailForTrip(trip._id.toString(), {
+      since: req.query.since,
+      limit: req.query.limit,
+    })
+
+    return res.json({
+      success: true,
+      data: {
+        points,
+        total,
+        returned,
+      },
+    })
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({
+        success: false,
+        message: error.message,
+      })
+    }
+    next(error)
+  }
+}
+
 module.exports = {
   updateMilestone,
   getCurrentMilestone,
   getTripTimeline,
-  getTripLocationTrail
+  getTripLocationTrail,
+  getSharedTripLocationTrail,
 }

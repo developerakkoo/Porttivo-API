@@ -29,6 +29,7 @@ const {
   getCurrentMilestone,
   getTripTimeline,
   getTripLocationTrail,
+  getSharedTripLocationTrail,
 } = require('../controllers/tripMilestone.controller');
 const { uploadPOD, approvePOD } = require('../controllers/tripPOD.controller');
 const { uploadPOD: uploadPODMiddleware, uploadMilestonePhotos, handleMulterError } = require('../middleware/upload.middleware');
@@ -38,6 +39,7 @@ const { optionalAuth } = require('../middleware/auth.middleware');
 // These must be defined BEFORE the authenticate middleware
 router.get('/shared/:token/view', renderSharedTrip); // HTML view route
 router.get('/shared/:token', optionalAuth, getSharedTrip); // JSON API route
+router.get('/shared/:token/location-trail', getSharedTripLocationTrail);
 
 // All other trip routes require authentication
 router.use(authenticate);

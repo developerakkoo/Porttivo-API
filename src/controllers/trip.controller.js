@@ -1997,7 +1997,12 @@ const getSharedTrip = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: getTripVisibilityResponse(trip, { accessType: 'shared' }),
+      data: {
+        ...getTripVisibilityResponse(trip, { accessType: 'shared' }),
+        ...(trip.status === TRIP_STATUS.ACTIVE && trip.lastDriverLocation
+          ? { lastDriverLocation: trip.lastDriverLocation }
+          : {}),
+      },
     });
   } catch (error) {
     next(error);
@@ -2057,6 +2062,18 @@ const renderSharedTrip = async (req, res, next) => {
     };
 
     const visibleTrip = getTripVisibilityResponse(trip, { accessType: 'shared' });
+    const pickCoords = trip.pickupLocation?.coordinates;
+    const dropCoords = trip.dropLocation?.coordinates;
+    const isActive = trip.status === TRIP_STATUS.ACTIVE;
+    const trackingEnabled =
+      isActive &&
+      pickCoords &&
+      dropCoords &&
+      typeof pickCoords.latitude === 'number' &&
+      typeof pickCoords.longitude === 'number' &&
+      typeof dropCoords.latitude === 'number' &&
+      typeof dropCoords.longitude === 'number';
+
     const tripData = {
       ...visibleTrip,
       status: visibleTrip.status.toLowerCase(),
@@ -2071,8 +2088,22 @@ const renderSharedTrip = async (req, res, next) => {
       transporterId: visibleTrip.transporterId || null,
     };
 
+    const googleMapsApiKey =
+      process.env.GOOGLE_MAPS_API_KEY ||
+      process.env.GOOGLE_MAPS_DIRECTIONS_KEY ||
+      'AIzaSyA6EcL6hrD0iQpwk6ETUQNSieeEBYUR1_U';
+
     res.render('shared-trip', {
       trip: tripData,
+      tracking: trackingEnabled
+        ? {
+            shareToken: token,
+            pickup: { lat: pickCoords.latitude, lng: pickCoords.longitude },
+            drop: { lat: dropCoords.latitude, lng: dropCoords.longitude },
+            lastDriverLocation: trip.lastDriverLocation || null,
+            googleMapsApiKey,
+          }
+        : null,
     });
   } catch (error) {
     console.error('Error rendering shared trip:', error);
