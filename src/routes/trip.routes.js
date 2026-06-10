@@ -28,6 +28,7 @@ const {
   updateMilestone,
   getCurrentMilestone,
   getTripTimeline,
+  getTripLocationTrail,
 } = require('../controllers/tripMilestone.controller');
 const { uploadPOD, approvePOD } = require('../controllers/tripPOD.controller');
 const { uploadPOD: uploadPODMiddleware, uploadMilestonePhotos, handleMulterError } = require('../middleware/upload.middleware');
@@ -72,6 +73,7 @@ router.put('/:id/close-without-pod', closeTripWithoutPOD);
 router.post('/:id/milestones/:milestoneNumber', uploadMilestonePhotos, handleMulterError, updateMilestone);
 router.get('/:id/current-milestone', getCurrentMilestone);
 router.get('/:id/timeline', getTripTimeline);
+router.get('/:id/location-trail', getTripLocationTrail);
 
 // POD routes
 router.post('/:id/pod', uploadPODMiddleware, handleMulterError, uploadPOD);

@@ -13,6 +13,10 @@ const {
 const path = require('path')
 const { TRIP_STATUS } = require('../utils/tripState')
 const { ensureMilestonePhoto, toAuditUserType } = require('../services/tripLifecycle.service')
+const {
+  TRACKABLE_STATUSES,
+  getLocationTrailForTrip
+} = require('../services/tripLocationTrail.service')
 
 const getVehicleRoom = trip => {
   if (trip.vehicleId) {
@@ -492,8 +496,91 @@ const getTripTimeline = async (req, res, next) => {
   }
 }
 
+/**
+ * GET /api/trips/:id/location-trail
+ * GPS breadcrumb trail for live tracking maps.
+ */
+const getTripLocationTrail = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const userId = req.user.id
+    const userType = req.user.userType
+
+    const trip = await Trip.findById(id).select(
+      'status transporterId customerId driverId isFromBooking bookingId'
+    )
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found'
+      })
+    }
+
+    if (userType === 'admin') {
+      // allowed
+    } else if (userType === 'driver') {
+      if (!trip.driverId || trip.driverId.toString() !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. This trip is not assigned to you.'
+        })
+      }
+    } else if (userType === 'customer') {
+      if (!trip.customerId || trip.customerId.toString() !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this trip.'
+        })
+      }
+    } else if (userType === 'transporter' || userType === 'company-user') {
+      if (!(await canTransporterPartyViewTripExecution(req.user, trip))) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. You do not have permission to view this trip.'
+        })
+      }
+    } else {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied.'
+      })
+    }
+
+    if (!TRACKABLE_STATUSES.includes(trip.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Location trail is only available for active, paused, or POD pending trips'
+      })
+    }
+
+    const { points, total, returned } = await getLocationTrailForTrip(id, {
+      since: req.query.since,
+      limit: req.query.limit
+    })
+
+    return res.json({
+      success: true,
+      data: {
+        points,
+        total,
+        returned
+      }
+    })
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({
+        success: false,
+        message: error.message
+      })
+    }
+    next(error)
+  }
+}
+
 module.exports = {
   updateMilestone,
   getCurrentMilestone,
-  getTripTimeline
+  getTripTimeline,
+  getTripLocationTrail
 }
