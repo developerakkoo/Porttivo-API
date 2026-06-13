@@ -1,5 +1,9 @@
 const mongoose = require('mongoose');
 const { validateMobile, validateEmail } = require('../utils/validation');
+const {
+  OPERATING_COUNTRIES,
+  DEFAULT_OPERATING_COUNTRY,
+} = require('../constants/operatingCountries');
 const bcrypt = require('bcryptjs');
 
 const transporterSchema = new mongoose.Schema(
@@ -36,6 +40,16 @@ const transporterSchema = new mongoose.Schema(
     company: {
       type: String,
       trim: true,
+    },
+    operatingCountry: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: DEFAULT_OPERATING_COUNTRY,
+      enum: {
+        values: OPERATING_COUNTRIES,
+        message: 'Operating country must be a supported ISO country code',
+      },
     },
     pin: {
       type: String,

@@ -2,6 +2,7 @@ const Transporter = require('../models/Transporter');
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
 const Driver = require('../models/Driver');
+const { normalizeOperatingCountry } = require('../constants/operatingCountries');
 const { validateMobile, cleanMobile, validatePin, validateEmail, normalizeEmail } = require('../utils/validation');
 const { TRIP_STATUS } = require('../utils/tripState');
 
@@ -30,6 +31,7 @@ const getProfile = async (req, res, next) => {
           name: transporter.name,
           email: transporter.email,
           company: transporter.company,
+          operatingCountry: transporter.operatingCountry,
           status: transporter.status,
           hasAccess: transporter.hasAccess,
           hasPinSet: transporter.hasPinSet(),
@@ -50,7 +52,7 @@ const getProfile = async (req, res, next) => {
  */
 const updateProfile = async (req, res, next) => {
   try {
-    const { name, email, company } = req.body;
+    const { name, email, company, operatingCountry } = req.body;
 
     // Build update object
     const updateData = {};
@@ -66,6 +68,16 @@ const updateProfile = async (req, res, next) => {
       updateData.email = normalizedEmail || null;
     }
     if (company !== undefined) updateData.company = company?.trim();
+    if (operatingCountry !== undefined) {
+      const normalizedOperatingCountry = normalizeOperatingCountry(operatingCountry);
+      if (!normalizedOperatingCountry) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid operating country',
+        });
+      }
+      updateData.operatingCountry = normalizedOperatingCountry;
+    }
 
     // Update transporter
     const transporter = await Transporter.findByIdAndUpdate(
@@ -94,6 +106,7 @@ const updateProfile = async (req, res, next) => {
           name: transporter.name,
           email: transporter.email,
           company: transporter.company,
+          operatingCountry: transporter.operatingCountry,
           status: transporter.status,
           hasAccess: transporter.hasAccess,
           hasPinSet: transporter.hasPinSet(),

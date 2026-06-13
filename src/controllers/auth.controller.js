@@ -21,6 +21,7 @@ const {
   validateUserType,
   validatePin,
 } = require('../utils/validation');
+const { normalizeOperatingCountry } = require('../constants/operatingCountries');
 
 /**
  * Send OTP endpoint (simplified - returns tokens directly)
@@ -102,6 +103,7 @@ const sendOTP = async (req, res, next) => {
               name: transporter.name,
               email: transporter.email,
               company: transporter.company,
+              operatingCountry: transporter.operatingCountry,
               userType: 'transporter',
               status: transporter.status,
               hasAccess: transporter.hasAccess,
@@ -437,7 +439,7 @@ const customerMobileAuth = async (req, res, next) => {
  */
 const register = async (req, res, next) => {
   try {
-    const { mobile, name, email, company } = req.body;
+    const { mobile, name, email, company, operatingCountry } = req.body;
 
     // Validation
     if (!mobile) {
@@ -458,6 +460,14 @@ const register = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: 'Company name is required',
+      });
+    }
+
+    const normalizedOperatingCountry = normalizeOperatingCountry(operatingCountry);
+    if (!normalizedOperatingCountry) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid operating country is required',
       });
     }
 
@@ -493,6 +503,7 @@ const register = async (req, res, next) => {
       name: name.trim(),
       email: normalizedEmail || undefined,
       company: company.trim(),
+      operatingCountry: normalizedOperatingCountry,
       status: 'pending',
       hasAccess: false,
       walletBalance: 0,
@@ -518,6 +529,7 @@ const register = async (req, res, next) => {
           name: transporter.name,
           email: transporter.email,
           company: transporter.company,
+          operatingCountry: transporter.operatingCountry,
           userType: 'transporter',
           status: transporter.status,
           hasAccess: transporter.hasAccess,
@@ -630,6 +642,7 @@ const pinLogin = async (req, res, next) => {
           name: transporter.name,
           email: transporter.email,
           company: transporter.company,
+          operatingCountry: transporter.operatingCountry,
           userType: 'transporter',
           status: transporter.status,
           hasAccess: transporter.hasAccess,

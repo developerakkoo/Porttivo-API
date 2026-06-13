@@ -1,4 +1,5 @@
 const Vehicle = require('../models/Vehicle');
+const Driver = require('../models/Driver');
 const Trip = require('../models/Trip');
 const { TRIP_STATUS } = require('./tripState');
 
@@ -8,6 +9,21 @@ const BUSY_TRIP_STATUSES = [
   TRIP_STATUS.ACTIVE,
   TRIP_STATUS.PAUSED,
 ];
+
+const ACTIVE_TRIP_STATUSES = [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED];
+
+const buildResourceTripQuery = (resourceField, resourceId, statuses, excludeTripId = null) => {
+  const assignmentField =
+    resourceField === 'vehicleId' ? 'assignments.vehicleId' : 'assignments.driverId';
+  const query = {
+    status: { $in: statuses },
+    $or: [{ [resourceField]: resourceId }, { [assignmentField]: resourceId }],
+  };
+  if (excludeTripId) {
+    query._id = { $ne: excludeTripId };
+  }
+  return query;
+};
 
 /** Indian vehicle registration (standard): 2 letters + 2 digits + 2 letters + 4 digits (10 chars), e.g. MH12AB3434 */
 const INDIAN_VEHICLE_REGISTRATION_RE = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
@@ -57,13 +73,23 @@ const validateIndianVehicleRegistrationFormat = (raw) => {
  */
 const checkVehicleHasActiveTrip = async (vehicleSelector, excludeTripId = null) => {
   try {
-    const query =
-      vehicleSelector && typeof vehicleSelector === 'object' && !Array.isArray(vehicleSelector)
-        ? { ...vehicleSelector, status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } }
-        : { vehicleId: vehicleSelector, status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } };
-
-    if (excludeTripId) {
-      query._id = { $ne: excludeTripId };
+    let query;
+    if (
+      vehicleSelector &&
+      typeof vehicleSelector === 'object' &&
+      !Array.isArray(vehicleSelector)
+    ) {
+      query = { ...vehicleSelector, status: { $in: ACTIVE_TRIP_STATUSES } };
+      if (excludeTripId) {
+        query._id = { $ne: excludeTripId };
+      }
+    } else {
+      query = buildResourceTripQuery(
+        'vehicleId',
+        vehicleSelector,
+        ACTIVE_TRIP_STATUSES,
+        excludeTripId
+      );
     }
 
     const activeTrip = await Trip.findOne(query);
@@ -96,10 +122,16 @@ const checkVehicleHasTripHistory = async (vehicleId) => {
  */
 const getQueuedTripsCount = async (vehicleSelector) => {
   try {
-    const query =
-      vehicleSelector && typeof vehicleSelector === 'object' && !Array.isArray(vehicleSelector)
-        ? { ...vehicleSelector, status: TRIP_STATUS.PLANNED }
-        : { vehicleId: vehicleSelector, status: TRIP_STATUS.PLANNED };
+    let query;
+    if (
+      vehicleSelector &&
+      typeof vehicleSelector === 'object' &&
+      !Array.isArray(vehicleSelector)
+    ) {
+      query = { ...vehicleSelector, status: TRIP_STATUS.PLANNED };
+    } else {
+      query = buildResourceTripQuery('vehicleId', vehicleSelector, [TRIP_STATUS.PLANNED]);
+    }
 
     const queuedTripsCount = await Trip.countDocuments(query);
     return queuedTripsCount;
@@ -173,13 +205,23 @@ const getVehicleAvailabilityState = async (vehicleId) => {
  */
 const checkVehicleHasAssignedTrip = async (vehicleSelector, excludeTripId = null) => {
   try {
-    const query =
-      vehicleSelector && typeof vehicleSelector === 'object' && !Array.isArray(vehicleSelector)
-        ? { ...vehicleSelector, status: { $in: BUSY_TRIP_STATUSES } }
-        : { vehicleId: vehicleSelector, status: { $in: BUSY_TRIP_STATUSES } };
-
-    if (excludeTripId) {
-      query._id = { $ne: excludeTripId };
+    let query;
+    if (
+      vehicleSelector &&
+      typeof vehicleSelector === 'object' &&
+      !Array.isArray(vehicleSelector)
+    ) {
+      query = { ...vehicleSelector, status: { $in: BUSY_TRIP_STATUSES } };
+      if (excludeTripId) {
+        query._id = { $ne: excludeTripId };
+      }
+    } else {
+      query = buildResourceTripQuery(
+        'vehicleId',
+        vehicleSelector,
+        BUSY_TRIP_STATUSES,
+        excludeTripId
+      );
     }
 
     const assignedTrip = await Trip.findOne(query);
@@ -187,6 +229,55 @@ const checkVehicleHasAssignedTrip = async (vehicleSelector, excludeTripId = null
   } catch (error) {
     console.error('Error checking assigned trip:', error);
     return false;
+  }
+};
+
+const checkDriverHasAssignedTrip = async (driverId, excludeTripId = null) => {
+  try {
+    const query = buildResourceTripQuery(
+      'driverId',
+      driverId,
+      BUSY_TRIP_STATUSES,
+      excludeTripId
+    );
+    const assignedTrip = await Trip.findOne(query);
+    return !!assignedTrip;
+  } catch (error) {
+    console.error('Error checking driver assigned trip:', error);
+    return false;
+  }
+};
+
+const getDriverAvailabilityState = async (driverId, excludeTripId = null) => {
+  try {
+    const driver = await Driver.findById(driverId).select('isBusy status');
+    if (!driver) {
+      return {
+        state: 'UNKNOWN',
+        hasOccupiedTrip: false,
+        isBusy: true,
+        isAvailable: false,
+      };
+    }
+
+    const hasOccupiedTrip = await checkDriverHasAssignedTrip(driverId, excludeTripId);
+    const isBusy =
+      hasOccupiedTrip || (excludeTripId ? false : !!driver.isBusy) || driver.status !== 'active';
+
+    return {
+      state: isBusy ? 'BUSY' : 'AVAILABLE',
+      hasOccupiedTrip,
+      isBusy,
+      isAvailable: !isBusy && driver.status === 'active',
+    };
+  } catch (error) {
+    console.error('Error getting driver availability:', error);
+    return {
+      state: 'UNKNOWN',
+      hasOccupiedTrip: false,
+      isBusy: true,
+      isAvailable: false,
+    };
   }
 };
 
@@ -292,11 +383,15 @@ module.exports = {
   normalizeIndianVehicleRegistration,
   isValidIndianVehicleRegistration,
   validateIndianVehicleRegistrationFormat,
+  BUSY_TRIP_STATUSES,
+  buildResourceTripQuery,
   checkVehicleHasActiveTrip,
   checkVehicleHasAssignedTrip,
+  checkDriverHasAssignedTrip,
   checkVehicleHasTripHistory,
   getQueuedTripsCount,
   getVehicleAvailabilityState,
+  getDriverAvailabilityState,
   validateVehicleForTrip,
   canCreateAsOwn,
   canCreateAsHired,

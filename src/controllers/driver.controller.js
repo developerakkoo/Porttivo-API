@@ -3,6 +3,7 @@ const Transporter = require('../models/Transporter');
 const Trip = require('../models/Trip');
 const { TRIP_STATUS, DRIVER_HISTORY_STATUSES } = require('../utils/tripState');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
+const { getDriverAvailabilityState } = require('../utils/vehicleValidation');
 
 /**
  * Get driver profile
@@ -185,6 +186,7 @@ const getDriversByTransporter = async (req, res, next) => {
     }
 
     const { transporterId } = req.params;
+    const { availableForTrip } = req.query;
 
     // Verify the transporterId matches the authenticated transporter/company user's transporter
     if (transporterId !== userTransporterId) {
@@ -195,7 +197,19 @@ const getDriversByTransporter = async (req, res, next) => {
     }
 
     // Get all drivers for this transporter
-    const drivers = await Driver.find({ transporterId: transporterId }).select('-__v');
+    let drivers = await Driver.find({ transporterId: transporterId }).select('-__v');
+
+    if (availableForTrip === 'true') {
+      const availableDrivers = await Promise.all(
+        drivers.map(async (driver) => {
+          const availability = await getDriverAvailabilityState(driver._id.toString());
+          return { driver, availability };
+        })
+      );
+      drivers = availableDrivers
+        .filter(({ driver, availability }) => driver.status === 'active' && availability.isAvailable)
+        .map(({ driver }) => driver);
+    }
 
     return res.status(200).json({
       success: true,

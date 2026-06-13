@@ -48,6 +48,11 @@ const {
 } = require('../controllers/admin.controller');
 
 const { listVehicleTypes, createVehicleType, updateVehicleType, deleteVehicleType } = require('../controllers/vehicleType.controller');
+const {
+  listRequestsAdmin,
+  approveRequest,
+  rejectRequest,
+} = require('../controllers/vehicleTypeRequest.controller');
 const supportTicketCtrl = require('../controllers/supportTicket.controller');
 
 // All routes require authentication
@@ -114,6 +119,9 @@ router.get('/vehicle-types', listVehicleTypes);
 router.post('/vehicle-types', createVehicleType);
 router.put('/vehicle-types/:id', updateVehicleType);
 router.delete('/vehicle-types/:id', deleteVehicleType);
+router.get('/vehicle-type-requests', listRequestsAdmin);
+router.post('/vehicle-type-requests/:id/approve', approveRequest);
+router.post('/vehicle-type-requests/:id/reject', rejectRequest);
 router.get('/settings/milestone-rules', getMilestoneRules);
 router.put('/settings/milestone-rules', updateMilestoneRules);
 router.put('/wallets/:userType/:userId/withdrawal', setWithdrawalPause);

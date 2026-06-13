@@ -7,6 +7,7 @@ const {
   validateIndianVehicleRegistrationFormat,
 } = require('../utils/vehicleValidation');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
+const { assertVehicleTypeAllowed } = require('../services/vehicleTypeCatalog.service');
 
 const validateDriverVehicleLink = async ({ driverId, transporterId, excludeVehicleId = null }) => {
   const driver = await Driver.findOne({
@@ -245,17 +246,20 @@ const createVehicle = async (req, res, next) => {
       }
     }
 
-    // Validate vehicleType if provided
-    const allowedTypes = ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'];
+    // Validate vehicleType if provided (DB catalog)
     let finalVehicleType = null;
     if (vehicleType !== undefined && vehicleType !== null && vehicleType !== '') {
-      if (!allowedTypes.includes(vehicleType)) {
+      const typeCheck = await assertVehicleTypeAllowed(vehicleType, {
+        transporterId,
+        allowOwnPending: true,
+      });
+      if (!typeCheck.ok) {
         return res.status(400).json({
           success: false,
-          message: `Invalid vehicle type. Allowed: ${allowedTypes.join(', ')}`,
+          message: typeCheck.message,
         });
       }
-      finalVehicleType = vehicleType;
+      finalVehicleType = typeCheck.name;
     }
 
     // Create vehicle
@@ -463,17 +467,20 @@ const updateVehicle = async (req, res, next) => {
     }
 
     if (vehicleType !== undefined) {
-      const allowedTypes = ['20FT', '40FT', '40FT Open', 'Trailer', 'Closed Body', '22FT'];
       if (vehicleType === null || vehicleType === '') {
         updateData.vehicleType = null;
       } else {
-        if (!allowedTypes.includes(vehicleType)) {
+        const typeCheck = await assertVehicleTypeAllowed(vehicleType, {
+        transporterId,
+        allowOwnPending: true,
+      });
+        if (!typeCheck.ok) {
           return res.status(400).json({
             success: false,
-            message: `Invalid vehicle type. Allowed: ${allowedTypes.join(', ')}`,
+            message: typeCheck.message,
           });
         }
-        updateData.vehicleType = vehicleType;
+        updateData.vehicleType = typeCheck.name;
       }
     }
 

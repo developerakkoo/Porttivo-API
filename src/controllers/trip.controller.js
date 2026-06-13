@@ -7,6 +7,8 @@ const Notification = require('../models/Notification');
 const SystemConfig = require('../models/SystemConfig');
 const {
   checkVehicleHasAssignedTrip,
+  checkDriverHasAssignedTrip,
+  getDriverAvailabilityState,
   normalizeIndianVehicleRegistration,
   isValidIndianVehicleRegistration,
 } = require('../utils/vehicleValidation');
@@ -372,17 +374,9 @@ const validateDriverAccess = async (driverId, transporterId, excludeTripId = nul
     };
   }
 
-  const conflictQuery = {
-    driverId,
-    status: { $in: BUSY_TRIP_STATUSES },
-  };
-  if (excludeTripId) {
-    conflictQuery._id = { $ne: excludeTripId };
-  }
+  const hasConflict = await checkDriverHasAssignedTrip(driverId, excludeTripId);
 
-  const conflictingTrip = await Trip.findOne(conflictQuery);
-
-  if (conflictingTrip || (!excludeTripId && driver.isBusy)) {
+  if (hasConflict || (!excludeTripId && driver.isBusy)) {
     return {
       error: 'Driver is already assigned to another trip. Please complete or cancel the current trip first.',
       statusCode: 400,

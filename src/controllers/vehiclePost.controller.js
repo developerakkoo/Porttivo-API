@@ -10,6 +10,7 @@ const {
   validateLocationInput
 } = require('../utils/location')
 const { parseOptionalPricePerVehicle } = require('../utils/vehiclePostPrice.util')
+const { assertVehicleTypeAllowed } = require('../services/vehicleTypeCatalog.service')
 const {
   canonicalDestinationStopCount,
   getDestinationQuantitiesResolved,
@@ -227,17 +228,14 @@ const createAvailability = async (req, res, next) => {
     }
 
     // vehicleType is required and must exist in VehicleType collection
-    const VehicleType = require('../models/VehicleType')
-    if (!vehicleType || !vehicleType.toString().trim()) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'vehicleType is required' })
+    const typeCheck = await assertVehicleTypeAllowed(vehicleType, {
+      transporterId,
+      allowOwnPending: true,
+    })
+    if (!typeCheck.ok) {
+      return res.status(400).json({ success: false, message: typeCheck.message })
     }
-    const vtExists = await VehicleType.findOne({ name: vehicleType.trim() })
-    if (!vtExists)
-      return res
-        .status(400)
-        .json({ success: false, message: 'Invalid vehicleType' })
+    const validatedVehicleType = typeCheck.name
 
     // Parse dates
     if (!availableFrom) {
@@ -293,7 +291,7 @@ const createAvailability = async (req, res, next) => {
         })
       }
       // If vehicle has a vehicleType set, ensure it matches
-      if (vehicle.vehicleType && vehicle.vehicleType !== vehicleType) {
+      if (vehicle.vehicleType && vehicle.vehicleType !== validatedVehicleType) {
         return res.status(400).json({
           success: false,
           message: 'vehicleType does not match the selected vehicle'
@@ -322,7 +320,7 @@ const createAvailability = async (req, res, next) => {
     const post = await VehicleRouteAvailability.create({
       transporterId,
       vehicleId: vehicleId || null,
-      vehicleType,
+      vehicleType: validatedVehicleType,
       origin: normalizeLocationInput(origin),
       destination: destParsed.primary,
       destinations: destParsed.additional,
@@ -789,17 +787,14 @@ const updateAvailability = async (req, res, next) => {
 
     // Update fields if provided
     if (vehicleType !== undefined) {
-      const VehicleType = require('../models/VehicleType')
-      if (!vehicleType || !vehicleType.toString().trim())
-        return res
-          .status(400)
-          .json({ success: false, message: 'Invalid vehicleType' })
-      const vtExists = await VehicleType.findOne({ name: vehicleType.trim() })
-      if (!vtExists)
-        return res
-          .status(400)
-          .json({ success: false, message: 'Invalid vehicleType' })
-      post.vehicleType = vehicleType
+      const typeCheck = await assertVehicleTypeAllowed(vehicleType, {
+      transporterId,
+      allowOwnPending: true,
+    })
+      if (!typeCheck.ok) {
+        return res.status(400).json({ success: false, message: typeCheck.message })
+      }
+      post.vehicleType = typeCheck.name
     }
     if (vehicleId !== undefined) post.vehicleId = vehicleId || null
     if (origin !== undefined) {
