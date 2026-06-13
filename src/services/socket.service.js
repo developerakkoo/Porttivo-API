@@ -22,6 +22,7 @@ const {
   TRACKING_UPDATE_INTERVAL_SECONDS,
   logTripLocationUpdate
 } = require('./tripLocationLog.service')
+const { buildTrackingMetrics } = require('./tripEta.service')
 const {
   DRIVER_TRACKING_STATUS,
   DRIVER_TRACKING_STALE_SECONDS,
@@ -1259,6 +1260,13 @@ const initializeSocketIO = httpServer => {
           longitude: lng
         })
 
+        const trackingMetrics = buildTrackingMetrics(
+          trip,
+          lat,
+          lng,
+          speed !== null && speed !== undefined ? Number(speed) : null
+        )
+
         const payload = {
           tripId: trip._id.toString(),
           trip: trip.toObject(),
@@ -1267,6 +1275,10 @@ const initializeSocketIO = httpServer => {
           accuracy: accuracy !== null && accuracy !== undefined ? Number(accuracy) : null,
           speed: speed !== null && speed !== undefined ? Number(speed) : null,
           heading: heading !== null && heading !== undefined ? Number(heading) : null,
+          etaSeconds: trackingMetrics.etaSeconds,
+          distanceRemainingMeters: trackingMetrics.distanceRemainingMeters,
+          routeProgressPercent: trackingMetrics.routeProgressPercent,
+          movementStage: trackingMetrics.movementStage,
           timestamp: new Date().toISOString()
         }
 
@@ -1295,6 +1307,155 @@ const initializeSocketIO = httpServer => {
         }, 'error')
         socket.emit('error', {
           message: error.message || 'Failed to update location'
+        })
+      }
+    })
+
+    // Handle buffered location fixes replayed on reconnect (offline gap).
+    // Persists every point to the trail log (no gaps) and broadcasts them in
+    // order, then a final authoritative update with ETA/stage metrics.
+    socket.on('driver:location:batch', async data => {
+      try {
+        const tripId = data?.tripId
+        const rawFixes = Array.isArray(data?.fixes)
+          ? data.fixes
+          : Array.isArray(data?.locations)
+            ? data.locations
+            : Array.isArray(data)
+              ? data
+              : []
+
+        if (!tripId || rawFixes.length === 0) {
+          return socket.emit('error', {
+            message: 'Trip ID and at least one location fix are required'
+          })
+        }
+
+        if (socket.user.userType !== 'driver') {
+          return socket.emit('error', {
+            message: 'Only drivers can send location updates'
+          })
+        }
+
+        const trip = await Trip.findById(tripId)
+        if (!trip) {
+          return socket.emit('error', { message: 'Trip not found' })
+        }
+        if (!trip.driverId || trip.driverId.toString() !== socket.user.id) {
+          return socket.emit('error', {
+            message: 'Access denied. This trip is not assigned to you.'
+          })
+        }
+        if (trip.status !== TRIP_STATUS.ACTIVE) {
+          return socket.emit('error', {
+            message: `Location updates only allowed for ACTIVE trips. Current status: ${trip.status}`
+          })
+        }
+
+        // Cap to avoid abuse / flooding.
+        const fixes = rawFixes.slice(-500)
+        let lastValid = null
+
+        for (const fix of fixes) {
+          const lat = parseFloat(fix.latitude)
+          const lng = parseFloat(fix.longitude)
+          if (
+            isNaN(lat) ||
+            isNaN(lng) ||
+            lat < -90 ||
+            lat > 90 ||
+            lng < -180 ||
+            lng > 180
+          ) {
+            continue
+          }
+          const accuracy = fix.accuracy != null ? Number(fix.accuracy) : null
+          const speed = fix.speed != null ? Number(fix.speed) : null
+          const heading = fix.heading != null ? Number(fix.heading) : null
+
+          logTripLocationUpdate({
+            trip,
+            driverId: socket.user.id,
+            latitude: lat,
+            longitude: lng,
+            socket,
+            accuracy,
+            speed,
+            heading,
+            source: 'driver:location:batch',
+            payload: { tripId, timestamp: fix.timestamp || null }
+          })
+
+          // Replay to live viewers in order (lightweight: no full trip object).
+          emitToTripAudience('driver:location:updated', {
+            tripId: trip._id.toString(),
+            latitude: lat,
+            longitude: lng,
+            accuracy,
+            speed,
+            heading,
+            timestamp: fix.timestamp || new Date().toISOString(),
+            buffered: true
+          })
+
+          lastValid = { lat, lng, speed }
+        }
+
+        if (!lastValid) {
+          return socket.emit('error', { message: 'No valid coordinates in batch' })
+        }
+
+        const previousDriverTrackingStatus = trip.driverTracking?.status || null
+        trip.lastDriverLocation = {
+          latitude: lastValid.lat,
+          longitude: lastValid.lng,
+          updatedAt: new Date()
+        }
+        setTripDriverTrackingOnline(trip, 'driver.location.batch', {
+          reason: 'location_update',
+          lastHeartbeatAt: new Date(),
+          lastLocationAt: new Date(),
+          updatedAt: new Date()
+        })
+        await trip.save()
+
+        const trackingMetrics = buildTrackingMetrics(
+          trip,
+          lastValid.lat,
+          lastValid.lng,
+          lastValid.speed
+        )
+
+        if (previousDriverTrackingStatus !== DRIVER_TRACKING_STATUS.ONLINE) {
+          emitDriverTrackingChanged(trip, {
+            previousStatus: previousDriverTrackingStatus,
+            status: trip.driverTracking?.status || DRIVER_TRACKING_STATUS.ONLINE,
+            reason: trip.driverTracking?.reason || 'location_update',
+            source: 'driver.location.batch'
+          })
+        }
+
+        emitToTripAudience('driver:location:updated', {
+          tripId: trip._id.toString(),
+          trip: trip.toObject(),
+          latitude: lastValid.lat,
+          longitude: lastValid.lng,
+          etaSeconds: trackingMetrics.etaSeconds,
+          distanceRemainingMeters: trackingMetrics.distanceRemainingMeters,
+          routeProgressPercent: trackingMetrics.routeProgressPercent,
+          movementStage: trackingMetrics.movementStage,
+          timestamp: new Date().toISOString()
+        })
+
+        logSocketEvent('driver:location:batch', socket, {
+          tripId: trip._id.toString(),
+          result: 'success',
+          count: fixes.length
+        })
+      } catch (error) {
+        console.error('Error handling driver:location:batch:', error)
+        socket.emit('error', {
+          message: error.message || 'Failed to process location batch'
         })
       }
     })
