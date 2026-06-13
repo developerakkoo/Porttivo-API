@@ -151,9 +151,110 @@ const getVehicleQueueStatus = async (vehicleSelector) => {
   }
 };
 
+const buildVehicleSelectorFromTrip = (trip) => {
+  if (trip?.vehicleId) {
+    const vehicleId = trip.vehicleId._id || trip.vehicleId;
+    return { vehicleId };
+  }
+
+  if (trip?.hiredVehicle?.vehicleNumber) {
+    return { 'hiredVehicle.vehicleNumber': trip.hiredVehicle.vehicleNumber };
+  }
+
+  return null;
+};
+
+const getNextQueueSequence = async (vehicleSelector, excludeTripId = null) => {
+  const baseQuery = buildQueueQuery(vehicleSelector);
+  const query = {
+    ...baseQuery,
+    status: TRIP_STATUS.PLANNED,
+  };
+  if (excludeTripId) {
+    query._id = { $ne: excludeTripId };
+  }
+
+  const count = await Trip.countDocuments(query);
+  return count + 1;
+};
+
+const assignTripQueueMetadata = async (trip) => {
+  if (!trip || trip.status !== TRIP_STATUS.PLANNED) {
+    return trip;
+  }
+
+  const vehicleSelector = buildVehicleSelectorFromTrip(trip);
+  if (!vehicleSelector) {
+    return trip;
+  }
+
+  const queueSequence = await getNextQueueSequence(vehicleSelector, trip._id);
+  trip.queueSequence = queueSequence;
+  if (queueSequence > 1 || !trip.queuedAt) {
+    trip.queuedAt = trip.queuedAt || new Date();
+  }
+  await trip.save();
+  return trip;
+};
+
+const getTripQueueInfo = async (trip) => {
+  if (!trip || trip.status === TRIP_STATUS.DRAFT || trip.status !== TRIP_STATUS.PLANNED) {
+    return { queuePosition: null, isQueued: false, blockingTripId: null };
+  }
+
+  const vehicleSelector = buildVehicleSelectorFromTrip(trip);
+  if (!vehicleSelector) {
+    return { queuePosition: null, isQueued: false, blockingTripId: null };
+  }
+
+  const baseQuery = buildQueueQuery(vehicleSelector);
+  const [activeTrip, queuedTrips] = await Promise.all([
+    getActiveTrip(vehicleSelector),
+    Trip.find({ ...baseQuery, status: TRIP_STATUS.PLANNED })
+      .sort({ queueSequence: 1, createdAt: 1 })
+      .select('_id tripId queueSequence'),
+  ]);
+
+  const tripId = trip._id?.toString?.() || String(trip._id);
+  const index = queuedTrips.findIndex((queuedTrip) => queuedTrip._id.toString() === tripId);
+  const queuePosition = index >= 0 ? index + 1 : trip.queueSequence || null;
+  const blockingTrip = activeTrip || (queuePosition > 1 ? queuedTrips[0] : null);
+  const isQueued = !!activeTrip || queuePosition > 1;
+
+  return {
+    queuePosition,
+    isQueued,
+    blockingTripId: blockingTrip?._id?.toString?.() || blockingTrip?._id || null,
+  };
+};
+
+const assertTripCanStartFromQueue = async (trip) => {
+  const queueInfo = await getTripQueueInfo(trip);
+  if (queueInfo.isQueued && queueInfo.queuePosition !== 1) {
+    return 'This trip is queued. Complete the active trip first.';
+  }
+
+  const vehicleSelector = buildVehicleSelectorFromTrip(trip);
+  if (!vehicleSelector) {
+    return null;
+  }
+
+  const activeTrip = await getActiveTrip(vehicleSelector);
+  if (activeTrip && activeTrip._id.toString() !== trip._id.toString()) {
+    return 'Vehicle already has an active trip. Please complete or cancel the active trip first.';
+  }
+
+  return null;
+};
+
 module.exports = {
   activateNextTrip,
   getQueuedTrips,
   getActiveTrip,
   getVehicleQueueStatus,
+  buildVehicleSelectorFromTrip,
+  getNextQueueSequence,
+  assignTripQueueMetadata,
+  getTripQueueInfo,
+  assertTripCanStartFromQueue,
 };

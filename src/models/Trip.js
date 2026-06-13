@@ -229,14 +229,15 @@ const assignmentSchema = new mongoose.Schema(
   {
     containerNumber: {
       type: String,
-      required: true,
+      default: null,
       trim: true,
       uppercase: true,
       validate: {
         validator: function (v) {
+          if (v == null || v === '') return true;
           return validateContainerNumber(v);
         },
-        message: 'Container number must be 4 letters followed by 6 digits (e.g. ABCD123456)'
+        message: 'Container number must be 4 letters followed by 7 digits (e.g. ABCD1234567)'
       }
     },
     vehicleId: {
@@ -311,7 +312,7 @@ const tripSchema = new mongoose.Schema(
           if (v == null || v === '') return true
           return validateContainerNumber(v)
         },
-        message: 'Container number must be 4 letters followed by 6 digits (e.g. ABCD123456)'
+        message: 'Container number must be 4 letters followed by 7 digits (e.g. ABCD1234567)'
       }
     },
     bookingId: {

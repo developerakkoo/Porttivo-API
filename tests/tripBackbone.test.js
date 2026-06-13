@@ -1,11 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 
 const { loadWithMocks } = require('./helpers/loadWithMocks');
 const { createMockRes } = require('./helpers/http');
 
+const tripStatusControllerPath = path.resolve(__dirname, '..', 'src', 'controllers', 'tripStatus.controller.js');
+
 test('startTrip rejects planned trip without assigned driver', async () => {
-  const controller = loadWithMocks('../src/controllers/tripStatus.controller.js', {
+  const controller = loadWithMocks(tripStatusControllerPath, {
     '../models/Trip': {
       findById: () => ({
         populate: async () => ({
@@ -36,6 +39,13 @@ test('startTrip rejects planned trip without assigned driver', async () => {
     },
     '../services/tripQueue.service': {
       activateNextTrip: async () => null,
+      assertTripCanStartFromQueue: async () => null,
+    },
+    '../utils/tripResourceState': {
+      releaseTripResources: async () => {},
+    },
+    '../utils/marketplaceBookingComplete': {
+      completeMarketplaceBookingAfterTripClosed: async () => {},
     },
     '../services/wati.service': {
       sendTripCompletedTemplate: async () => {},
@@ -82,7 +92,7 @@ test('completeTrip moves active trip to POD_PENDING and auto-activates next trip
 
   const nextTrip = { _id: 'trip-3', driverId: 'driver-1', transporterId: 'transporter-1' };
 
-  const controller = loadWithMocks('../src/controllers/tripStatus.controller.js', {
+  const controller = loadWithMocks(tripStatusControllerPath, {
     '../models/Trip': {
       findById: async () => trip,
     },
@@ -134,4 +144,63 @@ test('completeTrip moves active trip to POD_PENDING and auto-activates next trip
   assert.equal(emits.podPending, 1);
   assert.equal(emits.completed, 1);
   assert.equal(emits.autoActivated, 1);
+});
+
+test('startTrip rejects queued trip that is not first in line', async () => {
+  const controller = loadWithMocks(tripStatusControllerPath, {
+    '../models/Trip': {
+      findById: () => ({
+        populate: async () => ({
+          _id: 'trip-queued',
+          tripId: 'TRIP-QUEUED',
+          transporterId: 'transporter-1',
+          vehicleId: { _id: 'vehicle-1', status: 'active' },
+          hiredVehicle: null,
+          driverId: 'driver-1',
+          driverAcceptedAt: new Date(),
+          status: 'PLANNED',
+          getCurrentMilestone: () => null,
+        }),
+      }),
+    },
+    '../models/Vehicle': {},
+    '../models/Driver': {},
+    '../utils/vehicleValidation': {
+      checkVehicleHasActiveTrip: async () => false,
+    },
+    '../utils/milestoneMapping': {
+      getMilestoneTypeByNumber: () => 'CONTAINER_PICKED',
+      getDriverLabel: () => 'Container Picked',
+    },
+    '../utils/tripResourceState': {
+      releaseTripResources: async () => {},
+    },
+    '../utils/marketplaceBookingComplete': {
+      completeMarketplaceBookingAfterTripClosed: async () => {},
+    },
+    '../services/socket.service': {
+      emitTripStarted: () => {},
+      emitTripUpdated: () => {},
+    },
+    '../services/tripQueue.service': {
+      activateNextTrip: async () => null,
+      assertTripCanStartFromQueue: async () => 'This trip is queued. Complete the active trip first.',
+    },
+    '../services/wati.service': {
+      sendTripCompletedTemplate: async () => {},
+    },
+  });
+
+  const req = {
+    params: { id: 'trip-queued' },
+    user: { id: 'driver-1', userType: 'driver' },
+  };
+  const res = createMockRes();
+
+  await controller.startTrip(req, res, (error) => {
+    throw error;
+  });
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /queued/i);
 });

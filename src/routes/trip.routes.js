@@ -22,6 +22,10 @@ const {
   assignTripVehicle,
   assignTripDriver,
   assignCustomerTrip,
+  saveTripDraft,
+  listTripDrafts,
+  getTripDraftById,
+  deleteTripDraft,
 } = require('../controllers/trip.controller');
 const { acceptTripByDriver, startTrip, pauseTrip, resumeTrip, completeTrip, closeTripWithoutPOD } = require('../controllers/tripStatus.controller');
 const {
@@ -53,6 +57,10 @@ router.put('/:id/reject', rejectCustomerTrip);
 router.put('/:id/assign-vehicle', assignTripVehicle);
 router.put('/:id/assign-driver', assignTripDriver);
 router.put('/:id/assign', assignCustomerTrip);
+router.post('/drafts', saveTripDraft);
+router.get('/drafts', listTripDrafts);
+router.get('/drafts/:id', getTripDraftById);
+router.delete('/drafts/:id', deleteTripDraft);
 router.post('/', createTrip);
 router.get('/', getTrips);
 router.get('/search', searchTrips);

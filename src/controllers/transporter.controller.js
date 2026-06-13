@@ -211,6 +211,7 @@ const getDashboard = async (req, res, next) => {
       }),
       Trip.countDocuments({
         transporterId,
+        status: { $ne: TRIP_STATUS.DRAFT },
         createdAt: {
           $gte: today,
           $lt: tomorrow,

@@ -1,6 +1,6 @@
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const STRONG_PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d\s]).{8,}$/;
-const CONTAINER_NUMBER_REGEX = /^[A-Z]{4}[0-9]{6}$/;
+const CONTAINER_NUMBER_REGEX = /^[A-Z]{4}[0-9]{7}$/;
 
 /**
  * Clean and format mobile number (remove spaces, special chars)
@@ -66,8 +66,8 @@ const normalizeContainerNumber = (containerNumber) => {
 
 /**
  * Validate container number format
- * Required format: first 4 alphabetic characters followed by 6 digits
- * Example: ABCD123456
+ * Required format: first 4 alphabetic characters followed by 7 digits
+ * Example: ABCD1234567
  * @param {String} containerNumber - Container number to validate
  * @returns {Boolean} True if valid
  */

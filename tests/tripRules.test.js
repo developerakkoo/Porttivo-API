@@ -32,6 +32,8 @@ class TripMock {
   }
 }
 
+TripMock.findOne = async () => null;
+
 const createTripController = (overrides = {}) =>
   loadWithMocks(path.resolve(__dirname, '..', 'src', 'controllers', 'trip.controller.js'), {
     '../models/Trip': TripMock,
@@ -41,10 +43,20 @@ const createTripController = (overrides = {}) =>
         transporterId: 'transporter-1',
         ownerType: 'OWN',
         status: 'active',
+        driverId: 'driver-1',
+      }),
+      find: () => ({
+        select: () => ({
+          limit: async () => [{ _id: 'vehicle-1', vehicleNumber: 'MH12AB3434' }],
+        }),
       }),
     },
     '../models/Driver': {
-      findById: async () => null,
+      findById: async (id) => ({
+        _id: id,
+        transporterId: 'transporter-1',
+        status: 'active',
+      }),
     },
     '../models/Customer': {},
     '../models/Transporter': {},
@@ -55,9 +67,16 @@ const createTripController = (overrides = {}) =>
       }),
     },
     '../utils/vehicleValidation': {
+      checkVehicleHasAssignedTrip: async () => false,
       checkVehicleHasActiveTrip: async () => false,
+      buildResourceTripQuery: () => ({}),
       normalizeIndianVehicleRegistration: (value) => value,
       isValidIndianVehicleRegistration: () => true,
+    },
+    '../utils/tripResourceState': {
+      markTripResourcesBusy: noop,
+      releaseTripResources: noop,
+      syncTripResourceBusyState: noop,
     },
     '../services/socket.service': {
       emitTripCreated: noopSync,
@@ -90,6 +109,16 @@ const createTripController = (overrides = {}) =>
     '../services/savedLocation.service': {
       syncTripLocationsToSavedCatalog: noop,
     },
+    '../services/transporterCustomer.service': {
+      upsertCustomerLastUsed: noop,
+    },
+    '../services/tripQueue.service': {
+      assignTripQueueMetadata: async (trip) => trip,
+      getTripQueueInfo: async () => ({ queuePosition: null, isQueued: false, blockingTripId: null }),
+    },
+    './tripStatus.controller': {
+      tryAutoStartTrip: async () => null,
+    },
     '../services/tripVisibility.service': {
       buildVisibleTrip: (trip) => trip,
     },
@@ -120,12 +149,40 @@ test('createTrip rejects missing customer name for transporter-created trips', a
   assert.match(res.body.message, /customer name is required/i);
 });
 
-test('createTrip accepts LOCAL trips and blocks vehicles with active trips', async () => {
+test('createTrip accepts LOCAL trips and queues vehicles with active trips', async () => {
+  const savedTrips = [];
+  class QueuedTripMock extends TripMock {
+    constructor(payload) {
+      super(payload);
+      savedTrips.push(this);
+    }
+  }
+
   const controller = createTripController({
+    '../models/Trip': QueuedTripMock,
     '../utils/vehicleValidation': {
+      checkVehicleHasAssignedTrip: async () => true,
       checkVehicleHasActiveTrip: async () => true,
+      buildResourceTripQuery: () => ({}),
       normalizeIndianVehicleRegistration: (value) => value,
       isValidIndianVehicleRegistration: () => true,
+    },
+    '../services/tripQueue.service': {
+      assignTripQueueMetadata: async (trip) => {
+        trip.queueSequence = 2;
+        return trip;
+      },
+      getTripQueueInfo: async () => ({
+        queuePosition: 2,
+        isQueued: true,
+        blockingTripId: 'blocking-trip-1',
+      }),
+    },
+    '../services/transporterCustomer.service': {
+      upsertCustomerLastUsed: async () => null,
+    },
+    './tripStatus.controller': {
+      tryAutoStartTrip: async () => null,
     },
   });
 
@@ -143,8 +200,54 @@ test('createTrip accepts LOCAL trips and blocks vehicles with active trips', asy
     throw error;
   });
 
-  assert.equal(res.statusCode, 400);
-  assert.match(res.body.message, /active trip/i);
+  assert.equal(res.statusCode, 201);
+  assert.equal(savedTrips[0].queueSequence, 2);
+  assert.equal(res.body.data.isQueued, true);
+});
+
+test('createTrip accepts optional container numbers in assignments', async () => {
+  const controller = createTripController({
+    '../models/Driver': {
+      findById: async (id) => ({
+        _id: id,
+        transporterId: 'transporter-1',
+        status: 'active',
+      }),
+    },
+    '../services/transporterCustomer.service': {
+      upsertCustomerLastUsed: async () => null,
+    },
+    '../services/tripQueue.service': {
+      assignTripQueueMetadata: async (trip) => trip,
+      getTripQueueInfo: async () => ({ queuePosition: 1, isQueued: false, blockingTripId: null }),
+    },
+    './tripStatus.controller': {
+      tryAutoStartTrip: async () => null,
+    },
+  });
+
+  const req = {
+    user: { id: 'user-1', userType: 'transporter' },
+    body: {
+      tripType: 'LOCAL',
+      customerName: 'Acme Logistics',
+      assignments: [{ vehicleId: 'vehicle-1', driverId: 'driver-1' }],
+    },
+  };
+  const res = createMockRes();
+
+  await controller.createTrip(req, res, (error) => {
+    throw error;
+  });
+
+  assert.equal(res.statusCode, 201);
+});
+
+test('validateContainerNumber requires 4 letters and 7 digits', () => {
+  const { validateContainerNumber, normalizeContainerNumber } = require('../src/utils/validation');
+
+  assert.equal(validateContainerNumber(normalizeContainerNumber('abcd1234567')), true);
+  assert.equal(validateContainerNumber(normalizeContainerNumber('abcd123456')), false);
 });
 
 test('createTrip rejects duplicate vehicles or drivers within the same trip', async () => {

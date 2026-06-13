@@ -23,9 +23,23 @@ const loadRequestService = (overrides = {}) =>
   loadWithMocks(requestServicePath, {
     '../models/VehicleType': overrides.VehicleType || {},
     '../models/VehicleTypeRequest': overrides.VehicleTypeRequest || {},
-    '../models/Transporter': overrides.Transporter || {},
+    '../models/Transporter': overrides.Transporter || {
+      findById: () => ({
+        select: () => ({
+          lean: async () => null,
+        }),
+      }),
+    },
+    '../models/Admin': overrides.Admin || {
+      find: () => ({
+        select: () => ({
+          lean: async () => [],
+        }),
+      }),
+    },
     '../models/Notification': overrides.Notification || {
       create: async (data) => data,
+      insertMany: async (docs) => docs,
     },
     '../services/vehicleTypeCatalog.service': overrides.catalog || {
       normalizeVehicleTypeName: (name) => name?.toString?.()?.trim?.()?.replace(/\s+/g, ' ') || '',
@@ -77,6 +91,7 @@ test('assertVehicleTypeAllowed rejects pending type for other transporter', asyn
 
 test('submitVehicleTypeRequest creates pending request', async () => {
   const created = [];
+  const notifications = [];
   const service = loadRequestService({
     VehicleType: {
       findOne: async () => null,
@@ -86,6 +101,30 @@ test('submitVehicleTypeRequest creates pending request', async () => {
       create: async (data) => {
         created.push(data);
         return { _id: 'req1', ...data, status: 'pending', createdAt: new Date() };
+      },
+    },
+    Transporter: {
+      findById: () => ({
+        select: () => ({
+          lean: async () => ({ _id: 't1', name: 'Transporter One', company: 'Port Co' }),
+        }),
+      }),
+    },
+    Admin: {
+      find: () => ({
+        select: () => ({
+          lean: async () => [{ _id: 'admin-1' }],
+        }),
+      }),
+    },
+    Notification: {
+      create: async (data) => {
+        notifications.push(data);
+        return data;
+      },
+      insertMany: async (docs) => {
+        notifications.push(...docs);
+        return docs;
       },
     },
   });
@@ -101,6 +140,9 @@ test('submitVehicleTypeRequest creates pending request', async () => {
   assert.equal(result.status, 201);
   assert.equal(created[0].requestedName, 'Custom Flatbed');
   assert.equal(created[0].normalizedName, 'CUSTOM FLATBED');
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, 'VEHICLE_TYPE_REQUEST_SUBMITTED');
+  assert.equal(notifications[0].userType, 'ADMIN');
 });
 
 test('submitVehicleTypeRequest rejects duplicate pending name globally', async () => {

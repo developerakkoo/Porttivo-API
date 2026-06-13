@@ -13,7 +13,7 @@ const {
   emitTripAutoActivated,
   emitTripUpdated,
 } = require('../services/socket.service');
-const { activateNextTrip } = require('../services/tripQueue.service');
+const { activateNextTrip, assertTripCanStartFromQueue } = require('../services/tripQueue.service');
 const {
   sendTripCompletedTemplate,
   sendTripClosedWithoutPODTemplate,
@@ -77,6 +77,93 @@ const triggerWatiTemplate = async (handler, contextLabel) => {
     await handler();
   } catch (error) {
     console.error(`WATI ${contextLabel} failed:`, error.message);
+  }
+};
+
+const activateTripRecord = async (trip, userId, userType) => {
+  trip.status = TRIP_STATUS.ACTIVE;
+  applyTrackingPatch(trip, {
+    status: DRIVER_TRACKING_STATUS.ONLINE,
+    reason: 'trip_started',
+    source: 'tripStatus.startTrip',
+    lastHeartbeatAt: new Date(),
+    updatedAt: new Date(),
+  });
+  trip.audit.updatedBy = {
+    userId,
+    userType: toAuditUserType(userType),
+  };
+  await trip.save();
+  await releaseTripResources(trip);
+  return trip;
+};
+
+const tryAutoStartTrip = async (trip, userId, userType) => {
+  try {
+    const tripId = trip?._id || trip;
+    const freshTrip = await Trip.findById(tripId).populate('vehicleId', 'vehicleNumber status ownerType');
+    if (!freshTrip) {
+      return null;
+    }
+
+    if (freshTrip.status !== TRIP_STATUS.PLANNED) {
+      return null;
+    }
+
+    const vehicleQuery = buildVehicleQuery(freshTrip);
+    if (!vehicleQuery || !freshTrip.driverId) {
+      return null;
+    }
+
+    const queueError = await assertTripCanStartFromQueue(freshTrip);
+    if (queueError) {
+      return null;
+    }
+
+    const hasActiveTrip = await checkVehicleHasActiveTrip(vehicleQuery, freshTrip._id.toString());
+    if (hasActiveTrip) {
+      return null;
+    }
+
+    if (freshTrip.vehicleId && freshTrip.vehicleId.status !== 'active') {
+      return null;
+    }
+
+    await activateTripRecord(freshTrip, userId, userType);
+
+    await freshTrip.populate('vehicleId', 'vehicleNumber trailerType');
+    await freshTrip.populate('driverId', 'name mobile');
+    await freshTrip.populate('transporterId', 'name company mobile');
+    await freshTrip.populate('customerId', 'name mobile');
+    if (freshTrip.assignments?.length) {
+      await freshTrip.populate('assignments.vehicleId', 'vehicleNumber trailerType');
+      await freshTrip.populate('assignments.driverId', 'name mobile');
+    }
+
+    const currentMilestone = freshTrip.getCurrentMilestone();
+    const milestoneLabel = currentMilestone ? getDriverLabel(currentMilestone.milestoneType) : null;
+
+    emitTripStarted(
+      freshTrip,
+      currentMilestone
+        ? {
+            milestoneNumber: currentMilestone.milestoneNumber,
+            milestoneType: currentMilestone.milestoneType,
+            label: milestoneLabel,
+          }
+        : null,
+      {
+        trackingConfig: {
+          updateIntervalSeconds: TRACKING_UPDATE_INTERVAL_SECONDS,
+        },
+      }
+    );
+    emitTripUpdated(freshTrip, { reason: 'trip_auto_started', changedFields: ['status'] });
+
+    return freshTrip;
+  } catch (error) {
+    console.error('Error auto-starting trip:', error.message);
+    return null;
   }
 };
 
@@ -243,12 +330,12 @@ const startTrip = async (req, res, next) => {
       });
     }
 
-    // Validate vehicle has no other active trip
-    const hasActiveTrip = await checkVehicleHasActiveTrip(vehicleQuery, trip._id.toString());
-    if (hasActiveTrip) {
+    // Validate vehicle queue position and active trip conflicts
+    const queueError = await assertTripCanStartFromQueue(trip);
+    if (queueError) {
       return res.status(400).json({
         success: false,
-        message: 'Vehicle already has an active trip. Please complete or cancel the active trip first.',
+        message: queueError,
       });
     }
 
@@ -261,20 +348,7 @@ const startTrip = async (req, res, next) => {
     }
 
     // Update trip status
-    trip.status = TRIP_STATUS.ACTIVE;
-    applyTrackingPatch(trip, {
-      status: DRIVER_TRACKING_STATUS.ONLINE,
-      reason: 'trip_started',
-      source: 'tripStatus.startTrip',
-      lastHeartbeatAt: new Date(),
-      updatedAt: new Date(),
-    });
-    trip.audit.updatedBy = {
-      userId,
-      userType: toAuditUserType(userType),
-    };
-    await trip.save();
-    await releaseTripResources(trip);
+    await activateTripRecord(trip, userId, userType);
 
     console.log(
       '[Trip/start]',
@@ -753,4 +827,5 @@ module.exports = {
   resumeTrip,
   completeTrip,
   closeTripWithoutPOD,
+  tryAutoStartTrip,
 };

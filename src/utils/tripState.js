@@ -1,4 +1,5 @@
 const TRIP_STATUS = Object.freeze({
+  DRAFT: 'DRAFT',
   BOOKED: 'BOOKED',
   ACCEPTED: 'ACCEPTED',
   PLANNED: 'PLANNED',

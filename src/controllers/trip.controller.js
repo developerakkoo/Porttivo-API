@@ -7,7 +7,9 @@ const Notification = require('../models/Notification');
 const SystemConfig = require('../models/SystemConfig');
 const {
   checkVehicleHasAssignedTrip,
+  checkVehicleHasActiveTrip,
   checkDriverHasAssignedTrip,
+  buildResourceTripQuery,
   getDriverAvailabilityState,
   normalizeIndianVehicleRegistration,
   isValidIndianVehicleRegistration,
@@ -51,6 +53,9 @@ const {
   sendBookingRequestReceivedTemplate,
 } = require('../services/wati.service');
 const { syncTripLocationsToSavedCatalog } = require('../services/savedLocation.service');
+const { upsertCustomerLastUsed } = require('../services/transporterCustomer.service');
+const { assignTripQueueMetadata, getTripQueueInfo } = require('../services/tripQueue.service');
+const { tryAutoStartTrip } = require('./tripStatus.controller');
 const { buildVisibleTrip } = require('../services/tripVisibility.service');
 const { validateContainerNumber, normalizeContainerNumber } = require('../utils/validation');
 
@@ -131,7 +136,7 @@ const normalizeAndValidateContainerNumber = (containerNumber) => {
   if (!validateContainerNumber(normalized)) {
     return {
       value: normalized,
-      error: 'Container number must be 4 letters followed by 6 digits (e.g. ABCD123456)',
+      error: 'Container number must be 4 letters followed by 7 digits (e.g. ABCD1234567)',
     };
   }
 
@@ -316,25 +321,7 @@ const validateUniqueAssignments = (assignmentsInput) => {
   return null;
 };
 
-const validateVehicleIsFreeForTrip = async (vehicleId, excludeTripId = null) => {
-  if (!vehicleId) {
-    return null;
-  }
-
-  const hasOccupiedTrip = await checkVehicleHasAssignedTrip(vehicleId, excludeTripId);
-  if (hasOccupiedTrip) {
-    return 'Vehicle is already assigned to another trip. Please complete or cancel the current trip first.';
-  }
-
-  if (!excludeTripId) {
-    const vehicle = await Vehicle.findById(vehicleId).select('isBusy');
-    if (vehicle?.isBusy) {
-      return 'Vehicle is already assigned to another trip. Please complete or cancel the current trip first.';
-    }
-  }
-
-  return null;
-};
+const validateVehicleIsFreeForTrip = async () => null;
 
 const validateOwnedVehicleAccess = async (vehicleId, transporterId) => {
   const vehicle = await Vehicle.findById(vehicleId);
@@ -374,11 +361,18 @@ const validateDriverAccess = async (driverId, transporterId, excludeTripId = nul
     };
   }
 
-  const hasConflict = await checkDriverHasAssignedTrip(driverId, excludeTripId);
+  const hasActiveConflict = await Trip.findOne(
+    buildResourceTripQuery(
+      'driverId',
+      driverId,
+      [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED],
+      excludeTripId
+    )
+  );
 
-  if (hasConflict || (!excludeTripId && driver.isBusy)) {
+  if (hasActiveConflict) {
     return {
-      error: 'Driver is already assigned to another trip. Please complete or cancel the current trip first.',
+      error: 'Driver is currently on an active trip. Please complete or cancel the active trip first.',
       statusCode: 400,
     };
   }
@@ -556,11 +550,43 @@ const serializeTrip = (trip, options = {}) => {
   if (options.viewerTransporterId) {
     const meta = getMarketplaceTripMetaForViewerId(trip, options.viewerTransporterId);
     if (meta) {
-      return { ...base, ...meta };
+      return appendQueueFields({ ...base, ...meta }, tripData, options.queueInfo);
     }
   }
 
-  return base;
+  return appendQueueFields(base, tripData, options.queueInfo);
+};
+
+const appendQueueFields = (base, tripData, queueInfo) => {
+  if (queueInfo) {
+    return {
+      ...base,
+      queuePosition: queueInfo.queuePosition,
+      isQueued: queueInfo.isQueued,
+      blockingTripId: queueInfo.blockingTripId,
+    };
+  }
+
+  if (tripData?.queueSequence != null) {
+    return {
+      ...base,
+      queuePosition: tripData.queueSequence,
+      isQueued: tripData.queueSequence > 1,
+      blockingTripId: null,
+    };
+  }
+
+  return {
+    ...base,
+    queuePosition: null,
+    isQueued: false,
+    blockingTripId: null,
+  };
+};
+
+const serializeTripWithQueue = async (trip, options = {}) => {
+  const queueInfo = options.includeQueueInfo === false ? null : await getTripQueueInfo(trip);
+  return serializeTrip(trip, { ...options, queueInfo });
 };
 
 const buildTripAdminDetail = (trip) => {
@@ -801,12 +827,6 @@ const createTrip = async (req, res, next) => {
         const { value: cn, error: containerError } = normalizeAndValidateContainerNumber(a?.containerNumber);
         const vid = a?.vehicleId;
         const did = a?.driverId;
-        if (!cn) {
-          return res.status(400).json({
-            success: false,
-            message: `Assignment ${i + 1}: containerNumber is required`,
-          });
-        }
         if (containerError) {
           return res.status(400).json({
             success: false,
@@ -841,7 +861,7 @@ const createTrip = async (req, res, next) => {
       }
       tripPayload.assignments = assignments;
       const first = assignments[0];
-      tripPayload.containerNumber = first.containerNumber;
+      tripPayload.containerNumber = first.containerNumber || null;
       tripPayload.vehicleId = first.vehicleId;
       tripPayload.driverId = first.driverId;
       tripPayload.assignedAt = new Date();
@@ -943,6 +963,10 @@ const createTrip = async (req, res, next) => {
     // Create trip
     const trip = new Trip(tripPayload);
     await trip.save();
+    if (trip.vehicleId || trip.hiredVehicle?.vehicleNumber) {
+      await assignTripQueueMetadata(trip);
+    }
+    await upsertCustomerLastUsed(transporterId, normalizedCustomerName);
     await markTripResourcesBusy(trip);
     await syncTripLocationsToSavedCatalog({
       trip,
@@ -967,7 +991,7 @@ const createTrip = async (req, res, next) => {
     res.status(201).json({
       success: true,
       message: 'Trip created successfully',
-      data: serializeTrip(trip, { includeCurrentMilestone: true }),
+      data: await serializeTripWithQueue(trip, { includeCurrentMilestone: true }),
     });
   } catch (error) {
     next(error);
@@ -1011,6 +1035,8 @@ const getTrips = async (req, res, next) => {
 
     if (status) {
       query.status = status;
+    } else {
+      query.status = { $ne: TRIP_STATUS.DRAFT };
     }
     if (vehicleId) {
       query.vehicleId = vehicleId;
@@ -2467,10 +2493,14 @@ const acceptCustomerTrip = async (req, res, next) => {
       'booking accepted template'
     );
 
+    const autoStartedTrip = await tryAutoStartTrip(trip, req.user.id, req.user.userType);
+
     return res.status(200).json({
       success: true,
-      message: 'Customer trip accepted successfully',
-      data: serializeTrip(trip),
+      message: autoStartedTrip
+        ? 'Customer trip accepted and started successfully'
+        : 'Customer trip accepted successfully',
+      data: await serializeTripWithQueue(autoStartedTrip || trip),
     });
   } catch (error) {
     next(error);
@@ -2708,6 +2738,9 @@ const assignTripDriver = async (req, res, next) => {
     finalizeAssignmentState(trip);
     setAuditActor(trip, req.user);
     await trip.save();
+    if (trip.vehicleId || trip.hiredVehicle?.vehicleNumber) {
+      await assignTripQueueMetadata(trip);
+    }
     await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
     await populateTripReferences(trip);
 
@@ -2717,10 +2750,15 @@ const assignTripDriver = async (req, res, next) => {
       `Driver has been assigned to your trip ${trip.tripId}.`
     );
 
+    const autoStartedTrip = await tryAutoStartTrip(trip, req.user.id, req.user.userType);
+    const responseTrip = autoStartedTrip || trip;
+
     return res.status(200).json({
       success: true,
-      message: 'Driver assigned successfully',
-      data: serializeTrip(trip, { includeCurrentMilestone: true }),
+      message: autoStartedTrip
+        ? 'Driver assigned and trip started successfully'
+        : 'Driver assigned successfully',
+      data: await serializeTripWithQueue(responseTrip, { includeCurrentMilestone: true }),
     });
   } catch (error) {
     next(error);
@@ -2873,6 +2911,169 @@ const assignCustomerTrip = async (req, res, next) => {
   }
 };
 
+const buildDraftPayload = (body, transporterId, user) => {
+  const normalizedTripType = body.tripType ? validateTripType(body.tripType) : null;
+  const normalizedCustomerName = body.customerName?.trim();
+
+  return {
+    transporterId,
+    containerNumber: (() => {
+      const { value, error } = normalizeAndValidateContainerNumber(body.containerNumber);
+      return error ? null : value;
+    })(),
+    vehicleId: body.vehicleId || null,
+    hiredVehicle: body.hiredVehicle ? normalizeHiredVehicle(body.hiredVehicle) : null,
+    driverId: body.driverId || null,
+    reference: body.reference?.trim()?.toUpperCase() || null,
+    customerName: normalizedCustomerName ? normalizedCustomerName.toUpperCase() : null,
+    pickupLocation: normalizeLocation(body.pickupLocation),
+    dropLocation: normalizeLocation(body.dropLocation),
+    tripType: normalizedTripType || TRIP_TYPE_VALUES[0],
+    assignments: Array.isArray(body.assignments) ? body.assignments : [],
+    status: TRIP_STATUS.DRAFT,
+    customerOwnership: { ownerType: 'TRANSPORTER_MANAGED', payerType: 'TRANSPORTER' },
+    visibilityMode: 'FULL_EXECUTION',
+    audit: {
+      createdBy: { userId: user.id, userType: toAuditUserType(user.userType) },
+      updatedBy: { userId: user.id, userType: toAuditUserType(user.userType) },
+    },
+  };
+};
+
+const saveTripDraft = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user);
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters and authorized company users can save drafts.',
+      });
+    }
+
+    if (req.user.userType === 'company-user' && !hasPermission(req.user, 'createTrips')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to save trip drafts.',
+      });
+    }
+
+    const { draftId } = req.body;
+    const payload = buildDraftPayload(req.body, transporterId, req.user);
+
+    let trip;
+    if (draftId) {
+      trip = await Trip.findOne({ _id: draftId, transporterId, status: TRIP_STATUS.DRAFT });
+      if (!trip) {
+        return res.status(404).json({
+          success: false,
+          message: 'Draft not found',
+        });
+      }
+      Object.assign(trip, payload);
+      setAuditActor(trip, req.user);
+    } else {
+      trip = new Trip(payload);
+    }
+
+    await trip.save();
+
+    return res.status(draftId ? 200 : 201).json({
+      success: true,
+      message: draftId ? 'Draft updated successfully' : 'Draft saved successfully',
+      data: serializeTrip(trip),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const listTripDrafts = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user);
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters and authorized company users can view drafts.',
+      });
+    }
+
+    const drafts = await Trip.find({ transporterId, status: TRIP_STATUS.DRAFT })
+      .sort({ updatedAt: -1 })
+      .limit(50);
+
+    return res.status(200).json({
+      success: true,
+      data: serializeTrips(drafts),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getTripDraftById = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user);
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters and authorized company users can view drafts.',
+      });
+    }
+
+    const trip = await Trip.findOne({
+      _id: req.params.id,
+      transporterId,
+      status: TRIP_STATUS.DRAFT,
+    });
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Draft not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: serializeTrip(trip),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const deleteTripDraft = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user);
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters and authorized company users can delete drafts.',
+      });
+    }
+
+    const trip = await Trip.findOneAndDelete({
+      _id: req.params.id,
+      transporterId,
+      status: TRIP_STATUS.DRAFT,
+    });
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Draft not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Draft deleted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   bookCustomerTrip,
   getCustomerTrips,
@@ -2882,6 +3083,10 @@ module.exports = {
   assignTripVehicle,
   assignTripDriver,
   assignCustomerTrip,
+  saveTripDraft,
+  listTripDrafts,
+  getTripDraftById,
+  deleteTripDraft,
   createTrip,
   getTrips,
   getTripById,

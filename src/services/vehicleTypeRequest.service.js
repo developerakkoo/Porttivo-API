@@ -1,6 +1,7 @@
 const VehicleType = require('../models/VehicleType');
 const VehicleTypeRequest = require('../models/VehicleTypeRequest');
 const Transporter = require('../models/Transporter');
+const Admin = require('../models/Admin');
 const Notification = require('../models/Notification');
 const {
   normalizeVehicleTypeName,
@@ -106,6 +107,9 @@ const submitVehicleTypeRequest = async ({ name, transporterId, userId, userType 
     submittedByUserType: userType,
   });
 
+  const submitter = await Transporter.findById(transporterId).select('name company mobile').lean();
+  await notifyAdminsOfVehicleTypeRequest(request, submitter);
+
   return { ok: true, status: 201, request, message: 'Vehicle type submitted for approval' };
 };
 
@@ -151,6 +155,34 @@ const buildVehicleTypeDecisionMessage = (request, status) => {
     return `"${name}" was rejected. Reason: ${reason}`;
   }
   return `"${name}" was rejected.`;
+};
+
+const notifyAdminsOfVehicleTypeRequest = async (request, submitter = null) => {
+  const admins = await Admin.find({ status: 'active' }).select('_id').lean();
+  if (!admins.length) {
+    return;
+  }
+
+  const submitterLabel = submitter?.company || submitter?.name || 'A transporter';
+  const message = `${submitterLabel} submitted "${request.requestedName}" for approval.`;
+
+  await Notification.insertMany(
+    admins.map((admin) => ({
+      userId: admin._id,
+      userType: 'ADMIN',
+      type: 'VEHICLE_TYPE_REQUEST_SUBMITTED',
+      title: 'New vehicle type request',
+      message,
+      data: {
+        requestId: request._id?.toString?.() || request.id,
+        requestedName: request.requestedName,
+        submittedByTransporterId: request.submittedByTransporterId?.toString?.() || request.submittedByTransporterId,
+        submitterName: submitter?.name || null,
+        submitterCompany: submitter?.company || null,
+      },
+      priority: 'high',
+    }))
+  );
 };
 
 const notifyTransporterVehicleTypeDecision = async (request, status, vehicleTypeId = null) => {
@@ -285,6 +317,7 @@ module.exports = {
   approveVehicleTypeRequest,
   rejectVehicleTypeRequest,
   countPendingRequests,
+  notifyAdminsOfVehicleTypeRequest,
   notifyTransporterVehicleTypeDecision,
   buildVehicleTypeDecisionMessage,
 };
