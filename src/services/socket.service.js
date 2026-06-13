@@ -2677,6 +2677,18 @@ const emitMessageRead = (senderId, messageId, readAt) => {
   }
 }
 
+const emitVehicleTypeRequestUpdated = (transporterId, requestPayload) => {
+  if (!io || !transporterId) return
+  io.to(`transporter:${transporterId}`).emit('vehicle-type:request:updated', {
+    request: requestPayload,
+  })
+  logger.info('broadcast vehicle-type:request:updated', {
+    recipient: `transporter:${transporterId}`,
+    requestId: requestPayload?.id,
+    status: requestPayload?.status,
+  })
+}
+
 module.exports = {
   initializeSocketIO,
   getIO,
@@ -2708,5 +2720,6 @@ module.exports = {
   // emitBookingRejected: emitBookingRejected,
   emitBookingCancelled,
   emitNewMessage,
-  emitMessageRead
+  emitMessageRead,
+  emitVehicleTypeRequestUpdated,
 }

@@ -1,4 +1,5 @@
 const { getTransporterId } = require('../middleware/permission.middleware');
+const { emitVehicleTypeRequestUpdated } = require('../services/socket.service');
 const {
   serializeRequest,
   submitVehicleTypeRequest,
@@ -103,6 +104,14 @@ const approveRequest = async (req, res, next) => {
       return res.status(result.status).json({ success: false, message: result.message });
     }
 
+    if (result.didTransition) {
+      const serialized = serializeRequest(result.request);
+      emitVehicleTypeRequestUpdated(
+        result.request.submittedByTransporterId?.toString?.(),
+        serialized
+      );
+    }
+
     return res.status(result.status).json({
       success: true,
       message: result.message,
@@ -124,6 +133,14 @@ const rejectRequest = async (req, res, next) => {
 
     if (!result.ok) {
       return res.status(result.status).json({ success: false, message: result.message });
+    }
+
+    if (result.didTransition) {
+      const serialized = serializeRequest(result.request);
+      emitVehicleTypeRequestUpdated(
+        result.request.submittedByTransporterId?.toString?.(),
+        serialized
+      );
     }
 
     return res.status(result.status).json({

@@ -1,6 +1,7 @@
 const VehicleType = require('../models/VehicleType');
 const VehicleTypeRequest = require('../models/VehicleTypeRequest');
 const Transporter = require('../models/Transporter');
+const Notification = require('../models/Notification');
 const {
   normalizeVehicleTypeName,
   normalizedNameKey,
@@ -140,6 +141,43 @@ const listAdminRequests = async (status = 'pending') => {
   );
 };
 
+const buildVehicleTypeDecisionMessage = (request, status) => {
+  const name = request.requestedName;
+  if (status === 'approved') {
+    return `"${name}" is now available in the vehicle type list.`;
+  }
+  const reason = request.rejectionReason?.trim();
+  if (reason) {
+    return `"${name}" was rejected. Reason: ${reason}`;
+  }
+  return `"${name}" was rejected.`;
+};
+
+const notifyTransporterVehicleTypeDecision = async (request, status, vehicleTypeId = null) => {
+  const transporterId = request.submittedByTransporterId;
+  if (!transporterId) return;
+
+  const type = status === 'approved' ? 'VEHICLE_TYPE_APPROVED' : 'VEHICLE_TYPE_REJECTED';
+  const title = status === 'approved' ? 'Vehicle type approved' : 'Vehicle type not approved';
+
+  await Notification.create({
+    userId: transporterId,
+    userType: 'TRANSPORTER',
+    type,
+    title,
+    message: buildVehicleTypeDecisionMessage(request, status),
+    data: {
+      requestId: request._id?.toString?.() || request.id,
+      requestedName: request.requestedName,
+      status,
+      vehicleTypeId: vehicleTypeId?.toString?.() || null,
+      rejectionReason: request.rejectionReason || null,
+      reviewedAt: request.reviewedAt || new Date(),
+    },
+    priority: 'medium',
+  });
+};
+
 const approveVehicleTypeRequest = async (requestId, adminId) => {
   const request = await VehicleTypeRequest.findById(requestId);
   if (!request) {
@@ -156,6 +194,7 @@ const approveVehicleTypeRequest = async (requestId, adminId) => {
       request,
       vehicleType: existingType ? serializeType(existingType) : null,
       message: 'Request already approved',
+      didTransition: false,
     };
   }
 
@@ -186,12 +225,15 @@ const approveVehicleTypeRequest = async (requestId, adminId) => {
   request.rejectionReason = null;
   await request.save();
 
+  await notifyTransporterVehicleTypeDecision(request, 'approved', vehicleType._id);
+
   return {
     ok: true,
     status: 200,
     request,
     vehicleType: serializeType(vehicleType),
     message: 'Vehicle type approved',
+    didTransition: true,
   };
 };
 
@@ -211,6 +253,7 @@ const rejectVehicleTypeRequest = async (requestId, adminId, reason) => {
       status: 200,
       request,
       message: 'Request already rejected',
+      didTransition: false,
     };
   }
 
@@ -220,11 +263,14 @@ const rejectVehicleTypeRequest = async (requestId, adminId, reason) => {
   request.rejectionReason = reason?.toString?.()?.trim?.() || null;
   await request.save();
 
+  await notifyTransporterVehicleTypeDecision(request, 'rejected');
+
   return {
     ok: true,
     status: 200,
     request,
     message: 'Vehicle type request rejected',
+    didTransition: true,
   };
 };
 
@@ -239,4 +285,6 @@ module.exports = {
   approveVehicleTypeRequest,
   rejectVehicleTypeRequest,
   countPendingRequests,
+  notifyTransporterVehicleTypeDecision,
+  buildVehicleTypeDecisionMessage,
 };

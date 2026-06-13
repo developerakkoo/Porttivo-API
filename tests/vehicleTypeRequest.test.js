@@ -24,6 +24,9 @@ const loadRequestService = (overrides = {}) =>
     '../models/VehicleType': overrides.VehicleType || {},
     '../models/VehicleTypeRequest': overrides.VehicleTypeRequest || {},
     '../models/Transporter': overrides.Transporter || {},
+    '../models/Notification': overrides.Notification || {
+      create: async (data) => data,
+    },
     '../services/vehicleTypeCatalog.service': overrides.catalog || {
       normalizeVehicleTypeName: (name) => name?.toString?.()?.trim?.()?.replace(/\s+/g, ' ') || '',
       normalizedNameKey: (name) =>
@@ -146,6 +149,7 @@ test('submitVehicleTypeRequest rejects active catalog match', async () => {
 
 test('approveVehicleTypeRequest creates master catalog entry', async () => {
   const savedRequests = [];
+  const notifications = [];
   const service = loadRequestService({
     VehicleType: {
       findOne: (query) => {
@@ -169,10 +173,17 @@ test('approveVehicleTypeRequest creates master catalog entry', async () => {
         requestedName: 'Custom Flatbed',
         normalizedName: 'CUSTOM FLATBED',
         status: 'pending',
+        submittedByTransporterId: 't1',
         save: async function save() {
           savedRequests.push(this);
         },
       }),
+    },
+    Notification: {
+      create: async (data) => {
+        notifications.push(data);
+        return data;
+      },
     },
     catalog: {
       normalizeVehicleTypeName: (name) => name?.toString?.()?.trim?.() || '',
@@ -186,19 +197,32 @@ test('approveVehicleTypeRequest creates master catalog entry', async () => {
   assert.equal(result.vehicleType.name, 'Custom Flatbed');
   assert.equal(savedRequests[0].status, 'approved');
   assert.equal(savedRequests[0].approvedVehicleTypeId, 'vt1');
+  assert.equal(result.didTransition, true);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, 'VEHICLE_TYPE_APPROVED');
+  assert.equal(notifications[0].data.requestedName, 'Custom Flatbed');
 });
 
-test('rejectVehicleTypeRequest marks request rejected', async () => {
+test('rejectVehicleTypeRequest marks request rejected and notifies', async () => {
   const savedRequests = [];
+  const notifications = [];
   const service = loadRequestService({
     VehicleTypeRequest: {
       findById: async () => ({
         _id: 'req1',
+        requestedName: 'Custom Flatbed',
         status: 'pending',
+        submittedByTransporterId: 't1',
         save: async function save() {
           savedRequests.push(this);
         },
       }),
+    },
+    Notification: {
+      create: async (data) => {
+        notifications.push(data);
+        return data;
+      },
     },
   });
 
@@ -206,6 +230,45 @@ test('rejectVehicleTypeRequest marks request rejected', async () => {
   assert.equal(result.ok, true);
   assert.equal(savedRequests[0].status, 'rejected');
   assert.equal(savedRequests[0].rejectionReason, 'Duplicate');
+  assert.equal(result.didTransition, true);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].type, 'VEHICLE_TYPE_REJECTED');
+  assert.equal(notifications[0].data.rejectionReason, 'Duplicate');
+});
+
+test('approveVehicleTypeRequest idempotent re-approve does not notify again', async () => {
+  const notifications = [];
+  const service = loadRequestService({
+    VehicleType: {
+      findById: async () => ({ _id: 'vt1', name: 'Custom Flatbed', isActive: true }),
+      findOne: async () => null,
+    },
+    VehicleTypeRequest: {
+      findById: async () => ({
+        _id: 'req1',
+        requestedName: 'Custom Flatbed',
+        status: 'approved',
+        approvedVehicleTypeId: 'vt1',
+        submittedByTransporterId: 't1',
+      }),
+    },
+    Notification: {
+      create: async (data) => {
+        notifications.push(data);
+        return data;
+      },
+    },
+    catalog: {
+      normalizeVehicleTypeName: (name) => name?.toString?.()?.trim?.() || '',
+      normalizedNameKey: (name) => name?.toString?.()?.trim?.()?.toUpperCase() || '',
+      serializeType: (doc) => ({ id: doc._id, name: doc.name, isActive: true }),
+    },
+  });
+
+  const result = await service.approveVehicleTypeRequest('req1', 'admin1');
+  assert.equal(result.ok, true);
+  assert.equal(result.didTransition, false);
+  assert.equal(notifications.length, 0);
 });
 
 test('submitRequest controller returns 403 without transporter context', async () => {

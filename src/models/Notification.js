@@ -34,6 +34,8 @@ const notificationSchema = new mongoose.Schema(
         'SUPPORT_TICKET_CREATED',
         'SUPPORT_MESSAGE',
         'SUPPORT_STATUS_CHANGED',
+        'VEHICLE_TYPE_APPROVED',
+        'VEHICLE_TYPE_REJECTED',
         'OTHER',
       ],
       required: [true, 'Notification type is required'],
