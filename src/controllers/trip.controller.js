@@ -127,6 +127,63 @@ const validateTripType = (tripType) => {
   return normalized;
 };
 
+const locationHasData = (location) => {
+  if (!location) return false;
+  if (typeof location !== 'object') return true;
+  return !!(
+    location.address ||
+    location.formattedAddress ||
+    location.coordinates ||
+    location.placeId
+  );
+};
+
+const validateOperationalLocations = (
+  tripType,
+  { pickupLocation, intermediateLocation, dropLocation },
+  { requireAll = true } = {}
+) => {
+  const normalized = normalizeTripType(tripType);
+  const pickup = normalizeLocation(pickupLocation);
+  const intermediate = normalizeLocation(intermediateLocation);
+  const drop = normalizeLocation(dropLocation);
+
+  if (pickup) {
+    const pickupError = validateLocation(pickup, 'Point A');
+    if (pickupError) return pickupError;
+  }
+  if (intermediate) {
+    const intermediateError = validateLocation(intermediate, 'Point B');
+    if (intermediateError) return intermediateError;
+  }
+  if (drop) {
+    const dropError = validateLocation(drop, 'Point C');
+    if (dropError) return dropError;
+  }
+
+  if (!requireAll) {
+    return null;
+  }
+
+  if (normalized === 'LOCAL') {
+    if (!locationHasData(pickup)) return 'Point A is required for local trips';
+    if (!locationHasData(drop)) return 'Point B is required for local trips';
+    if (locationHasData(intermediate)) {
+      return 'Intermediate location is not allowed for local trips';
+    }
+    return null;
+  }
+
+  if (normalized === 'IMPORT' || normalized === 'EXPORT') {
+    if (!locationHasData(pickup)) return 'Point A is required for import/export trips';
+    if (!locationHasData(intermediate)) return 'Point B is required for import/export trips';
+    if (!locationHasData(drop)) return 'Point C is required for import/export trips';
+    return null;
+  }
+
+  return null;
+};
+
 const normalizeAndValidateContainerNumber = (containerNumber) => {
   const normalized = normalizeContainerNumber(containerNumber);
   if (!normalized) {
@@ -528,6 +585,7 @@ const serializeTrip = (trip, options = {}) => {
     ...tripData,
     ...(idStr ? { id: idStr } : {}),
     pickupLocation: serializeLocation(tripData.pickupLocation),
+    intermediateLocation: serializeLocation(tripData.intermediateLocation),
     dropLocation: serializeLocation(tripData.dropLocation),
     vehicle: tripData.vehicleId
       ? {
@@ -558,30 +616,54 @@ const serializeTrip = (trip, options = {}) => {
 };
 
 const appendQueueFields = (base, tripData, queueInfo) => {
+  let result = base;
+
   if (queueInfo) {
-    return {
-      ...base,
+    result = {
+      ...result,
       queuePosition: queueInfo.queuePosition,
       isQueued: queueInfo.isQueued,
       blockingTripId: queueInfo.blockingTripId,
     };
-  }
-
-  if (tripData?.queueSequence != null) {
-    return {
-      ...base,
+  } else if (tripData?.queueSequence != null) {
+    result = {
+      ...result,
       queuePosition: tripData.queueSequence,
       isQueued: tripData.queueSequence > 1,
       blockingTripId: null,
     };
+  } else {
+    result = {
+      ...result,
+      queuePosition: null,
+      isQueued: false,
+      blockingTripId: null,
+    };
   }
 
-  return {
-    ...base,
-    queuePosition: null,
-    isQueued: false,
-    blockingTripId: null,
-  };
+  if (
+    tripData?.status === TRIP_STATUS.PLANNED &&
+    queueInfo &&
+    queueInfo.isQueued
+  ) {
+    const tripId = tripData._id?.toString?.() || String(tripData._id || '');
+    const blockedByOtherTrip =
+      (queueInfo.blockingTripId &&
+        queueInfo.blockingTripId !== tripId) ||
+      (queueInfo.queuePosition ?? 0) > 1;
+
+    if (blockedByOtherTrip) {
+      result = {
+        ...result,
+        capabilities: {
+          ...(result.capabilities || {}),
+          startTrip: false,
+        },
+      };
+    }
+  }
+
+  return result;
 };
 
 const serializeTripWithQueue = async (trip, options = {}) => {
@@ -614,6 +696,9 @@ const buildTripAdminDetail = (trip) => {
 };
 
 const serializeTrips = (trips, options = {}) => trips.map((trip) => serializeTrip(trip, options));
+
+const serializeTripsWithQueue = async (trips, options = {}) =>
+  Promise.all(trips.map((trip) => serializeTripWithQueue(trip, options)));
 
 const sanitizeSerializedTripForMarketplaceBuyer = (serialized) => {
   if (!serialized || typeof serialized !== 'object') return serialized;
@@ -769,7 +854,7 @@ const createTrip = async (req, res, next) => {
         message: 'Access denied. You do not have permission to create trips.',
       });
     }
-    const { vehicleId, hiredVehicle, driverId, containerNumber, reference, customerName, pickupLocation, dropLocation, tripType, assignments: assignmentsInput } = req.body;
+    const { vehicleId, hiredVehicle, driverId, containerNumber, reference, customerName, pickupLocation, intermediateLocation, dropLocation, tripType, assignments: assignmentsInput } = req.body;
     const normalizedTripType = validateTripType(tripType);
     const normalizedCustomerName = customerName?.trim();
 
@@ -799,6 +884,7 @@ const createTrip = async (req, res, next) => {
       reference: reference?.trim().toUpperCase() || null,
       customerName: normalizedCustomerName.toUpperCase(),
       pickupLocation: normalizeLocation(pickupLocation),
+      intermediateLocation: normalizeLocation(intermediateLocation),
       dropLocation: normalizeLocation(dropLocation),
       tripType: normalizedTripType,
       status: TRIP_STATUS.PLANNED,
@@ -939,25 +1025,16 @@ const createTrip = async (req, res, next) => {
       }
     }
 
-    // Validate locations if provided
-    if (pickupLocation) {
-      const pickupError = validateLocation(pickupLocation, 'Pickup location');
-      if (pickupError) {
-        return res.status(400).json({
-          success: false,
-          message: pickupError,
-        });
-      }
-    }
-
-    if (dropLocation) {
-      const dropError = validateLocation(dropLocation, 'Drop location');
-      if (dropError) {
-        return res.status(400).json({
-          success: false,
-          message: dropError,
-        });
-      }
+    const operationalLocationError = validateOperationalLocations(normalizedTripType, {
+      pickupLocation,
+      intermediateLocation,
+      dropLocation,
+    });
+    if (operationalLocationError) {
+      return res.status(400).json({
+        success: false,
+        message: operationalLocationError,
+      });
     }
 
     // Create trip
@@ -1074,7 +1151,7 @@ const getTrips = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: serializeTrips(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
+      data: await serializeTripsWithQueue(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -1183,7 +1260,10 @@ const getTripById = async (req, res, next) => {
           includeCurrentMilestone: true,
         });
       }
-      const raw = serializeTrip(trip, { includeCurrentMilestone: true });
+      const raw = await serializeTripWithQueue(trip, {
+        includeCurrentMilestone: true,
+        viewerTransporterId: transporterId,
+      });
       const meta = await getMarketplaceTripMetaForUser(trip, req.user);
       return meta ? { ...raw, ...meta } : raw;
     })();
@@ -1204,7 +1284,7 @@ const getTripById = async (req, res, next) => {
 const updateTrip = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { vehicleId, hiredVehicle, driverId, containerNumber, reference, pickupLocation, dropLocation } = req.body;
+    const { vehicleId, hiredVehicle, driverId, containerNumber, reference, pickupLocation, intermediateLocation, dropLocation } = req.body;
 
     // Find trip
     const trip = await Trip.findById(id);
@@ -1244,7 +1324,7 @@ const updateTrip = async (req, res, next) => {
       }
       setAuditActor(trip, req.user);
       await trip.save();
-      if (pickupLocation !== undefined || dropLocation !== undefined) {
+      if (pickupLocation !== undefined || intermediateLocation !== undefined || dropLocation !== undefined) {
         await syncTripLocationsToSavedCatalog({
           trip,
           actor: {
@@ -1302,9 +1382,9 @@ const updateTrip = async (req, res, next) => {
     const isContainerOnlyUpdate = containerNumber !== undefined &&
       vehicleId === undefined && hiredVehicle === undefined &&
       driverId === undefined && reference === undefined &&
-      pickupLocation === undefined && dropLocation === undefined;
+      pickupLocation === undefined && intermediateLocation === undefined && dropLocation === undefined;
     const isLocationOrContainerOnlyUpdate = (
-      (pickupLocation !== undefined || dropLocation !== undefined) &&
+      (pickupLocation !== undefined || intermediateLocation !== undefined || dropLocation !== undefined) &&
       vehicleId === undefined &&
       hiredVehicle === undefined &&
       driverId === undefined &&
@@ -1315,7 +1395,7 @@ const updateTrip = async (req, res, next) => {
     const canUpdateVehicleDriver = trip.status === TRIP_STATUS.PLANNED ||
       (trip.status === TRIP_STATUS.ACCEPTED && trip.bookedBy === 'CUSTOMER');
     const canUpdateLocationAfterStart =
-      trip.status === TRIP_STATUS.ACTIVE &&
+      [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED].includes(trip.status) &&
       isLocationOrContainerOnlyUpdate;
 
     if (!isContainerOnlyUpdate && !isLocationOrContainerOnlyUpdate && !canUpdateVehicleDriver && !canUpdateLocationAfterStart) {
@@ -1336,9 +1416,10 @@ const updateTrip = async (req, res, next) => {
     const canUpdateLocations = [
       TRIP_STATUS.PLANNED,
       TRIP_STATUS.ACTIVE,
+      TRIP_STATUS.PAUSED,
       TRIP_STATUS.ACCEPTED,
     ].includes(trip.status);
-    if ((pickupLocation !== undefined || dropLocation !== undefined) && !canUpdateLocations) {
+    if ((pickupLocation !== undefined || intermediateLocation !== undefined || dropLocation !== undefined) && !canUpdateLocations) {
       return res.status(400).json({
         success: false,
         message: 'Trip locations can only be updated when trip is PLANNED, ACTIVE, or ACCEPTED',
@@ -1424,34 +1505,59 @@ const updateTrip = async (req, res, next) => {
       trip.reference = reference?.trim().toUpperCase() || null;
     }
     if (pickupLocation !== undefined) {
-      if (pickupLocation) {
-        const pickupError = validateLocation(pickupLocation, 'Pickup location');
-        if (pickupError) {
-          return res.status(400).json({
-            success: false,
-            message: pickupError,
-          });
-        }
-      }
       trip.pickupLocation = normalizeLocation(pickupLocation);
     }
+    if (intermediateLocation !== undefined) {
+      trip.intermediateLocation = normalizeLocation(intermediateLocation);
+    }
     if (dropLocation !== undefined) {
-      if (dropLocation) {
-        const dropError = validateLocation(dropLocation, 'Drop location');
-        if (dropError) {
-          return res.status(400).json({
-            success: false,
-            message: dropError,
-          });
-        }
-      }
       trip.dropLocation = normalizeLocation(dropLocation);
+    }
+
+    if (pickupLocation !== undefined || intermediateLocation !== undefined || dropLocation !== undefined) {
+      const operationalLocationError = validateOperationalLocations(trip.tripType, {
+        pickupLocation: trip.pickupLocation,
+        intermediateLocation: trip.intermediateLocation,
+        dropLocation: trip.dropLocation,
+      });
+      if (operationalLocationError) {
+        return res.status(400).json({
+          success: false,
+          message: operationalLocationError,
+        });
+      }
+    }
+
+    if (
+      [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED].includes(trip.status) &&
+      (pickupLocation !== undefined || intermediateLocation !== undefined || dropLocation !== undefined)
+    ) {
+      trip.statusHistory = trip.statusHistory || [];
+      trip.statusHistory.push({
+        status: trip.status,
+        changedAt: new Date(),
+        changedBy: {
+          userId: req.user.id,
+          userType: toAuditUserType(req.user.userType),
+        },
+        note: `locations_updated:${[
+          pickupLocation !== undefined ? 'pickupLocation' : null,
+          intermediateLocation !== undefined ? 'intermediateLocation' : null,
+          dropLocation !== undefined ? 'dropLocation' : null,
+        ].filter(Boolean).join(',')}`,
+      });
     }
 
     setAuditActor(trip, req.user);
     await trip.save();
+    if (
+      trip.status === TRIP_STATUS.PLANNED &&
+      (vehicleId !== undefined || hiredVehicle !== undefined || driverId !== undefined)
+    ) {
+      await assignTripQueueMetadata(trip);
+    }
     await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
-    if (pickupLocation !== undefined || dropLocation !== undefined) {
+    if (pickupLocation !== undefined || intermediateLocation !== undefined || dropLocation !== undefined) {
       await syncTripLocationsToSavedCatalog({
         trip,
         actor: {
@@ -1477,6 +1583,7 @@ const updateTrip = async (req, res, next) => {
       'containerNumber',
       'reference',
       'pickupLocation',
+      'intermediateLocation',
       'dropLocation',
     ];
     const changedFields = updatableKeys.filter((k) => req.body[k] !== undefined);
@@ -1485,7 +1592,7 @@ const updateTrip = async (req, res, next) => {
     res.json({
       success: true,
       message: 'Trip updated successfully',
-      data: serializeTrip(trip, { includeCurrentMilestone: true }),
+      data: await serializeTripWithQueue(trip, { includeCurrentMilestone: true }),
     });
   } catch (error) {
     next(error);
@@ -1681,7 +1788,7 @@ const searchTrips = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: serializeTrips(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
+      data: await serializeTripsWithQueue(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -1877,7 +1984,7 @@ const getTripsByStatus = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: serializeTrips(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
+      data: await serializeTripsWithQueue(trips, isAdmin ? {} : { viewerTransporterId: transporterId }),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -2660,6 +2767,9 @@ const assignTripVehicle = async (req, res, next) => {
     finalizeAssignmentState(trip);
     setAuditActor(trip, req.user);
     await trip.save();
+    if (trip.status === TRIP_STATUS.PLANNED) {
+      await assignTripQueueMetadata(trip);
+    }
     await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
     await populateTripReferences(trip);
 
@@ -2672,7 +2782,7 @@ const assignTripVehicle = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: 'Vehicle assigned successfully',
-      data: serializeTrip(trip, { includeCurrentMilestone: true }),
+      data: await serializeTripWithQueue(trip, { includeCurrentMilestone: true }),
     });
   } catch (error) {
     next(error);
@@ -2868,6 +2978,9 @@ const assignCustomerTrip = async (req, res, next) => {
     finalizeAssignmentState(trip);
     setAuditActor(trip, req.user);
     await trip.save();
+    if (trip.status === TRIP_STATUS.PLANNED) {
+      await assignTripQueueMetadata(trip);
+    }
     await syncTripResourceBusyState(previousTripState, trip, { includeAssignments: false });
 
     await populateTripReferences(trip);
@@ -2904,7 +3017,7 @@ const assignCustomerTrip = async (req, res, next) => {
     return res.status(200).json({
       success: true,
       message: 'Vehicle and driver assigned successfully',
-      data: serializeTrip(trip, { includeCurrentMilestone: true }),
+      data: await serializeTripWithQueue(trip, { includeCurrentMilestone: true }),
     });
   } catch (error) {
     next(error);
@@ -2927,6 +3040,7 @@ const buildDraftPayload = (body, transporterId, user) => {
     reference: body.reference?.trim()?.toUpperCase() || null,
     customerName: normalizedCustomerName ? normalizedCustomerName.toUpperCase() : null,
     pickupLocation: normalizeLocation(body.pickupLocation),
+    intermediateLocation: normalizeLocation(body.intermediateLocation),
     dropLocation: normalizeLocation(body.dropLocation),
     tripType: normalizedTripType || TRIP_TYPE_VALUES[0],
     assignments: Array.isArray(body.assignments) ? body.assignments : [],

@@ -333,6 +333,10 @@ const tripSchema = new mongoose.Schema(
       type: locationSchema,
       default: null
     },
+    intermediateLocation: {
+      type: locationSchema,
+      default: null
+    },
     dropLocation: {
       type: locationSchema,
       default: null

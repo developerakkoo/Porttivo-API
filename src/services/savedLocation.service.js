@@ -85,6 +85,16 @@ const syncTripLocationsToSavedCatalog = async ({ trip, actor }) => {
     );
   }
 
+  if (trip.intermediateLocation) {
+    operations.push(
+      upsertSavedLocationFromTripLocation({
+        location: trip.intermediateLocation,
+        label: buildSavedLocationLabel(trip.intermediateLocation, `Point B ${trip.tripId || 'Location'}`),
+        actor,
+      })
+    );
+  }
+
   if (trip.dropLocation) {
     operations.push(
       upsertSavedLocationFromTripLocation({
