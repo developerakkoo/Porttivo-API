@@ -1173,13 +1173,16 @@ const tests = [
             }
             return postState;
           },
-          findById: () => postState,
+          findById: () => ({
+            session: async () => postState,
+          }),
         },
         '../models/VehicleRouteAssignment': {
           findOne: () => ({
             session: async () => ({ _id: 'assignment-1' }),
           }),
           findByIdAndUpdate: async () => ({}),
+          countDocuments: async () => 0,
         },
         '../models/TransporterMessage': {
           create: async (payload) => payload,
@@ -1467,6 +1470,66 @@ const tests = [
         postId: 'abc',
         isReleased: { $ne: true },
       })
+    },
+  },
+  {
+    name: 'filterBookableAssignments excludes confirmed and released rows',
+    run() {
+      const {
+        filterBookableAssignments,
+        hasBookableInventory,
+      } = require('../src/utils/marketplaceAvailability.util')
+
+      const confirmed = new Set(['assignment-confirmed'])
+      const assignments = [
+        { _id: 'assignment-open', isReleased: false },
+        { _id: 'assignment-confirmed', isReleased: false },
+        { _id: 'assignment-released', isReleased: true },
+      ]
+
+      const bookable = filterBookableAssignments(assignments, confirmed)
+      assert.equal(bookable.length, 1)
+      assert.equal(bookable[0]._id, 'assignment-open')
+      assert.equal(hasBookableInventory(assignments, confirmed), true)
+      assert.equal(
+        hasBookableInventory(assignments, new Set(['assignment-open', 'assignment-confirmed', 'assignment-released'])),
+        false
+      )
+    },
+  },
+  {
+    name: 'searchAvailability omits posts without bookable vehicles',
+    run() {
+      const { filterBookableAssignments } = require('../src/utils/marketplaceAvailability.util')
+
+      const posts = [{ _id: 'post-1' }, { _id: 'post-2' }]
+      const assignmentsByPost = {
+        'post-1': [{ _id: 'a1', isReleased: true }],
+        'post-2': [{ _id: 'a2', isReleased: false }],
+      }
+      const confirmed = new Set(['a2'])
+
+      const results = posts
+        .map(p => {
+          const key = p._id.toString()
+          const bookable = filterBookableAssignments(
+            assignmentsByPost[key] || [],
+            confirmed
+          )
+          return { id: p._id, availableVehicles: bookable }
+        })
+        .filter(r => r.availableVehicles.length > 0)
+
+      assert.equal(results.length, 0)
+    },
+  },
+  {
+    name: 'confirmed single assignment leaves no bookable inventory',
+    run() {
+      const { hasBookableInventory } = require('../src/utils/marketplaceAvailability.util')
+      const assignments = [{ _id: 'only-one', isReleased: false }]
+      const confirmed = new Set(['only-one'])
+      assert.equal(hasBookableInventory(assignments, confirmed), false)
     },
   },
 ];

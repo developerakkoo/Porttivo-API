@@ -22,6 +22,12 @@ const {
   stopLabelForIndex
 } = require('../utils/vehiclePostDestinationQuotas')
 const { liveAssignmentFilter } = require('../utils/liveVehicleAssignment')
+const {
+  getConfirmedAssignmentIds,
+  filterBookableAssignments,
+  hasBookableInventory,
+  countPostsWithBookableInventory
+} = require('../utils/marketplaceAvailability.util')
 
 const MAX_DESTINATION_STOPS = 10
 const MAX_FORMATTED_ADDRESS_LEN = 500
@@ -543,37 +549,51 @@ const searchAvailability = async (req, res, next) => {
     }
 
     // Attach transporter and vehicle summary
-    const results = posts.map(p => ({
-      id: p._id,
-      transporter: p.transporterId
-        ? {
-            id: p.transporterId._id || p.transporterId,
-            name: p.transporterId.name || null,
-            company: p.transporterId.company || null,
-            mobile: p.transporterId.mobile || null,
-            status: p.transporterId.status || null
-          }
-        : { id: p.transporterId },
-      vehicleId: p.vehicleId ? p.vehicleId._id : null,
-      vehicleNumber: p.vehicleId ? p.vehicleId.vehicleNumber : null,
-      vehicleType: p.vehicleType,
-      origin: p.origin,
-      ...postDestinationApiFields(p),
-      quantity: p.quantity,
-      slotsLeft: p.slotsLeft,
-      pricePerVehicle: p.pricePerVehicle || null,
-      availableFrom: p.availableFrom,
-      availableTo: p.availableTo,
-      note: p.note,
-      availableVehicles: (assignmentsByPost[p._id] || []).map(a =>
-        mapAssignmentForApi(a, p)
-      ),
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt,
-      lastEdited: p.updatedAt
-    }))
+    const confirmedAssignmentIds = await getConfirmedAssignmentIds(postIds)
 
-    const total = await VehicleRouteAvailability.countDocuments(query)
+    const results = posts
+      .map(p => {
+        const postKey = p._id.toString()
+        const bookableAssignments = filterBookableAssignments(
+          assignmentsByPost[postKey] || [],
+          confirmedAssignmentIds
+        )
+        return {
+          id: p._id,
+          transporter: p.transporterId
+            ? {
+                id: p.transporterId._id || p.transporterId,
+                name: p.transporterId.name || null,
+                company: p.transporterId.company || null,
+                mobile: p.transporterId.mobile || null,
+                status: p.transporterId.status || null
+              }
+            : { id: p.transporterId },
+          vehicleId: p.vehicleId ? p.vehicleId._id : null,
+          vehicleNumber: p.vehicleId ? p.vehicleId.vehicleNumber : null,
+          vehicleType: p.vehicleType,
+          origin: p.origin,
+          ...postDestinationApiFields(p),
+          quantity: p.quantity,
+          slotsLeft: p.slotsLeft,
+          pricePerVehicle: p.pricePerVehicle || null,
+          availableFrom: p.availableFrom,
+          availableTo: p.availableTo,
+          note: p.note,
+          availableVehicles: bookableAssignments.map(a =>
+            mapAssignmentForApi(a, p)
+          ),
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+          lastEdited: p.updatedAt
+        }
+      })
+      .filter(r => r.availableVehicles.length > 0)
+
+    const total = await countPostsWithBookableInventory(
+      VehicleRouteAvailability,
+      query
+    )
     try {
       console.debug(
         'vehiclePost.searchAvailability - results:',
@@ -711,6 +731,16 @@ const getById = async (req, res, next) => {
       .populate('transporterId', 'name company mobile')
       .lean()
 
+    const confirmedAssignmentIds = await getConfirmedAssignmentIds([p._id])
+    const bookableAssignments = filterBookableAssignments(
+      postAssignments,
+      confirmedAssignmentIds
+    )
+
+    if (!isOwner && !hasBookableInventory(postAssignments, confirmedAssignmentIds)) {
+      return res.status(404).json({ success: false, message: 'Post not found' })
+    }
+
     const response = {
       id: p._id,
       transporter: p.transporterId
@@ -739,7 +769,7 @@ const getById = async (req, res, next) => {
       availableFrom: p.availableFrom,
       availableTo: p.availableTo,
       note: p.note,
-      availableVehicles: postAssignments.map(a => mapAssignmentForApi(a, p)),
+      availableVehicles: bookableAssignments.map(a => mapAssignmentForApi(a, p)),
       status: p.status,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,

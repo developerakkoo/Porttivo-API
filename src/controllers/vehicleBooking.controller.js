@@ -18,6 +18,7 @@ const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPaylo
 const {
   buildMarketplaceMessageNotificationFields
 } = require('../utils/marketplaceNotification')
+const { liveAssignmentFilter } = require('../utils/liveVehicleAssignment')
 
 function geoFieldToLabel(v) {
   if (v == null) return null
@@ -61,12 +62,25 @@ async function consumeConfirmedBookingSlot(postId, session) {
     throw new Error('No slots available on this post')
   }
 
-  if (post.slotsLeft === 0 && post.status !== 'fulfilled') {
-    post.status = 'fulfilled'
-    await post.save({ session })
+  return post
+}
+
+async function markPostFulfilledIfInventoryExhausted(postId, session) {
+  let postQuery = VehicleRouteAvailability.findById(postId)
+  if (session && typeof postQuery.session === 'function') {
+    postQuery = postQuery.session(session)
+  }
+  const post = await postQuery
+  if (!post) return null
+
+  if (post.slotsLeft === 0) {
+    if (post.status !== 'fulfilled') {
+      post.status = 'fulfilled'
+      await post.save(session ? { session } : undefined)
+    }
   } else if (post.slotsLeft > 0 && post.status === 'fulfilled') {
     post.status = 'active'
-    await post.save({ session })
+    await post.save(session ? { session } : undefined)
   }
 
   return post
@@ -816,6 +830,7 @@ const acceptBooking = async (req, res, next) => {
 
     let trip = null
     let populatedBooking = null
+    let updatedPost = null
 
     try {
       const assignmentExists = await VehicleRouteAssignment.findOne({
@@ -842,6 +857,11 @@ const acceptBooking = async (req, res, next) => {
         booking.assignmentId,
         { $set: { isReleased: true } },
         { session }
+      )
+
+      updatedPost = await markPostFulfilledIfInventoryExhausted(
+        booking.postId,
+        session
       )
 
       await booking.save({ session })
@@ -914,6 +934,20 @@ const acceptBooking = async (req, res, next) => {
       io.to(`transporter:${booking.sellerId}`).emit('booking:confirmed', {
         booking: populatedBooking
       })
+
+      if (updatedPost) {
+        const liveCount = await VehicleRouteAssignment.countDocuments(
+          liveAssignmentFilter({ postId: booking.postId })
+        )
+        io.emit('vehiclePost:updated', {
+          post: {
+            id: updatedPost._id,
+            status: updatedPost.status,
+            slotsLeft: updatedPost.slotsLeft,
+            bookableInventoryCount: liveCount
+          }
+        })
+      }
     } catch (err) {
       console.warn('Socket emit failed (booking:confirmed)')
     }
