@@ -79,6 +79,45 @@ const vehicleSchema = new mongoose.Schema(
         uploadedAt: Date,
       },
     },
+    rcVerification: {
+      verified: {
+        type: Boolean,
+        default: false,
+      },
+      status: {
+        type: String,
+        enum: ['pending', 'verified', 'not_verified', 'error', 'timeout', 'unsupported', 'not-configured', 'invalid-input'],
+        default: 'pending',
+      },
+      source: {
+        type: String,
+        default: 'surepass',
+      },
+      checkedAt: {
+        type: Date,
+        default: null,
+      },
+      statusCode: {
+        type: Number,
+        default: null,
+      },
+      message: {
+        type: String,
+        default: null,
+      },
+      messageCode: {
+        type: String,
+        default: null,
+      },
+      verifiedVehicleNumber: {
+        type: String,
+        default: null,
+      },
+      rawResponse: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+      },
+    },
   },
   {
     timestamps: true,

@@ -15,6 +15,7 @@ const {
   // User management
   listAllTransporters,
   listTransportersWithVehicles,
+  getVehicleAdminDetails,
   getTransporterRoutePosts,
   getTransporterDetails,
   updateTransporterStatus,
@@ -155,6 +156,7 @@ router.get('/transporters', listAllTransporters);
  * @access  Private (Admin only)
  */
 router.get('/transporters/with-vehicles', listTransportersWithVehicles);
+router.get('/vehicles/:id', getVehicleAdminDetails);
 
 /**
  * @route   GET /api/admin/transporters/:id/route-posts

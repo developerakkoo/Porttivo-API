@@ -8,6 +8,7 @@ const {
 } = require('../utils/vehicleValidation');
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 const { assertVehicleTypeAllowed } = require('../services/vehicleTypeCatalog.service');
+const { verifyRcFull } = require('../services/surepass.service');
 
 const validateDriverVehicleLink = async ({ driverId, transporterId, excludeVehicleId = null }) => {
   const driver = await Driver.findOne({
@@ -44,6 +45,18 @@ const validateDriverVehicleLink = async ({ driverId, transporterId, excludeVehic
 
   return { driver };
 };
+
+const buildRcVerificationSnapshot = (verification, vehicleNumber) => ({
+  verified: !!verification?.verified,
+  status: verification?.status || 'pending',
+  source: verification?.source || 'surepass',
+  checkedAt: verification?.verifiedAt || null,
+  statusCode: verification?.statusCode ?? null,
+  message: verification?.message || null,
+  messageCode: verification?.messageCode || null,
+  verifiedVehicleNumber: vehicleNumber,
+  rawResponse: verification?.rawResponse || null,
+});
 
 /**
  * Get all vehicles for authenticated transporter
@@ -262,6 +275,8 @@ const createVehicle = async (req, res, next) => {
       finalVehicleType = typeCheck.name;
     }
 
+    const rcVerification = await verifyRcFull(cleanedVehicleNumber);
+
     // Create vehicle
     const vehicle = await Vehicle.create({
       vehicleNumber: cleanedVehicleNumber,
@@ -272,6 +287,7 @@ const createVehicle = async (req, res, next) => {
       trailerType: trailerType?.trim() || null,
       vehicleType: finalVehicleType,
       status: 'active',
+      rcVerification: buildRcVerificationSnapshot(rcVerification, cleanedVehicleNumber),
     });
 
     // Populate driver info
@@ -310,6 +326,14 @@ const createVehicle = async (req, res, next) => {
           documents: vehicle.documents,
           createdAt: vehicle.createdAt,
           updatedAt: vehicle.updatedAt,
+        },
+        verification: {
+          verified: !!vehicle.rcVerification?.verified,
+          status: vehicle.rcVerification?.status || 'pending',
+          source: vehicle.rcVerification?.source || 'surepass',
+          checkedAt: vehicle.rcVerification?.checkedAt || null,
+          message: vehicle.rcVerification?.message || null,
+          messageCode: vehicle.rcVerification?.messageCode || null,
         },
       },
     });

@@ -1148,6 +1148,101 @@ const listTransportersWithVehicles = async (req, res, next) => {
 };
 
 /**
+ * Get a single vehicle with full verification payload
+ * GET /api/admin/vehicles/:id
+ */
+const getVehicleAdminDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vehicle ID',
+      });
+    }
+
+    const vehicle = await Vehicle.findById(id)
+      .populate('transporterId', 'mobile name email company status hasAccess')
+      .populate('originalOwnerId', 'mobile name email company status hasAccess')
+      .populate('driverId', 'name mobile status');
+
+    if (!vehicle) {
+      return res.status(404).json({
+        success: false,
+        message: 'Vehicle not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        vehicle: {
+          id: vehicle._id,
+          vehicleNumber: vehicle.vehicleNumber,
+          transporter: vehicle.transporterId
+            ? {
+                id: vehicle.transporterId._id,
+                mobile: vehicle.transporterId.mobile,
+                name: vehicle.transporterId.name,
+                email: vehicle.transporterId.email,
+                company: vehicle.transporterId.company,
+                status: vehicle.transporterId.status,
+                hasAccess: vehicle.transporterId.hasAccess,
+              }
+            : null,
+          transporterId: vehicle.transporterId?._id || vehicle.transporterId || null,
+          ownerType: vehicle.ownerType,
+          originalOwner: vehicle.originalOwnerId
+            ? {
+                id: vehicle.originalOwnerId._id,
+                mobile: vehicle.originalOwnerId.mobile,
+                name: vehicle.originalOwnerId.name,
+                email: vehicle.originalOwnerId.email,
+                company: vehicle.originalOwnerId.company,
+                status: vehicle.originalOwnerId.status,
+                hasAccess: vehicle.originalOwnerId.hasAccess,
+              }
+            : null,
+          originalOwnerId: vehicle.originalOwnerId?._id || vehicle.originalOwnerId || null,
+          driver: vehicle.driverId
+            ? {
+                id: vehicle.driverId._id,
+                name: vehicle.driverId.name,
+                mobile: vehicle.driverId.mobile,
+                status: vehicle.driverId.status,
+              }
+            : null,
+          driverId: vehicle.driverId?._id || vehicle.driverId || null,
+          status: vehicle.status,
+          isBusy: vehicle.isBusy,
+          vehicleType: vehicle.vehicleType || null,
+          trailerType: vehicle.trailerType || null,
+          documents: vehicle.documents || {},
+          rcVerification: vehicle.rcVerification
+            ? {
+                verified: !!vehicle.rcVerification.verified,
+                status: vehicle.rcVerification.status || 'pending',
+                source: vehicle.rcVerification.source || 'surepass',
+                checkedAt: vehicle.rcVerification.checkedAt || null,
+                statusCode: vehicle.rcVerification.statusCode ?? null,
+                message: vehicle.rcVerification.message || null,
+                messageCode: vehicle.rcVerification.messageCode || null,
+                verifiedVehicleNumber: vehicle.rcVerification.verifiedVehicleNumber || null,
+                rawResponse: vehicle.rcVerification.rawResponse || null,
+              }
+            : null,
+          createdAt: vehicle.createdAt,
+          updatedAt: vehicle.updatedAt,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get transporter route posts with bookings attached
  * GET /api/admin/transporters/:id/route-posts
  */
@@ -3243,6 +3338,7 @@ module.exports = {
   // User management
   listAllTransporters,
   listTransportersWithVehicles,
+  getVehicleAdminDetails,
   getTransporterRoutePosts,
   getTransporterDetails,
   updateTransporterStatus,
