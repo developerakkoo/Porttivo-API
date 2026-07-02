@@ -46,6 +46,9 @@ const {
   transporterPartyScopeCondition,
 } = require('../services/tripAccess.service');
 const {
+  fetchMarketplacePaymentSnapshotByTrip
+} = require('../services/marketplacePayment.service');
+const {
   sendTripCreatedConfirmation,
   sendBookingAcceptedTemplate,
   sendDriverVehicleAssignedTemplate,
@@ -1267,6 +1270,11 @@ const getTripById = async (req, res, next) => {
       const meta = await getMarketplaceTripMetaForUser(trip, req.user);
       return meta ? { ...raw, ...meta } : raw;
     })();
+
+    const marketplacePayment = await fetchMarketplacePaymentSnapshotByTrip(trip);
+    if (marketplacePayment?.marketplaceTrip) {
+      data.marketplacePayment = marketplacePayment;
+    }
 
     res.json({
       success: true,

@@ -32,6 +32,7 @@ const settlementRoutes = require('./src/routes/settlement.routes');
 const notificationRoutes = require('./src/routes/notification.routes');
 const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
 const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
+const marketplacePaymentRoutes = require('./src/routes/marketplacePayment.routes');
 const messageRoutes = require('./src/routes/message.routes');
 const supportTransporterRoutes = require('./src/routes/supportTransporter.routes');
 const supportCustomerRoutes = require('./src/routes/supportCustomer.routes');
@@ -119,6 +120,7 @@ app.use('/api/settlements', settlementRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/vehicle-posts', vehiclePostRoutes);
 app.use('/api/vehicle-bookings', vehicleBookingRoutes);
+app.use('/api/marketplace-payments', marketplacePaymentRoutes);
 app.use('/api/messages', messageRoutes);
 
 // 404 handler

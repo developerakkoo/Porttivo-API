@@ -41,6 +41,9 @@ const {
   buildMarketplaceMessageNotificationFields
 } = require('../utils/marketplaceNotification')
 const {
+  buildMarketplacePaymentReadyNotificationFields
+} = require('../utils/marketplacePaymentNotification')
+const {
   MAX_CHAT_ATTACHMENTS,
   normalizeAttachmentsInput,
   bookingAllowsParticipantChat,
@@ -49,6 +52,9 @@ const {
 const { canTransporterPartyViewTripExecution } = require('./tripAccess.service')
 const SupportTicket = require('../models/SupportTicket')
 const supportTicketService = require('./supportTicket.service')
+const {
+  fetchMarketplacePaymentSnapshotByTrip
+} = require('./marketplacePayment.service')
 const env = require('../config/env')
 let io = null
 let staleDriverTrackingTimer = null
@@ -1153,6 +1159,20 @@ const initializeSocketIO = httpServer => {
             : null
         }
         emitToTripAudience('trip:milestone:updated', milestonePayload)
+
+        if (milestoneNum === 1 && trip.isFromBooking && trip.bookingId) {
+          try {
+            const paymentSnapshot = await fetchMarketplacePaymentSnapshotByTrip(
+              trip
+            )
+            await emitMarketplacePaymentReady(trip, paymentSnapshot)
+          } catch (paymentEventError) {
+            console.warn(
+              'Marketplace payment ready broadcast skipped:',
+              paymentEventError.message || paymentEventError
+            )
+          }
+        }
       } catch (error) {
         console.error('Error handling trip:milestone:update:', error)
         logSocketEvent('trip:milestone:update', socket, {
@@ -2621,6 +2641,104 @@ const emitTripMilestoneUpdated = (trip, milestone, currentMilestone = null) => {
   })
 }
 
+const emitMarketplacePaymentReady = async (trip, snapshot = null) => {
+  if (!io || !trip) {
+    return null
+  }
+
+  const paymentSnapshot =
+    snapshot || (await fetchMarketplacePaymentSnapshotByTrip(trip))
+  if (!paymentSnapshot?.eligibility?.canInitiatePayment) {
+    return null
+  }
+
+  const tripPayload = trip.toObject ? trip.toObject() : trip
+  const paymentPayload = {
+    ...paymentSnapshot,
+    source: 'milestone_1_complete'
+  }
+  const payload = {
+    trip: tripPayload,
+    payment: paymentPayload,
+    message: 'Marketplace payment is now available.'
+  }
+
+  const buyerId = paymentSnapshot.payerTransporterId
+  const sellerId = paymentSnapshot.beneficiaryTransporterId
+  const tripId = paymentSnapshot.tripId || tripPayload._id || tripPayload.id
+  const rooms = []
+
+  if (buyerId) {
+    const room = `transporter:${buyerId}`
+    rooms.push(room)
+    io.to(room).emit('marketplace:payment:ready', payload)
+  }
+
+  if (sellerId && sellerId !== buyerId) {
+    const room = `transporter:${sellerId}`
+    rooms.push(room)
+    io.to(room).emit('marketplace:payment:ready', payload)
+  }
+
+  const tripRoom = `trip:${tripId}`
+  rooms.push(tripRoom)
+  io.to(tripRoom).emit('marketplace:payment:ready', payload)
+  io.to('admin:all').emit('marketplace:payment:ready', payload)
+
+  const notificationJobs = []
+  if (buyerId) {
+    const buyerFields = buildMarketplacePaymentReadyNotificationFields({
+      tripId,
+      tripPublicId: paymentSnapshot.tripPublicId,
+      bookingId: paymentSnapshot.bookingId,
+      amount: paymentSnapshot.agreedPrice,
+      milestoneNumber: 1,
+      audience: 'buyer'
+    })
+    notificationJobs.push(
+      Notification.create({
+        userId: buyerId,
+        userType: 'TRANSPORTER',
+        type: 'SYSTEM',
+        title: buyerFields.title,
+        message: buyerFields.message,
+        data: buyerFields.data,
+        priority: 'high'
+      })
+    )
+  }
+
+  if (sellerId && sellerId !== buyerId) {
+    const sellerFields = buildMarketplacePaymentReadyNotificationFields({
+      tripId,
+      tripPublicId: paymentSnapshot.tripPublicId,
+      bookingId: paymentSnapshot.bookingId,
+      amount: paymentSnapshot.agreedPrice,
+      milestoneNumber: 1,
+      audience: 'seller'
+    })
+    notificationJobs.push(
+      Notification.create({
+        userId: sellerId,
+        userType: 'TRANSPORTER',
+        type: 'SYSTEM',
+        title: sellerFields.title,
+        message: sellerFields.message,
+        data: sellerFields.data,
+        priority: 'high'
+      })
+    )
+  }
+
+  await Promise.allSettled(notificationJobs)
+  logger.info('broadcast marketplace:payment:ready', {
+    tripId,
+    recipients: rooms.join(', ')
+  })
+
+  return payload
+}
+
 const emitTripPodUploaded = trip => {
   emitToTripAudience('trip:pod:uploaded', {
     trip: trip.toObject ? trip.toObject() : trip
@@ -2864,6 +2982,7 @@ module.exports = {
   emitTripPaused,
   emitTripResumed,
   emitTripMilestoneUpdated,
+  emitMarketplacePaymentReady,
   emitDriverTrackingChanged,
   emitTripPodUploaded,
   emitTripPodApproved,

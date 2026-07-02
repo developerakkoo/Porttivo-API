@@ -15,4 +15,24 @@ module.exports = {
   surepassRcFullUrl: process.env.SUREPASS_RC_FULL_URL || 'https://sandbox.surepass.app/api/v1/rc/rc-full',
   surepassApiToken: process.env.SUREPASS_API_TOKEN || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc4MDkxMzI3NywianRpIjoiMDI0MjI4MTItZDkwNi00ZmNiLWEwNDEtYTFiMWE2YTU5ZTFmIiwidHlwZSI6ImFjY2VzcyIsImlkZW50aXR5IjoiZGV2LmZpbmFuY2VfMTQ4NTYxQHN1cmVwYXNzLmlvIiwibmJmIjoxNzgwOTEzMjc3LCJleHAiOjE3ODM1MDUyNzcsImVtYWlsIjoiZmluYW5jZV8xNDg1NjFAc3VyZXBhc3MuaW8iLCJ0ZW5hbnRfaWQiOiJtYWluIiwidXNlcl9jbGFpbXMiOnsic2NvcGVzIjpbInVzZXIiXX19.h21Zd8pbRV_XRftQ4bL0PsLkN5sH9kdMjlq25DuAg90',
   surepassRequestTimeoutMs: Number(process.env.SUREPASS_REQUEST_TIMEOUT_MS || 10000),
+  payuMode: process.env.PAYU_MODE || 'sandbox',
+  payuKey: process.env.PAYU_KEY || 'twIHLx',
+  payuSalt: process.env.PAYU_SALT || 'Hu0hwsqnioAkcUzuvvS0CuDoqPZB1HPm',
+  payuClientId: process.env.PAYU_CLIENT_ID || '526c53443ef3c4d2052abbe9bea907bd2bf5da0fbcbe19703b8f31dad21627a8',
+  payuClientSecret: process.env.PAYU_CLIENT_SECRET || 'd634b93ded0b5897a6d59e05716e8578e15b2dbb14c0c4f5fdcb25dd1295525d',
+  payuCheckoutUrl:
+    process.env.PAYU_CHECKOUT_URL ||
+    (process.env.PAYU_MODE === 'production'
+      ? 'https://secure.payu.in/_payment'
+      : 'https://test.payu.in/_payment'),
+  payuSuccessUrl:
+    process.env.PAYU_SUCCESS_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/marketplace-payments/payu/webhook`,
+  payuFailureUrl:
+    process.env.PAYU_FAILURE_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/marketplace-payments/payu/webhook`,
+  payuWebhookUrl:
+    process.env.PAYU_WEBHOOK_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/marketplace-payments/payu/webhook`,
+  payuPaymentLinksUrl: process.env.PAYU_PAYMENT_LINKS_URL || '',
 };

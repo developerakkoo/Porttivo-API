@@ -1,11 +1,15 @@
 const Trip = require('../models/Trip')
 const { canTransporterPartyViewTripExecution } = require('../services/tripAccess.service')
+const { fetchMarketplacePaymentSnapshotByTrip } = require('../services/marketplacePayment.service')
 const {
   getBackendMeaning,
   getDriverLabel,
   getMilestoneTypeByNumber
 } = require('../utils/milestoneMapping')
-const { emitTripMilestoneUpdated } = require('../services/socket.service')
+const {
+  emitTripMilestoneUpdated,
+  emitMarketplacePaymentReady
+} = require('../services/socket.service')
 const {
   sendVehicleReachedPickupTemplate,
   sendContainerPickedTemplate
@@ -269,6 +273,18 @@ const updateMilestone = async (req, res, next) => {
               trip
             }),
           'container picked template'
+        )
+      }
+    }
+
+    if (milestoneNum === 1 && trip.isFromBooking && trip.bookingId) {
+      try {
+        const paymentSnapshot = await fetchMarketplacePaymentSnapshotByTrip(trip)
+        await emitMarketplacePaymentReady(trip, paymentSnapshot)
+      } catch (paymentEventError) {
+        console.warn(
+          'Marketplace payment ready broadcast skipped:',
+          paymentEventError.message || paymentEventError
         )
       }
     }
