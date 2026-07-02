@@ -10,6 +10,79 @@ const { getTransporterId, hasPermission } = require('../middleware/permission.mi
 const { assertVehicleTypeAllowed } = require('../services/vehicleTypeCatalog.service');
 const { verifyRcFull } = require('../services/surepass.service');
 
+const formatVehicleResponse = (vehicle) => {
+  if (!vehicle) return null;
+
+  const transporter = vehicle.transporterId && typeof vehicle.transporterId === 'object'
+    ? vehicle.transporterId
+    : null;
+  const originalOwner = vehicle.originalOwnerId && typeof vehicle.originalOwnerId === 'object'
+    ? vehicle.originalOwnerId
+    : null;
+  const driver = vehicle.driverId && typeof vehicle.driverId === 'object'
+    ? vehicle.driverId
+    : null;
+
+  return {
+    id: vehicle._id.toString(),
+    vehicleNumber: vehicle.vehicleNumber,
+    transporter: transporter
+      ? {
+          id: transporter._id.toString(),
+          mobile: transporter.mobile,
+          name: transporter.name,
+          email: transporter.email,
+          company: transporter.company,
+          status: transporter.status,
+          hasAccess: transporter.hasAccess,
+        }
+      : null,
+    transporterId: vehicle.transporterId?._id?.toString?.() || vehicle.transporterId?.toString?.() || vehicle.transporterId || null,
+    ownerType: vehicle.ownerType,
+    originalOwner: originalOwner
+      ? {
+          id: originalOwner._id.toString(),
+          mobile: originalOwner.mobile,
+          name: originalOwner.name,
+          email: originalOwner.email,
+          company: originalOwner.company,
+          status: originalOwner.status,
+          hasAccess: originalOwner.hasAccess,
+        }
+      : null,
+    originalOwnerId: vehicle.originalOwnerId?._id?.toString?.() || vehicle.originalOwnerId?.toString?.() || vehicle.originalOwnerId || null,
+    driver: driver
+      ? {
+          id: driver._id.toString(),
+          name: driver.name,
+          mobile: driver.mobile,
+          status: driver.status,
+        }
+      : null,
+    driverId: vehicle.driverId?._id?.toString?.() || vehicle.driverId?.toString?.() || vehicle.driverId || null,
+    status: vehicle.status,
+    isBusy: vehicle.isBusy,
+    vehicleType: vehicle.vehicleType || null,
+    trailerType: vehicle.trailerType || null,
+    documents: vehicle.documents || {},
+    rcVerification: vehicle.rcVerification
+      ? {
+          verified: !!vehicle.rcVerification.verified,
+          status: vehicle.rcVerification.status || 'pending',
+          source: vehicle.rcVerification.source || 'surepass',
+          checkedAt: vehicle.rcVerification.checkedAt || null,
+          statusCode: vehicle.rcVerification.statusCode ?? null,
+          message: vehicle.rcVerification.message || null,
+          messageCode: vehicle.rcVerification.messageCode || null,
+          verifiedVehicleNumber: vehicle.rcVerification.verifiedVehicleNumber || null,
+          rawResponse: vehicle.rcVerification.rawResponse || null,
+        }
+      : null,
+    createdAt: vehicle.createdAt,
+    updatedAt: vehicle.updatedAt,
+  };
+};
+
 const validateDriverVehicleLink = async ({ driverId, transporterId, excludeVehicleId = null }) => {
   const driver = await Driver.findOne({
     _id: driverId,
@@ -112,8 +185,9 @@ const getVehicles = async (req, res, next) => {
 
     // Get vehicles with populated driver info
     let vehicles = await Vehicle.find(query)
+      .populate('transporterId', 'mobile name email company status hasAccess')
+      .populate('originalOwnerId', 'mobile name email company status hasAccess')
       .populate('driverId', 'name mobile status')
-      .populate('originalOwnerId', 'name company')
       .sort({ createdAt: -1 });
 
     if (availableForTrip === 'true') {
@@ -136,35 +210,7 @@ const getVehicles = async (req, res, next) => {
       success: true,
       message: 'Vehicles retrieved successfully',
       data: {
-        vehicles: vehicles.map((vehicle) => ({
-          id: vehicle._id.toString(),
-          vehicleNumber: vehicle.vehicleNumber,
-          transporterId: vehicle.transporterId?.toString() || vehicle.transporterId,
-          ownerType: vehicle.ownerType,
-          originalOwnerId: vehicle.originalOwnerId
-            ? typeof vehicle.originalOwnerId === 'object' && vehicle.originalOwnerId._id
-              ? vehicle.originalOwnerId._id.toString()
-              : vehicle.originalOwnerId.toString()
-            : null,
-          driverId: vehicle.driverId
-            ? typeof vehicle.driverId === 'object' && vehicle.driverId._id
-              ? vehicle.driverId._id.toString()
-              : vehicle.driverId.toString()
-            : null,
-          driver: vehicle.driverId
-            ? {
-                id: vehicle.driverId._id.toString(),
-                name: vehicle.driverId.name,
-                mobile: vehicle.driverId.mobile,
-                status: vehicle.driverId.status,
-              }
-            : null,
-          status: vehicle.status,
-          trailerType: vehicle.trailerType,
-          documents: vehicle.documents,
-          createdAt: vehicle.createdAt,
-          updatedAt: vehicle.updatedAt,
-        })),
+        vehicles: vehicles.map(formatVehicleResponse),
         count: vehicles.length,
       },
     });
@@ -291,42 +337,17 @@ const createVehicle = async (req, res, next) => {
     });
 
     // Populate driver info
-    await vehicle.populate('driverId', 'name mobile status');
+    await vehicle.populate([
+      { path: 'transporterId', select: 'mobile name email company status hasAccess' },
+      { path: 'originalOwnerId', select: 'mobile name email company status hasAccess' },
+      { path: 'driverId', select: 'name mobile status' },
+    ]);
 
     return res.status(201).json({
       success: true,
       message: 'Vehicle created successfully',
       data: {
-        vehicle: {
-          id: vehicle._id.toString(),
-          vehicleNumber: vehicle.vehicleNumber,
-          transporterId: vehicle.transporterId?.toString() || vehicle.transporterId,
-          ownerType: vehicle.ownerType,
-          originalOwnerId: vehicle.originalOwnerId
-            ? typeof vehicle.originalOwnerId === 'object' && vehicle.originalOwnerId._id
-              ? vehicle.originalOwnerId._id.toString()
-              : vehicle.originalOwnerId.toString()
-            : null,
-          driverId: vehicle.driverId
-            ? typeof vehicle.driverId === 'object' && vehicle.driverId._id
-              ? vehicle.driverId._id.toString()
-              : vehicle.driverId.toString()
-            : null,
-          driver: vehicle.driverId
-            ? {
-                id: vehicle.driverId._id.toString(),
-                name: vehicle.driverId.name,
-                mobile: vehicle.driverId.mobile,
-                status: vehicle.driverId.status,
-              }
-            : null,
-          status: vehicle.status,
-          trailerType: vehicle.trailerType,
-          vehicleType: vehicle.vehicleType || null,
-          documents: vehicle.documents,
-          createdAt: vehicle.createdAt,
-          updatedAt: vehicle.updatedAt,
-        },
+        vehicle: formatVehicleResponse(vehicle),
         verification: {
           verified: !!vehicle.rcVerification?.verified,
           status: vehicle.rcVerification?.status || 'pending',
@@ -350,7 +371,10 @@ const getVehicleById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const vehicle = await Vehicle.findById(id).populate('driverId', 'name mobile status');
+    const vehicle = await Vehicle.findById(id)
+      .populate('transporterId', 'mobile name email company status hasAccess')
+      .populate('originalOwnerId', 'mobile name email company status hasAccess')
+      .populate('driverId', 'name mobile status');
 
     if (!vehicle) {
       return res.status(404).json({
@@ -375,35 +399,7 @@ const getVehicleById = async (req, res, next) => {
       success: true,
       message: 'Vehicle retrieved successfully',
       data: {
-        vehicle: {
-          id: vehicle._id.toString(),
-          vehicleNumber: vehicle.vehicleNumber,
-          transporterId: vehicle.transporterId?.toString() || vehicle.transporterId,
-          ownerType: vehicle.ownerType,
-          originalOwnerId: vehicle.originalOwnerId
-            ? typeof vehicle.originalOwnerId === 'object' && vehicle.originalOwnerId._id
-              ? vehicle.originalOwnerId._id.toString()
-              : vehicle.originalOwnerId.toString()
-            : null,
-          driverId: vehicle.driverId
-            ? typeof vehicle.driverId === 'object' && vehicle.driverId._id
-              ? vehicle.driverId._id.toString()
-              : vehicle.driverId.toString()
-            : null,
-          driver: vehicle.driverId
-            ? {
-                id: vehicle.driverId._id.toString(),
-                name: vehicle.driverId.name,
-                mobile: vehicle.driverId.mobile,
-                status: vehicle.driverId.status,
-              }
-            : null,
-          status: vehicle.status,
-          trailerType: vehicle.trailerType,
-          documents: vehicle.documents,
-          createdAt: vehicle.createdAt,
-          updatedAt: vehicle.updatedAt,
-        },
+        vehicle: formatVehicleResponse(vehicle),
       },
     });
   } catch (error) {
