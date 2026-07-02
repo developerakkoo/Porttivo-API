@@ -23,6 +23,8 @@ const formatVehicleResponse = (vehicle) => {
     ? vehicle.driverId
     : null;
 
+  const hasSurepassVerification = vehicle.rcVerification?.source === 'surepass' && vehicle.rcVerification?.statusCode === 200;
+
   return {
     id: vehicle._id.toString(),
     vehicleNumber: vehicle.vehicleNumber,
@@ -68,6 +70,7 @@ const formatVehicleResponse = (vehicle) => {
     rcVerification: vehicle.rcVerification
       ? {
           verified: !!vehicle.rcVerification.verified,
+          verifiedBadge: hasSurepassVerification,
           status: vehicle.rcVerification.status || 'pending',
           source: vehicle.rcVerification.source || 'surepass',
           checkedAt: vehicle.rcVerification.checkedAt || null,
@@ -78,6 +81,7 @@ const formatVehicleResponse = (vehicle) => {
           rawResponse: vehicle.rcVerification.rawResponse || null,
         }
       : null,
+    verifiedBadge: hasSurepassVerification,
     createdAt: vehicle.createdAt,
     updatedAt: vehicle.updatedAt,
   };
@@ -350,6 +354,7 @@ const createVehicle = async (req, res, next) => {
         vehicle: formatVehicleResponse(vehicle),
         verification: {
           verified: !!vehicle.rcVerification?.verified,
+          verifiedBadge: vehicle.rcVerification?.source === 'surepass' && vehicle.rcVerification?.statusCode === 200,
           status: vehicle.rcVerification?.status || 'pending',
           source: vehicle.rcVerification?.source || 'surepass',
           checkedAt: vehicle.rcVerification?.checkedAt || null,
