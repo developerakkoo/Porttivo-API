@@ -33,6 +33,7 @@ const notificationRoutes = require('./src/routes/notification.routes');
 const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
 const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
 const marketplacePaymentRoutes = require('./src/routes/marketplacePayment.routes');
+const paymentRoutes = require('./src/routes/payment.routes');
 const messageRoutes = require('./src/routes/message.routes');
 const supportTransporterRoutes = require('./src/routes/supportTransporter.routes');
 const supportCustomerRoutes = require('./src/routes/supportCustomer.routes');
@@ -72,7 +73,11 @@ app.set('views', path.join(__dirname, 'src/views'));
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf ? buf.toString('utf8') : '';
+  }
+}));
 app.use(express.urlencoded({ extended: true }));
 app.use(logApiRequest);
 
@@ -121,6 +126,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/vehicle-posts', vehiclePostRoutes);
 app.use('/api/vehicle-bookings', vehicleBookingRoutes);
 app.use('/api/marketplace-payments', marketplacePaymentRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/messages', messageRoutes);
 
 // 404 handler

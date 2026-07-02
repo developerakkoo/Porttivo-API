@@ -3,6 +3,7 @@ const path = require('node:path');
 const mongoose = require('mongoose');
 const { loadWithMocks } = require('../tests/helpers/loadWithMocks');
 const { createMockRes } = require('../tests/helpers/http');
+const paymentScreenTests = require('../tests/paymentScreen.test');
 
 const buildTripCreateController = (overrides = {}) =>
   loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
@@ -80,6 +81,7 @@ const buildTripCreateController = (overrides = {}) =>
   });
 
 const tests = [
+  ...paymentScreenTests,
   {
     name: 'trip creation auto-fills driver when vehicle is selected',
     async run() {

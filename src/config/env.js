@@ -35,4 +35,34 @@ module.exports = {
     process.env.PAYU_WEBHOOK_URL ||
     `http://localhost:${process.env.PORT || 3000}/api/marketplace-payments/payu/webhook`,
   payuPaymentLinksUrl: process.env.PAYU_PAYMENT_LINKS_URL || '',
+  paymentScreenPayuSuccessUrl:
+    process.env.PAYMENT_SCREEN_PAYU_SUCCESS_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/payments/payu/webhook`,
+  paymentScreenPayuFailureUrl:
+    process.env.PAYMENT_SCREEN_PAYU_FAILURE_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/payments/payu/webhook`,
+  paymentScreenPayuWebhookUrl:
+    process.env.PAYMENT_SCREEN_PAYU_WEBHOOK_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/payments/payu/webhook`,
+  cashfreeMode: process.env.CASHFREE_MODE || 'sandbox',
+  cashfreeClientId: process.env.CASHFREE_CLIENT_ID || 'TEST109808845e5fe00f7bbaa0e9aeb148808901',
+  cashfreeClientSecret: process.env.CASHFREE_CLIENT_SECRET || 'cfsk_ma_test_9bcfa79b624f3de0e0e7699c5eb37bd1_6cf1ef64',
+  cashfreeWebhookSecret: process.env.CASHFREE_WEBHOOK_SECRET || process.env.CASHFREE_CLIENT_SECRET || '',
+  cashfreeApiVersion: process.env.CASHFREE_API_VERSION || '2023-08-01',
+  cashfreeApiBaseUrl:
+    process.env.CASHFREE_API_BASE_URL ||
+    (process.env.CASHFREE_MODE === 'production'
+      ? 'https://api.cashfree.com/pg'
+      : 'https://sandbox.cashfree.com/pg'),
+  cashfreeCheckoutUrl:
+    process.env.CASHFREE_CHECKOUT_URL ||
+    (process.env.CASHFREE_MODE === 'production'
+      ? 'https://payments.cashfree.com/checkout'
+      : 'https://sandbox.cashfree.com/checkout'),
+  cashfreeReturnUrl:
+    process.env.CASHFREE_RETURN_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/payments/cashfree/webhook`,
+  cashfreeWebhookUrl:
+    process.env.CASHFREE_WEBHOOK_URL ||
+    `http://localhost:${process.env.PORT || 3000}/api/payments/cashfree/webhook`,
 };

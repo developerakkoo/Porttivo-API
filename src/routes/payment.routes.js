@@ -1,0 +1,20 @@
+const express = require('express')
+const router = express.Router()
+const { authenticate } = require('../middleware/auth.middleware')
+const {
+  getPaymentGatewayOptions,
+  initiatePaymentSession,
+  getPaymentSessionStatus,
+  getPaymentSessionByReference,
+  handleGatewayWebhook
+} = require('../controllers/payment.controller')
+
+router.get('/gateways', authenticate, getPaymentGatewayOptions)
+router.post('/sessions', authenticate, initiatePaymentSession)
+router.get('/sessions/:id', authenticate, getPaymentSessionStatus)
+router.get('/references/:referenceType/:referenceId', authenticate, getPaymentSessionByReference)
+
+router.post('/:provider/webhook', handleGatewayWebhook)
+router.get('/:provider/webhook', handleGatewayWebhook)
+
+module.exports = router
