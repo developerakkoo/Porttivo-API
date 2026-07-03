@@ -122,6 +122,47 @@ test('createVehicle stores RC verification and returns a summary', async () => {
   assert.equal(res.body.data.verification.status, 'verified');
 });
 
+test('verifyVehicleNumber returns simplified SurePass verification result', async () => {
+  const controller = loadWithMocks('../src/controllers/vehicle.controller.js', {
+    '../services/surepass.service': {
+      verifyRcFull: async (vehicleNumber) => ({
+        ok: true,
+        verified: true,
+        status: 'verified',
+        statusCode: 200,
+        message: null,
+        messageCode: 'success',
+        rawResponse: { success: true, data: { rc_number: vehicleNumber } },
+        data: { rc_number: vehicleNumber },
+        verifiedAt: new Date('2026-07-01T00:00:00.000Z'),
+        source: 'surepass',
+      }),
+    },
+    '../utils/vehicleValidation': {
+      validateIndianVehicleRegistrationFormat: (raw) => ({
+        normalized: raw.replace(/\s+/g, '').toUpperCase(),
+      }),
+    },
+  });
+
+  const req = {
+    body: { vehicleNumber: 'AB 12 CD 3456' },
+    user: { id: 'transporter-1', userType: 'transporter' },
+  };
+  const res = createMockRes();
+
+  await controller.verifyVehicleNumber(req, res, (error) => {
+    throw error;
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.status_code, 200);
+  assert.equal(res.body.message, null);
+  assert.equal(res.body.message_code, 'success');
+  assert.equal(res.body.isVerified, true);
+});
+
 test('admin vehicle details expose the stored RC payload', async () => {
   const controller = loadWithMocks('../src/controllers/admin.controller.js', {
     '../models/Admin': {},

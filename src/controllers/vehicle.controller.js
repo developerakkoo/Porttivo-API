@@ -370,6 +370,41 @@ const createVehicle = async (req, res, next) => {
 };
 
 /**
+ * Verify vehicle registration number against SurePass
+ * POST /api/vehicles/verify
+ */
+const verifyVehicleNumber = async (req, res, next) => {
+  try {
+    const { vehicleNumber } = req.body;
+    const validation = validateIndianVehicleRegistrationFormat(vehicleNumber);
+
+    if (validation.error) {
+      return res.status(400).json({
+        success: false,
+        status_code: 400,
+        message: validation.error,
+        message_code: 'invalid_input',
+        isVerified: false,
+      });
+    }
+
+    const rcVerification = await verifyRcFull(validation.normalized);
+    const statusCode = rcVerification.statusCode || 500;
+    const responseBody = {
+      success: !!rcVerification.ok,
+      status_code: statusCode,
+      message: rcVerification.message || null,
+      message_code: rcVerification.messageCode || null,
+      isVerified: !!rcVerification.verified,
+    };
+
+    return res.status(rcVerification.ok ? 200 : statusCode).json(responseBody);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Get vehicle by ID
  * GET /api/vehicles/:id
  */
@@ -926,4 +961,5 @@ module.exports = {
   updateVehicle,
   deleteVehicle,
   getVehicleTrips,
+  verifyVehicleNumber,
 };

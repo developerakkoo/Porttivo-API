@@ -9,6 +9,7 @@ const {
   updateVehicle,
   deleteVehicle,
   getVehicleTrips,
+  verifyVehicleNumber,
 } = require('../controllers/vehicle.controller');
 const {
   uploadDocument,
@@ -34,6 +35,13 @@ router.get('/', getVehicles);
  * @access  Private (Transporter only)
  */
 router.post('/', createVehicle);
+
+/**
+ * @route   POST /api/vehicles/verify
+ * @desc    Verify a vehicle number using SurePass
+ * @access  Private
+ */
+router.post('/verify', verifyVehicleNumber);
 
 /**
  * @route   POST /api/vehicles/bulk-import
