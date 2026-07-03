@@ -25,8 +25,8 @@ const buildResourceTripQuery = (resourceField, resourceId, statuses, excludeTrip
   return query;
 };
 
-/** Indian vehicle registration (standard): 2 letters + 2 digits + 2 letters + 4 digits (10 chars), e.g. MH12AB3434 */
-const INDIAN_VEHICLE_REGISTRATION_RE = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
+/** Indian vehicle registration: 2 letters + 2 digits + 1-2 letters (series) + 4 digits (9 or 10 chars), e.g. MH01A1234 or MH12AB3434 */
+const INDIAN_VEHICLE_REGISTRATION_RE = /^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$/;
 
 /**
  * Normalize Indian registration: remove whitespace, uppercase.
@@ -44,7 +44,7 @@ const normalizeIndianVehicleRegistration = (raw) => {
  */
 const isValidIndianVehicleRegistration = (normalized) =>
   typeof normalized === 'string' &&
-  normalized.length === 10 &&
+  (normalized.length === 9 || normalized.length === 10) &&
   INDIAN_VEHICLE_REGISTRATION_RE.test(normalized);
 
 /**
@@ -59,7 +59,7 @@ const validateIndianVehicleRegistrationFormat = (raw) => {
   if (!isValidIndianVehicleRegistration(normalized)) {
     return {
       error:
-        'Invalid vehicle registration. Use 10 characters: 2 letters (state), 2 digits, 2 letters, 4 digits (e.g. MH12AB3434).',
+        'Invalid vehicle registration. Use 9 or 10 characters: 2 letters (state), 2 digits, 1-2 letters (series), 4 digits (e.g. MH01A1234 or MH12AB3434).',
     };
   }
   return { normalized };
