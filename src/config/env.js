@@ -13,7 +13,7 @@ module.exports = {
   watiDefaultCountryCode: process.env.WATI_DEFAULT_COUNTRY_CODE || '91',
   watiBroadcastPrefix: process.env.WATI_BROADCAST_PREFIX || 'porttivo',
   surepassRcFullUrl: process.env.SUREPASS_RC_FULL_URL || 'https://sandbox.surepass.app/api/v1/rc/rc-full',
-  surepassApiToken: process.env.SUREPASS_API_TOKEN || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc4MDkxMzI3NywianRpIjoiMDI0MjI4MTItZDkwNi00ZmNiLWEwNDEtYTFiMWE2YTU5ZTFmIiwidHlwZSI6ImFjY2VzcyIsImlkZW50aXR5IjoiZGV2LmZpbmFuY2VfMTQ4NTYxQHN1cmVwYXNzLmlvIiwibmJmIjoxNzgwOTEzMjc3LCJleHAiOjE3ODM1MDUyNzcsImVtYWlsIjoiZmluYW5jZV8xNDg1NjFAc3VyZXBhc3MuaW8iLCJ0ZW5hbnRfaWQiOiJtYWluIiwidXNlcl9jbGFpbXMiOnsic2NvcGVzIjpbInVzZXIiXX19.h21Zd8pbRV_XRftQ4bL0PsLkN5sH9kdMjlq25DuAg90',
+  surepassApiToken: process.env.SUREPASS_API_TOKEN || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc4MzA2NjY4MiwianRpIjoiYTRkNzIwNmYtMGYwNy00MWYxLWEwMGQtYjM3OTQzOTk0N2JlIiwidHlwZSI6ImFjY2VzcyIsImlkZW50aXR5IjoiZGV2LmZpbmFuY2VfMTQ4NTYxQHN1cmVwYXNzLmlvIiwibmJmIjoxNzgzMDY2NjgyLCJleHAiOjE3ODU2NTg2ODIsImVtYWlsIjoiZmluYW5jZV8xNDg1NjFAc3VyZXBhc3MuaW8iLCJ0ZW5hbnRfaWQiOiJtYWluIiwidXNlcl9jbGFpbXMiOnsic2NvcGVzIjpbInVzZXIiXX19.k-jyMC6OR92QDDYmfkP0zGnXcr-BY5LK7r5gMcy0IOI',
   surepassRequestTimeoutMs: Number(process.env.SUREPASS_REQUEST_TIMEOUT_MS || 10000),
   payuMode: process.env.PAYU_MODE || 'sandbox',
   payuKey: process.env.PAYU_KEY || 'twIHLx',
