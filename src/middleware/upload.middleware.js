@@ -123,6 +123,35 @@ const uploadChatFiles = multer({
   fileFilter: chatFileFilter,
 }).array('files', 5);
 
+// Spreadsheet upload (bulk fleet import) - parsed in-memory, never persisted to disk
+const spreadsheetAllowedMimes = [
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+  'application/vnd.ms-excel', // .xls / some .csv
+  'text/csv',
+  'application/csv',
+  'text/plain', // some browsers/OSes report .csv as text/plain
+  'application/octet-stream', // fallback for csv/xlsx with unknown mime
+];
+
+const spreadsheetFileFilter = (req, file, cb) => {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const extAllowed = ['.xlsx', '.xls', '.csv'].includes(ext);
+  if (spreadsheetAllowedMimes.includes(file.mimetype) || extAllowed) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error('Invalid file type. Only .xlsx, .xls and .csv files are allowed.'),
+      false
+    );
+  }
+};
+
+const uploadSpreadsheet = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: spreadsheetFileFilter,
+}).single('file');
+
 // Error handler for multer errors
 const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -153,5 +182,6 @@ module.exports = {
   uploadReceipt,
   upload,
   uploadChatFiles,
+  uploadSpreadsheet,
   handleMulterError,
 };

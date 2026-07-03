@@ -4,6 +4,7 @@ const { authenticate } = require('../middleware/auth.middleware');
 const {
   getVehicles,
   createVehicle,
+  bulkImportVehicles,
   getVehicleById,
   updateVehicle,
   deleteVehicle,
@@ -15,6 +16,7 @@ const {
   getExpiringDocuments,
 } = require('../controllers/vehicleDocument.controller');
 const { getAvailability } = require('../controllers/vehicleAvailability.controller');
+const { uploadSpreadsheet, handleMulterError } = require('../middleware/upload.middleware');
 
 // All routes require authentication
 router.use(authenticate);
@@ -32,6 +34,13 @@ router.get('/', getVehicles);
  * @access  Private (Transporter only)
  */
 router.post('/', createVehicle);
+
+/**
+ * @route   POST /api/vehicles/bulk-import
+ * @desc    Bulk import fleet (vehicles + drivers) from an xlsx/csv file
+ * @access  Private (Transporter only)
+ */
+router.post('/bulk-import', uploadSpreadsheet, handleMulterError, bulkImportVehicles);
 
 /**
  * @route   GET /api/vehicles/:id

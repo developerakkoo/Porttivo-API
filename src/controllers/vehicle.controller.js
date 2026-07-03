@@ -1,3 +1,4 @@
+const XLSX = require('xlsx');
 const Vehicle = require('../models/Vehicle');
 const Trip = require('../models/Trip');
 const Driver = require('../models/Driver');
@@ -693,9 +694,234 @@ const getVehicleTrips = async (req, res, next) => {
 };
 
 
+/**
+ * Read a value from a parsed spreadsheet row using a list of candidate header
+ * names (case-insensitive, ignores spaces/underscores).
+ */
+const pickCell = (row, candidates) => {
+  const normalizedKeys = {};
+  for (const key of Object.keys(row)) {
+    normalizedKeys[key.toLowerCase().replace(/[\s_]+/g, '')] = key;
+  }
+  for (const candidate of candidates) {
+    const norm = candidate.toLowerCase().replace(/[\s_]+/g, '');
+    if (normalizedKeys[norm] !== undefined) {
+      const value = row[normalizedKeys[norm]];
+      return value === null || value === undefined ? '' : String(value).trim();
+    }
+  }
+  return '';
+};
+
+const deferredRcSnapshot = (vehicleNumber) => ({
+  verified: false,
+  status: 'pending',
+  source: 'surepass',
+  checkedAt: null,
+  statusCode: null,
+  message: 'RC verification deferred for bulk import',
+  messageCode: null,
+  verifiedVehicleNumber: vehicleNumber,
+  rawResponse: null,
+});
+
+/**
+ * Bulk import fleet from an uploaded spreadsheet (.xlsx/.xls/.csv).
+ * Expected columns: vehicleNumber, vehicleType, driverName, driverMobile.
+ * All rows are treated as OWN vehicles. RC verification is deferred.
+ * POST /api/vehicles/bulk-import
+ */
+const bulkImportVehicles = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user);
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters and authorized company users can import fleet.',
+      });
+    }
+
+    if (req.user.userType === 'company-user' && !hasPermission(req.user, 'manageVehicles')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to import fleet.',
+      });
+    }
+
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded. Please attach an .xlsx or .csv file in the "file" field.',
+      });
+    }
+
+    let rows;
+    try {
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) {
+        return res.status(400).json({
+          success: false,
+          message: 'The uploaded file has no sheets.',
+        });
+      }
+      rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+    } catch (parseError) {
+      return res.status(400).json({
+        success: false,
+        message: 'Could not read the file. Please upload a valid .xlsx, .xls or .csv file.',
+      });
+    }
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'The file has no data rows.',
+      });
+    }
+
+    const results = [];
+    let succeeded = 0;
+    let failed = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      // +2 => account for header row and 1-based spreadsheet numbering
+      const rowNumber = i + 2;
+      const row = rows[i];
+
+      const rawVehicleNumber = pickCell(row, ['vehicleNumber', 'vehicle number', 'vehicle no', 'vehicleno']);
+      const rawVehicleType = pickCell(row, ['vehicleType', 'vehicle type', 'type']);
+      const rawDriverName = pickCell(row, ['driverName', 'driver name', 'driver']);
+      const rawDriverMobile = pickCell(row, ['driverMobile', 'driver mobile', 'mobile', 'phone', 'driver phone']);
+
+      // Skip completely empty rows silently
+      if (!rawVehicleNumber && !rawVehicleType && !rawDriverName && !rawDriverMobile) {
+        continue;
+      }
+
+      try {
+        if (!rawVehicleNumber) {
+          throw new Error('Vehicle number is required');
+        }
+
+        const formatResult = validateIndianVehicleRegistrationFormat(rawVehicleNumber);
+        if (formatResult.error) {
+          throw new Error(formatResult.error);
+        }
+        const cleanedVehicleNumber = formatResult.normalized;
+
+        const existingOwnVehicle = await Vehicle.findOne({
+          vehicleNumber: cleanedVehicleNumber,
+          ownerType: 'OWN',
+        });
+        if (existingOwnVehicle) {
+          throw new Error('Vehicle with this number already exists as OWN');
+        }
+
+        // Validate vehicle type (if provided)
+        let finalVehicleType = null;
+        if (rawVehicleType) {
+          const typeCheck = await assertVehicleTypeAllowed(rawVehicleType, {
+            transporterId,
+            allowOwnPending: true,
+          });
+          if (!typeCheck.ok) {
+            throw new Error(typeCheck.message);
+          }
+          finalVehicleType = typeCheck.name;
+        }
+
+        // Resolve / create driver (optional)
+        let driverId = null;
+        if (rawDriverMobile) {
+          const digits = rawDriverMobile.replace(/[^0-9]/g, '');
+          const cleanedMobile = digits.length > 10 ? digits.slice(-10) : digits;
+          if (cleanedMobile.length !== 10) {
+            throw new Error('Driver mobile must be 10 digits');
+          }
+
+          let driver = await Driver.findOne({ mobile: cleanedMobile });
+          if (driver) {
+            if (driver.transporterId && driver.transporterId.toString() !== transporterId.toString()) {
+              throw new Error('Driver mobile is linked to another transporter');
+            }
+            // Adopt an unlinked existing driver
+            if (!driver.transporterId) {
+              driver.transporterId = transporterId;
+              if (driver.status !== 'active') driver.status = 'active';
+              await driver.save();
+            }
+          } else {
+            driver = await Driver.create({
+              mobile: cleanedMobile,
+              name: rawDriverName || '',
+              transporterId,
+              status: 'active',
+            });
+          }
+
+          // Ensure the driver is assignable (active and not already on another vehicle)
+          const linkCheck = await validateDriverVehicleLink({
+            driverId: driver._id.toString(),
+            transporterId,
+          });
+          if (linkCheck.error) {
+            throw new Error(linkCheck.error);
+          }
+          driverId = driver._id.toString();
+        }
+
+        const vehicle = await Vehicle.create({
+          vehicleNumber: cleanedVehicleNumber,
+          transporterId,
+          ownerType: 'OWN',
+          originalOwnerId: req.user.id,
+          driverId,
+          vehicleType: finalVehicleType,
+          status: 'active',
+          rcVerification: deferredRcSnapshot(cleanedVehicleNumber),
+        });
+
+        succeeded += 1;
+        results.push({
+          row: rowNumber,
+          success: true,
+          vehicleNumber: cleanedVehicleNumber,
+          vehicleId: vehicle._id.toString(),
+          driverId,
+        });
+      } catch (rowError) {
+        failed += 1;
+        results.push({
+          row: rowNumber,
+          success: false,
+          vehicleNumber: rawVehicleNumber || null,
+          error: rowError.message || 'Failed to import row',
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Bulk import completed',
+      data: {
+        summary: {
+          total: succeeded + failed,
+          succeeded,
+          failed,
+        },
+        results,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getVehicles,
   createVehicle,
+  bulkImportVehicles,
   getVehicleById,
   updateVehicle,
   deleteVehicle,
