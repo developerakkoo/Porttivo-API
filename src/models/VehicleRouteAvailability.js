@@ -31,6 +31,28 @@ const locationSchema = new mongoose.Schema(
   { _id: false }
 )
 
+// Per-route directional pricing. exportRate / importRate === null => "Negotiable".
+const routeSchema = new mongoose.Schema(
+  {
+    destination: {
+      type: locationSchema,
+      required: true,
+      set: normalizeLocationInput
+    },
+    exportRate: {
+      type: Number,
+      default: null,
+      min: 0
+    },
+    importRate: {
+      type: Number,
+      default: null,
+      min: 0
+    }
+  },
+  { _id: true }
+)
+
 const vehicleRouteAvailabilitySchema = new mongoose.Schema(
   {
     transporterId: {
@@ -71,6 +93,23 @@ const vehicleRouteAvailabilitySchema = new mongoose.Schema(
     destinations: {
       type: [locationSchema],
       default: []
+    },
+
+    /**
+     * Preferred routes with per-direction rates (Export/Import). One post is a
+     * single pooled capacity that can serve any of these routes; the buyer picks
+     * a route + direction at booking time. `destination` mirrors routes[0] for
+     * legacy display/search compatibility.
+     */
+    routes: {
+      type: [routeSchema],
+      default: []
+    },
+
+    /** "Any Other Destination - Rate on Request" negotiable catch-all. */
+    acceptsOtherDestinations: {
+      type: Boolean,
+      default: false
     },
 
     /**

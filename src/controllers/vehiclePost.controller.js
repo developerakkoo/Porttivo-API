@@ -10,6 +10,11 @@ const {
   validateLocationInput
 } = require('../utils/location')
 const { parseOptionalPricePerVehicle } = require('../utils/vehiclePostPrice.util')
+const {
+  parseRoutesInput,
+  minListedRate,
+  routesApiFields
+} = require('../utils/vehiclePostRoutes.util')
 const { assertVehicleTypeAllowed } = require('../services/vehicleTypeCatalog.service')
 const {
   canonicalDestinationStopCount,
@@ -56,7 +61,8 @@ function postDestinationApiFields(p) {
     destination: p.destination ?? null,
     destinations: Array.isArray(p.destinations) ? p.destinations : [],
     destinationsAll: all,
-    destinationQuantities: getDestinationQuantitiesResolved(p)
+    destinationQuantities: getDestinationQuantitiesResolved(p),
+    ...routesApiFields(p)
   }
 }
 
@@ -233,6 +239,33 @@ const createAvailability = async (req, res, next) => {
       return res.status(400).json({ success: false, message: destParsed.error })
     }
 
+    // Per-route directional pricing (new "Post Availability" model). When routes
+    // are provided, the listing is a single pooled capacity that can serve any
+    // route; destination mirrors routes[0] for legacy display/search.
+    const routesParsed = parseRoutesInput(req.body.routes)
+    if (!routesParsed.ok) {
+      return res.status(400).json({ success: false, message: routesParsed.message })
+    }
+    const acceptsOtherDestinations =
+      req.body.acceptsOtherDestinations === true ||
+      req.body.acceptsOtherDestinations === 'true'
+
+    let primaryDestination = destParsed.primary
+    let additionalDestinations = destParsed.additional
+    if (routesParsed.routes.length > 0) {
+      primaryDestination = routesParsed.routes[0].destination
+      additionalDestinations = []
+    } else if (
+      routesParsed.routes.length === 0 &&
+      !acceptsOtherDestinations &&
+      Object.prototype.hasOwnProperty.call(req.body, 'routes')
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Add at least one route or enable "Any Other Destination"'
+      })
+    }
+
     // vehicleType is required and must exist in VehicleType collection
     const typeCheck = await assertVehicleTypeAllowed(vehicleType, {
       transporterId,
@@ -312,10 +345,20 @@ const createAvailability = async (req, res, next) => {
         message: priceResultCreate.message
       })
     }
+    // Fall back to the lowest listed route rate for the "From Rs X" summary.
+    let effectivePricePerVehicle = priceResultCreate.value
+    if (
+      routesParsed.routes.length > 0 &&
+      (pricePerVehicle === undefined ||
+        pricePerVehicle === null ||
+        (typeof pricePerVehicle === 'string' && pricePerVehicle.trim() === ''))
+    ) {
+      effectivePricePerVehicle = minListedRate(routesParsed.routes)
+    }
 
     const numStops = canonicalDestinationStopCount(
-      destParsed.primary,
-      destParsed.additional
+      primaryDestination,
+      additionalDestinations
     )
     const dqParsed = parseDestinationQuantitiesInput(req.body, numStops, quantity)
     if (!dqParsed.ok) {
@@ -328,12 +371,14 @@ const createAvailability = async (req, res, next) => {
       vehicleId: vehicleId || null,
       vehicleType: validatedVehicleType,
       origin: normalizeLocationInput(origin),
-      destination: destParsed.primary,
-      destinations: destParsed.additional,
+      destination: primaryDestination,
+      destinations: additionalDestinations,
+      routes: routesParsed.routes,
+      acceptsOtherDestinations,
       destinationQuantities: dqParsed.quantities,
       quantity: totalQty,
       slotsLeft: totalQty,
-      pricePerVehicle: priceResultCreate.value,
+      pricePerVehicle: effectivePricePerVehicle,
       availableFrom: fromDate,
       availableTo: toDate,
       note: note || null,
@@ -447,6 +492,13 @@ const searchAvailability = async (req, res, next) => {
                 formattedAddress: { $regex: pattern, $options: 'i' }
               }
             }
+          },
+          {
+            routes: {
+              $elemMatch: {
+                'destination.formattedAddress': { $regex: pattern, $options: 'i' }
+              }
+            }
           }
         ]
       })
@@ -468,6 +520,13 @@ const searchAvailability = async (req, res, next) => {
             destinations: {
               $elemMatch: {
                 formattedAddress: { $regex: pattern, $options: 'i' }
+              }
+            }
+          },
+          {
+            routes: {
+              $elemMatch: {
+                'destination.formattedAddress': { $regex: pattern, $options: 'i' }
               }
             }
           }
@@ -853,6 +912,33 @@ const updateAvailability = async (req, res, next) => {
       post.destination = destUpdate.primary
       post.destinations = destUpdate.additional
     }
+
+    // Per-route directional pricing. When routes are sent, they own the primary
+    // destination (single pooled bucket) and drive the "From Rs X" summary.
+    if (Object.prototype.hasOwnProperty.call(req.body, 'routes')) {
+      const routesParsed = parseRoutesInput(req.body.routes)
+      if (!routesParsed.ok) {
+        return res
+          .status(400)
+          .json({ success: false, message: routesParsed.message })
+      }
+      post.routes = routesParsed.routes
+      if (routesParsed.routes.length > 0) {
+        post.destination = routesParsed.routes[0].destination
+        post.destinations = []
+        if (!Object.prototype.hasOwnProperty.call(req.body, 'pricePerVehicle')) {
+          post.pricePerVehicle = minListedRate(routesParsed.routes)
+        }
+      }
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(req.body, 'acceptsOtherDestinations')
+    ) {
+      post.acceptsOtherDestinations =
+        req.body.acceptsOtherDestinations === true ||
+        req.body.acceptsOtherDestinations === 'true'
+    }
+
     const numStops = canonicalDestinationStopCount(
       post.destination,
       post.destinations

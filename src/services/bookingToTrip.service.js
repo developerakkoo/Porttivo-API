@@ -58,10 +58,26 @@ const createTripFromBooking = async (booking, options = {}) => {
     }
   }
 
-  // ✅ TripType logic
-  const tripType = TRIP_TYPE_VALUES.includes(booking.tripType)
-    ? booking.tripType
+  // ✅ TripType logic — the buyer's chosen direction drives the trip type.
+  const bookingDirection = booking.direction || booking.tripType
+  const tripType = TRIP_TYPE_VALUES.includes(bookingDirection)
+    ? bookingDirection
     : 'EXPORT'
+
+  // Resolve the booked route destination (per-route directional pricing).
+  const routes = Array.isArray(post.routes) ? post.routes : []
+  const routeDestination =
+    Number.isInteger(booking.routeIndex) &&
+    booking.routeIndex >= 0 &&
+    booking.routeIndex < routes.length
+      ? routes[booking.routeIndex].destination
+      : post.destination
+
+  // Export: origin -> destination. Import: destination -> origin.
+  const originLoc = buildLocation(post.origin)
+  const destLoc = buildLocation(routeDestination)
+  const pickupLocation = tripType === 'IMPORT' ? destLoc : originLoc
+  const dropLocation = tripType === 'IMPORT' ? originLoc : destLoc
 
   const tripPayload = {
     transporterId: booking.sellerId, // ✅ seller executes trip
@@ -70,8 +86,8 @@ const createTripFromBooking = async (booking, options = {}) => {
     vehicleId: booking.vehicleId,
     driverId: null,
 
-    pickupLocation: buildLocation(post.origin),
-    dropLocation: buildLocation(post.destination),
+    pickupLocation,
+    dropLocation,
 
     tripType,
     status: TRIP_STATUS.PLANNED,

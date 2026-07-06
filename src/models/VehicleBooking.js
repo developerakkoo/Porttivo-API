@@ -45,6 +45,19 @@ const vehicleBookingSchema = new mongoose.Schema(
       index: true,
     },
 
+    // Route + direction the buyer booked (per-route directional pricing).
+    // routeIndex indexes into VehicleRouteAvailability.routes; -1 means the
+    // "Any Other Destination" negotiable catch-all.
+    direction: {
+      type: String,
+      enum: ['EXPORT', 'IMPORT'],
+      default: 'EXPORT',
+    },
+    routeIndex: {
+      type: Number,
+      default: -1,
+    },
+
     // Pricing
     estimatedPrice: {
       type: Number,

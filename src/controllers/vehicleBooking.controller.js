@@ -19,6 +19,7 @@ const {
   buildMarketplaceMessageNotificationFields
 } = require('../utils/marketplaceNotification')
 const { liveAssignmentFilter } = require('../utils/liveVehicleAssignment')
+const { resolveRouteDirectionRate } = require('../utils/vehiclePostRoutes.util')
 
 function geoFieldToLabel(v) {
   if (v == null) return null
@@ -109,6 +110,15 @@ const createBooking = async (req, res, next) => {
       })
     }
 
+    // Route + direction the buyer chose (per-route directional pricing).
+    const rawDirection = String(req.body.direction || 'EXPORT').toUpperCase()
+    const direction = rawDirection === 'IMPORT' ? 'IMPORT' : 'EXPORT'
+    let routeIndex =
+      req.body.routeIndex === undefined || req.body.routeIndex === null
+        ? -1
+        : Number(req.body.routeIndex)
+    if (!Number.isInteger(routeIndex)) routeIndex = -1
+
     // Get post details
     const post = await VehicleRouteAvailability.findById(postId).populate(
       'transporterId',
@@ -178,6 +188,29 @@ const createBooking = async (req, res, next) => {
       })
     }
 
+    // Validate the chosen route index against the post's routes.
+    const postRoutes = Array.isArray(post.routes) ? post.routes : []
+    if (routeIndex >= 0 && routeIndex >= postRoutes.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid routeIndex for this post'
+      })
+    }
+    if (routeIndex < 0 && postRoutes.length > 0 && !post.acceptsOtherDestinations) {
+      // Post has explicit routes but does not accept other destinations; require a route pick.
+      routeIndex = 0
+    }
+
+    // Resolve the listed price for the chosen route + direction. When the post
+    // has no routes (legacy), fall back to the assignment price. null => negotiable.
+    let estimatedPrice
+    if (postRoutes.length > 0 && routeIndex >= 0) {
+      estimatedPrice = resolveRouteDirectionRate(post, routeIndex, direction)
+    } else {
+      estimatedPrice =
+        assignment.price === undefined ? null : assignment.price
+    }
+
     // Create booking in DRAFT status (inquiry mode - not yet submitted to seller)
     const booking = await VehicleBooking.create({
       postId,
@@ -185,7 +218,9 @@ const createBooking = async (req, res, next) => {
       vehicleId: assignment.vehicleId,
       buyerId,
       sellerId,
-      estimatedPrice: assignment.price,
+      direction,
+      routeIndex,
+      estimatedPrice,
       status: 'DRAFT'
     })
 
