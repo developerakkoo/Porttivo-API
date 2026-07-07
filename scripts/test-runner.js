@@ -83,6 +83,151 @@ const buildTripCreateController = (overrides = {}) =>
 const tests = [
   ...paymentScreenTests,
   {
+    name: 'active customer trips include driver location and trip progress',
+    async run() {
+      const mockTrips = [
+        {
+          _id: 'trip-1',
+          tripId: 'TRIP-TEST-1',
+          customerId: 'customer-1',
+          customerName: 'SHUBHAM ADVANCE TEST',
+          customerMobile: '9999999999',
+          reference: 'ADVANCE-TEST',
+          tripType: 'IMPORT',
+          pickupLocation: {
+            formattedAddress: 'Pickup Address',
+            coordinates: [73.856, 18.5204],
+          },
+          dropLocation: {
+            formattedAddress: 'Drop Address',
+            coordinates: [72.8777, 19.076],
+          },
+          intermediateLocation: {
+            formattedAddress: 'Intermediate Address',
+          },
+          vehicleId: { _id: 'vehicle-1', vehicleNumber: 'MH12AB1234', trailerType: null },
+          driverId: { _id: 'driver-1', name: 'Karan', mobile: '9112948855' },
+          assignments: [{ containerNumber: 'TEST1234567' }],
+          status: 'ACTIVE',
+          createdAt: new Date('2026-07-07T12:10:00.492Z'),
+          lastDriverLocation: {
+            latitude: 18.5204,
+            longitude: 73.856,
+            updatedAt: new Date('2026-07-07T12:20:00.492Z'),
+          },
+          driverTracking: { status: 'online' },
+          milestones: [],
+        },
+      ];
+
+      const chainableQuery = {
+        select() { return this; },
+        populate() { return this; },
+        sort() { return this; },
+        skip() { return this; },
+        limit() { return this; },
+        lean: async () => mockTrips,
+      };
+
+      const controller = loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
+        '../models/Trip': {
+          find: () => chainableQuery,
+          countDocuments: async () => mockTrips.length,
+        },
+        '../models/Vehicle': {},
+        '../models/Driver': {},
+        '../models/Customer': {},
+        '../models/Transporter': {},
+        '../models/Notification': { create: async () => ({}) },
+        '../models/SystemConfig': {
+          findOne: () => ({ select: async () => null }),
+        },
+        '../utils/vehicleValidation': {
+          checkVehicleHasAssignedTrip: async () => false,
+          normalizeIndianVehicleRegistration: (value) => value,
+          isValidIndianVehicleRegistration: () => true,
+        },
+        '../utils/tripResourceState': {
+          markTripResourcesBusy: async () => {},
+          releaseTripResources: async () => {},
+          syncTripResourceBusyState: async () => {},
+        },
+        '../utils/tripState': {
+          TRIP_STATUS: {
+            ACCEPTED: 'ACCEPTED',
+            PLANNED: 'PLANNED',
+            ACTIVE: 'ACTIVE',
+            PAUSED: 'PAUSED',
+            BOOKED: 'BOOKED',
+            POD_PENDING: 'POD_PENDING',
+            CLOSED_WITH_POD: 'CLOSED_WITH_POD',
+            CLOSED_WITHOUT_POD: 'CLOSED_WITHOUT_POD',
+            CANCELLED: 'CANCELLED',
+          },
+          BOOKING_STATUS: { OPEN: 'OPEN', ASSIGNED: 'ASSIGNED' },
+          TRIP_STATUS_VALUES: [],
+          TRIP_TYPE_VALUES: ['IMPORT', 'EXPORT', 'LOCAL'],
+        },
+        '../services/socket.service': {
+          emitTripCreated: () => {},
+          emitTripCreatedForCustomer: () => {},
+          emitBookingAccepted: () => {},
+          emitBookingRejected: () => {},
+          emitTripVehicleAssigned: () => {},
+          emitTripDriverAssigned: () => {},
+          emitTripAssigned: () => {},
+          emitTripCancelled: () => {},
+          emitTripUpdated: () => {},
+        },
+        '../middleware/permission.middleware': {
+          getTransporterId: () => 'transporter-1',
+          hasPermission: () => true,
+        },
+        '../services/tripAccess.service': {
+          canBookingBuyerViewTrip: async () => false,
+          getMarketplaceTripMetaForUser: async () => null,
+          getMarketplaceTripMetaForViewerId: async () => null,
+          transporterPartyScopeCondition: () => ({}),
+        },
+        '../services/wati.service': {
+          sendTripCreatedConfirmation: async () => {},
+          sendBookingAcceptedTemplate: async () => {},
+          sendDriverVehicleAssignedTemplate: async () => {},
+          sendBookingRejectedTemplate: async () => {},
+          sendBookingRequestReceivedTemplate: async () => {},
+        },
+        '../services/savedLocation.service': {
+          syncTripLocationsToSavedCatalog: async () => {},
+        },
+        '../services/tripVisibility.service': {
+          buildVisibleTrip: (trip) => trip,
+        },
+      });
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        query: { customerName: 'SHUBHAM ADVANCE TEST' },
+      };
+      const res = createMockRes();
+
+      await controller.getActiveCustomerTrips(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.data[0].tripId, 'TRIP-TEST-1');
+      assert.deepEqual(res.body.data[0].lastDriverLocation, {
+        latitude: 18.5204,
+        longitude: 73.856,
+        updatedAt: new Date('2026-07-07T12:20:00.492Z'),
+      });
+      assert.ok(res.body.data[0].tripProgress !== undefined);
+      assert.ok(typeof res.body.data[0].tripProgress.routeProgressPercent === 'number');
+      assert.ok(typeof res.body.data[0].tripProgress.movementStage === 'string');
+      assert.equal(res.body.data[0].tracking.driverTrackingStatus, 'online');
+    },
+  },
+  {
     name: 'trip creation auto-fills driver when vehicle is selected',
     async run() {
       let createdTrip = null;
@@ -496,6 +641,64 @@ const tests = [
 
       assert.equal(res.statusCode, 400);
       assert.match(res.body.message, /does not have a driver assigned/i);
+    },
+  },
+  {
+    name: 'trip update allows advance-only update after create',
+    async run() {
+      let savedTrip = null;
+
+      class MockTrip {
+        constructor(payload) {
+          Object.assign(this, payload);
+        }
+
+        toObject() {
+          return { ...this };
+        }
+
+        async save() {
+          savedTrip = this;
+          return this;
+        }
+
+        async populate() {
+          return this;
+        }
+      }
+      MockTrip.findById = async (id) => {
+        if (id === 'trip-1') {
+          return new MockTrip({
+            _id: 'trip-1',
+            transporterId: 'transporter-1',
+            status: 'PLANNED',
+            advanceAmount: null,
+          });
+        }
+        return null;
+      };
+
+      const controller = buildTripCreateController({
+        Trip: MockTrip,
+        Vehicle: {},
+        Driver: {},
+      });
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        params: { id: 'trip-1' },
+        body: { advanceAmount: 500 },
+      };
+      const res = createMockRes();
+
+      await controller.updateTrip(req, res, (error) => {
+        throw error;
+      });
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(savedTrip.advanceAmount, 500);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.message, 'Trip updated successfully');
     },
   },
   {

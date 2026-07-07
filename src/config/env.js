@@ -46,7 +46,7 @@ module.exports = {
     `http://localhost:${process.env.PORT || 3000}/api/payments/payu/webhook`,
   cashfreeMode: process.env.CASHFREE_MODE || 'sandbox',
   cashfreeClientId: process.env.CASHFREE_CLIENT_ID || 'TEST109808845e5fe00f7bbaa0e9aeb148808901',
-  cashfreeClientSecret: process.env.CASHFREE_CLIENT_SECRET || 'cfsk_ma_test_9bcfa79b624f3de0e0e7699c5eb37bd1_6cf1ef64',
+  cashfreeClientSecret: process.env.CASHFREE_CLIENT_SECRET || 'cfsk_ma_test_20d8ab0f51dfd4cc60943d425cbeb11c_a45d1b9c',
   cashfreeWebhookSecret: process.env.CASHFREE_WEBHOOK_SECRET || process.env.CASHFREE_CLIENT_SECRET || '',
   cashfreeApiVersion: process.env.CASHFREE_API_VERSION || '2023-08-01',
   cashfreeApiBaseUrl:

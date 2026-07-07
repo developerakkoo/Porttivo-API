@@ -16,6 +16,8 @@ const {
   renderSharedTrip,
   bookCustomerTrip,
   getCustomerTrips,
+  getCustomerTripsByCustomer,
+  getActiveCustomerTrips,
   getAvailableCustomerTrips,
   acceptCustomerTrip,
   rejectCustomerTrip,
@@ -51,6 +53,8 @@ router.use(authenticate);
 // Trip CRUD routes
 router.post('/customer/book', bookCustomerTrip);
 router.get('/customer/my-trips', getCustomerTrips);
+router.get('/customer/history', getCustomerTripsByCustomer);
+router.get('/customer/active', getActiveCustomerTrips);
 router.get('/customer/available', getAvailableCustomerTrips);
 router.put('/:id/accept', acceptCustomerTrip);
 router.put('/:id/reject', rejectCustomerTrip);

@@ -415,6 +415,11 @@ const tripSchema = new mongoose.Schema(
       trim: true,
       default: null
     },
+    advanceAmount: {
+      type: Number,
+      default: null,
+      min: 0
+    },
     status: {
       type: String,
       enum: TRIP_STATUS_VALUES,
