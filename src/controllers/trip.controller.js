@@ -1246,6 +1246,329 @@ const createTrip = async (req, res, next) => {
 }
 
 /**
+ * Validate a single route from a multi-route (batch) Create Trip request and
+ * build a ready-to-save Trip payload. Does NOT persist anything.
+ *
+ * Each route maps 1:1 to a Trip: its own tripType, A/B/C locations and a list of
+ * assignments (vehicle + driver + optional container + optional advanceAmount).
+ * The route-level `advanceAmount` is the sum of its assignment advances.
+ *
+ * `usedVehicleIds` / `usedDriverIds` are shared Sets across all routes in the
+ * batch so the same vehicle/driver can't be double-booked within one submission.
+ *
+ * @returns {{ payload: object }|{ error: string, statusCode: number }}
+ */
+const resolveRouteTripPayload = async ({
+  transporterId,
+  user,
+  customerName,
+  reference,
+  route,
+  tripGroupId,
+  photoRules,
+  usedVehicleIds,
+  usedDriverIds
+}) => {
+  const normalizedTripType = validateTripType(route?.tripType)
+  if (!normalizedTripType) {
+    return {
+      error: 'Trip type is required and must be IMPORT, EXPORT, or LOCAL',
+      statusCode: 400
+    }
+  }
+
+  const operationalLocationError = validateOperationalLocations(
+    normalizedTripType,
+    {
+      pickupLocation: route?.pickupLocation,
+      intermediateLocation: route?.intermediateLocation,
+      dropLocation: route?.dropLocation
+    }
+  )
+  if (operationalLocationError) {
+    return { error: operationalLocationError, statusCode: 400 }
+  }
+
+  const assignmentsInput = Array.isArray(route?.assignments)
+    ? route.assignments
+    : []
+  if (assignmentsInput.length === 0) {
+    return {
+      error: 'At least one vehicle/driver assignment is required',
+      statusCode: 400
+    }
+  }
+
+  const duplicateAssignmentError = validateUniqueAssignments(assignmentsInput)
+  if (duplicateAssignmentError) {
+    return { error: duplicateAssignmentError, statusCode: 400 }
+  }
+
+  const assignments = []
+  let advanceSum = 0
+  let hasAdvance = false
+
+  for (let i = 0; i < assignmentsInput.length; i++) {
+    const a = assignmentsInput[i]
+    const { value: cn, error: containerError } =
+      normalizeAndValidateContainerNumber(a?.containerNumber)
+    if (containerError) {
+      return { error: `Assignment ${i + 1}: ${containerError}`, statusCode: 400 }
+    }
+
+    if (!a?.vehicleId && !a?.driverId) {
+      return {
+        error: `Assignment ${i + 1}: vehicleId or driverId is required`,
+        statusCode: 400
+      }
+    }
+
+    let assignmentAdvance = null
+    try {
+      assignmentAdvance = normalizeAdvanceAmount(a?.advanceAmount)
+    } catch (error) {
+      return { error: `Assignment ${i + 1}: ${error.message}`, statusCode: 400 }
+    }
+
+    const resolution = await resolveTripVehicleDriverSelection({
+      transporterId,
+      vehicleId: a?.vehicleId,
+      driverId: a?.driverId,
+      contextLabel: `Assignment ${i + 1}`
+    })
+    if (resolution.error) {
+      return { error: resolution.error, statusCode: resolution.statusCode }
+    }
+
+    const vehicleKey = resolution.vehicleId
+      ? String(resolution.vehicleId)
+      : ''
+    const driverKey = resolution.driverId ? String(resolution.driverId) : ''
+
+    if (vehicleKey && usedVehicleIds.has(vehicleKey)) {
+      return {
+        error: `Assignment ${
+          i + 1
+        }: this vehicle is already used in another route of this trip.`,
+        statusCode: 400
+      }
+    }
+    if (driverKey && usedDriverIds.has(driverKey)) {
+      return {
+        error: `Assignment ${
+          i + 1
+        }: this driver is already used in another route of this trip.`,
+        statusCode: 400
+      }
+    }
+    if (vehicleKey) usedVehicleIds.add(vehicleKey)
+    if (driverKey) usedDriverIds.add(driverKey)
+
+    if (assignmentAdvance != null) {
+      advanceSum += assignmentAdvance
+      hasAdvance = true
+    }
+
+    assignments.push({
+      containerNumber: cn,
+      vehicleId: resolution.vehicleId,
+      driverId: resolution.driverId,
+      advanceAmount: assignmentAdvance
+    })
+  }
+
+  const first = assignments[0]
+  const payload = {
+    transporterId,
+    tripGroupId,
+    containerNumber: first.containerNumber || null,
+    vehicleId: first.vehicleId,
+    hiredVehicle: null,
+    driverId: first.driverId,
+    assignments,
+    assignedAt: new Date(),
+    reference: reference || null,
+    customerName,
+    pickupLocation: normalizeLocation(route?.pickupLocation),
+    intermediateLocation: normalizeLocation(route?.intermediateLocation),
+    dropLocation: normalizeLocation(route?.dropLocation),
+    tripType: normalizedTripType,
+    advanceAmount: hasAdvance ? advanceSum : null,
+    status: TRIP_STATUS.PLANNED,
+    customerOwnership: {
+      ownerType: 'TRANSPORTER_MANAGED',
+      payerType: 'TRANSPORTER'
+    },
+    visibilityMode: 'FULL_EXECUTION',
+    photoRules,
+    audit: {
+      createdBy: {
+        userId: user.id,
+        userType: toAuditUserType(user.userType)
+      },
+      updatedBy: {
+        userId: user.id,
+        userType: toAuditUserType(user.userType)
+      }
+    }
+  }
+
+  return { payload }
+}
+
+/**
+ * Persist a validated route payload as a Trip and run the standard create side
+ * effects (queue metadata, resource busy flags, saved-location sync, socket).
+ */
+const persistRouteTrip = async (payload, { transporterId, user }) => {
+  const trip = new Trip(payload)
+  await trip.save()
+
+  if (trip.vehicleId || trip.hiredVehicle?.vehicleNumber) {
+    await assignTripQueueMetadata(trip)
+  }
+  await markTripResourcesBusy(trip)
+  await syncTripLocationsToSavedCatalog({
+    trip,
+    actor: {
+      userId: user.id,
+      userType: toSavedLocationActorType(user.userType)
+    }
+  })
+
+  await trip.populate('vehicleId', 'vehicleNumber trailerType')
+  await trip.populate('driverId', 'name mobile')
+  await trip.populate('transporterId', 'name company')
+  if (trip.assignments?.length) {
+    await trip.populate('assignments.vehicleId', 'vehicleNumber trailerType')
+    await trip.populate('assignments.driverId', 'name mobile')
+  }
+
+  emitTripCreated(transporterId, trip)
+  return trip
+}
+
+/**
+ * Create a "trip with multiple routes": each route becomes its own Trip document
+ * linked by a shared tripGroupId. Validates every route first (all-or-nothing)
+ * so a partial failure never leaves half a batch; if a save fails mid-way the
+ * already-created trips in the batch are removed.
+ *
+ * POST /api/trips/batch
+ */
+const createTripBatch = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user)
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message:
+          'Access denied. Only transporters and authorized company users can create trips.'
+      })
+    }
+
+    if (
+      req.user.userType === 'company-user' &&
+      !hasPermission(req.user, 'createTrips')
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to create trips.'
+      })
+    }
+
+    const { customerName, reference, routes } = req.body
+
+    const normalizedCustomerName = customerName?.trim()
+    if (!normalizedCustomerName) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Customer name is required. Use +Add Customer to create the trip.'
+      })
+    }
+
+    if (!Array.isArray(routes) || routes.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one route is required'
+      })
+    }
+
+    const upperCustomerName = normalizedCustomerName.toUpperCase()
+    const normalizedReference = reference?.trim().toUpperCase() || null
+    const tripGroupId = `GRP-${Date.now().toString(36).toUpperCase()}-${Math.random()
+      .toString(36)
+      .substring(2, 6)
+      .toUpperCase()}`
+    const photoRules = await getDefaultPhotoRules()
+
+    // Phase 1: validate + resolve every route (nothing persisted yet)
+    const usedVehicleIds = new Set()
+    const usedDriverIds = new Set()
+    const preparedPayloads = []
+
+    for (let i = 0; i < routes.length; i++) {
+      const result = await resolveRouteTripPayload({
+        transporterId,
+        user: req.user,
+        customerName: upperCustomerName,
+        reference: normalizedReference,
+        route: routes[i],
+        tripGroupId,
+        photoRules,
+        usedVehicleIds,
+        usedDriverIds
+      })
+
+      if (result.error) {
+        return res.status(result.statusCode || 400).json({
+          success: false,
+          message: `Route ${i + 1}: ${result.error}`
+        })
+      }
+      preparedPayloads.push(result.payload)
+    }
+
+    // Phase 2: persist all trips; roll back created docs on any failure
+    const createdTrips = []
+    try {
+      for (const payload of preparedPayloads) {
+        const trip = await persistRouteTrip(payload, {
+          transporterId,
+          user: req.user
+        })
+        createdTrips.push(trip)
+      }
+    } catch (error) {
+      if (createdTrips.length > 0) {
+        await Trip.deleteMany({
+          _id: { $in: createdTrips.map(t => t._id) }
+        }).catch(() => {})
+      }
+      throw error
+    }
+
+    await upsertCustomerLastUsed(transporterId, normalizedCustomerName)
+
+    const serializedTrips = await serializeTrips(createdTrips, {
+      includeCurrentMilestone: true
+    })
+
+    return res.status(201).json({
+      success: true,
+      message: `Trip started with ${createdTrips.length} route(s)`,
+      data: {
+        tripGroupId,
+        trips: serializedTrips
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
  * Get all trips for authenticated transporter
  * GET /api/trips
  */
@@ -3909,6 +4232,13 @@ const buildDraftPayload = (body, transporterId, user) => {
     dropLocation: normalizeLocation(body.dropLocation),
     tripType: normalizedTripType || TRIP_TYPE_VALUES[0],
     assignments: Array.isArray(body.assignments) ? body.assignments : [],
+    // Raw multi-route builder payload for the batch (multi-route) Create Trip
+    // flow. When present, the app rehydrates its route list from this instead of
+    // the single-route fields above.
+    batchDraft:
+      body.batchDraft && typeof body.batchDraft === 'object'
+        ? body.batchDraft
+        : null,
     status: TRIP_STATUS.DRAFT,
     customerOwnership: {
       ownerType: 'TRANSPORTER_MANAGED',
@@ -3961,6 +4291,8 @@ const saveTripDraft = async (req, res, next) => {
         })
       }
       Object.assign(trip, payload)
+      // Mixed-type field: Mongoose can't auto-detect nested changes on update.
+      trip.markModified('batchDraft')
       setAuditActor(trip, req.user)
     } else {
       trip = new Trip(payload)
@@ -4086,6 +4418,7 @@ module.exports = {
   getTripDraftById,
   deleteTripDraft,
   createTrip,
+  createTripBatch,
   getTrips,
   getTripById,
   updateTrip,

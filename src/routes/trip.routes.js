@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const {
   createTrip,
+  createTripBatch,
   getTrips,
   getTripById,
   updateTrip,
@@ -66,6 +67,7 @@ router.get('/drafts', listTripDrafts);
 router.get('/drafts/:id', getTripDraftById);
 router.delete('/drafts/:id', deleteTripDraft);
 router.post('/', createTrip);
+router.post('/batch', createTripBatch);
 router.get('/', getTrips);
 router.get('/search', searchTrips);
 router.get('/active', getActiveTrips);

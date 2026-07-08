@@ -249,6 +249,11 @@ const assignmentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Driver',
       required: true
+    },
+    advanceAmount: {
+      type: Number,
+      default: null,
+      min: 0
     }
   },
   { _id: false }
@@ -324,6 +329,11 @@ const tripSchema = new mongoose.Schema(
     isFromBooking: {
       type: Boolean,
       default: false
+    },
+    tripGroupId: {
+      type: String,
+      default: null,
+      index: true
     },
     reference: {
       type: String,
@@ -419,6 +429,12 @@ const tripSchema = new mongoose.Schema(
       type: Number,
       default: null,
       min: 0
+    },
+    // Raw multi-route builder payload, only persisted for DRAFT trips created via
+    // the batch (multi-route) Create Trip flow so the screen can be rehydrated.
+    batchDraft: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null
     },
     status: {
       type: String,
