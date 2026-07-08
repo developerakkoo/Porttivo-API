@@ -5,6 +5,7 @@ const {
   createTrip,
   createTripBatch,
   getTrips,
+  getTripGroup,
   getTripById,
   updateTrip,
   cancelTrip,
@@ -73,6 +74,7 @@ router.get('/search', searchTrips);
 router.get('/active', getActiveTrips);
 router.get('/pending-pod', getPendingPODTrips);
 router.get('/status/:status', getTripsByStatus);
+router.get('/group/:groupId', getTripGroup);
 router.get('/:id', getTripById);
 router.put('/:id', updateTrip);
 router.put('/:id/cancel', cancelTrip);

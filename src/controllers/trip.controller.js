@@ -1,3 +1,4 @@
+const mongoose = require('mongoose')
 const Trip = require('../models/Trip')
 const Vehicle = require('../models/Vehicle')
 const Driver = require('../models/Driver')
@@ -1232,6 +1233,7 @@ const createTrip = async (req, res, next) => {
 
     // Emit Socket.IO event
     emitTripCreated(transporterId, trip)
+    await notifyAssignedDriverOnCreate(trip)
 
     res.status(201).json({
       success: true,
@@ -1247,16 +1249,17 @@ const createTrip = async (req, res, next) => {
 
 /**
  * Validate a single route from a multi-route (batch) Create Trip request and
- * build a ready-to-save Trip payload. Does NOT persist anything.
+ * build ready-to-save Trip payloads. Does NOT persist anything.
  *
- * Each route maps 1:1 to a Trip: its own tripType, A/B/C locations and a list of
- * assignments (vehicle + driver + optional container + optional advanceAmount).
- * The route-level `advanceAmount` is the sum of its assignment advances.
+ * Each *assignment* (vehicle + driver + optional container + optional advance)
+ * becomes its own single-vehicle Trip document, all sharing the batch's
+ * `tripGroupId` and carrying this route's `routeIndex` (used for map color).
+ * Every trip in the route repeats the route's tripType and A/B/C locations.
  *
  * `usedVehicleIds` / `usedDriverIds` are shared Sets across all routes in the
  * batch so the same vehicle/driver can't be double-booked within one submission.
  *
- * @returns {{ payload: object }|{ error: string, statusCode: number }}
+ * @returns {{ payloads: object[] }|{ error: string, statusCode: number }}
  */
 const resolveRouteTripPayload = async ({
   transporterId,
@@ -1264,6 +1267,7 @@ const resolveRouteTripPayload = async ({
   customerName,
   reference,
   route,
+  routeIndex,
   tripGroupId,
   photoRules,
   usedVehicleIds,
@@ -1304,9 +1308,11 @@ const resolveRouteTripPayload = async ({
     return { error: duplicateAssignmentError, statusCode: 400 }
   }
 
-  const assignments = []
-  let advanceSum = 0
-  let hasAdvance = false
+  const pickupLocation = normalizeLocation(route?.pickupLocation)
+  const intermediateLocation = normalizeLocation(route?.intermediateLocation)
+  const dropLocation = normalizeLocation(route?.dropLocation)
+
+  const payloads = []
 
   for (let i = 0; i < assignmentsInput.length; i++) {
     const a = assignmentsInput[i]
@@ -1364,56 +1370,43 @@ const resolveRouteTripPayload = async ({
     if (vehicleKey) usedVehicleIds.add(vehicleKey)
     if (driverKey) usedDriverIds.add(driverKey)
 
-    if (assignmentAdvance != null) {
-      advanceSum += assignmentAdvance
-      hasAdvance = true
-    }
-
-    assignments.push({
-      containerNumber: cn,
+    payloads.push({
+      transporterId,
+      tripGroupId,
+      routeIndex,
+      containerNumber: cn || null,
       vehicleId: resolution.vehicleId,
+      hiredVehicle: null,
       driverId: resolution.driverId,
-      advanceAmount: assignmentAdvance
+      assignedAt: new Date(),
+      reference: reference || null,
+      customerName,
+      pickupLocation,
+      intermediateLocation,
+      dropLocation,
+      tripType: normalizedTripType,
+      advanceAmount: assignmentAdvance,
+      status: TRIP_STATUS.PLANNED,
+      customerOwnership: {
+        ownerType: 'TRANSPORTER_MANAGED',
+        payerType: 'TRANSPORTER'
+      },
+      visibilityMode: 'FULL_EXECUTION',
+      photoRules,
+      audit: {
+        createdBy: {
+          userId: user.id,
+          userType: toAuditUserType(user.userType)
+        },
+        updatedBy: {
+          userId: user.id,
+          userType: toAuditUserType(user.userType)
+        }
+      }
     })
   }
 
-  const first = assignments[0]
-  const payload = {
-    transporterId,
-    tripGroupId,
-    containerNumber: first.containerNumber || null,
-    vehicleId: first.vehicleId,
-    hiredVehicle: null,
-    driverId: first.driverId,
-    assignments,
-    assignedAt: new Date(),
-    reference: reference || null,
-    customerName,
-    pickupLocation: normalizeLocation(route?.pickupLocation),
-    intermediateLocation: normalizeLocation(route?.intermediateLocation),
-    dropLocation: normalizeLocation(route?.dropLocation),
-    tripType: normalizedTripType,
-    advanceAmount: hasAdvance ? advanceSum : null,
-    status: TRIP_STATUS.PLANNED,
-    customerOwnership: {
-      ownerType: 'TRANSPORTER_MANAGED',
-      payerType: 'TRANSPORTER'
-    },
-    visibilityMode: 'FULL_EXECUTION',
-    photoRules,
-    audit: {
-      createdBy: {
-        userId: user.id,
-        userType: toAuditUserType(user.userType)
-      },
-      updatedBy: {
-        userId: user.id,
-        userType: toAuditUserType(user.userType)
-      }
-    }
-  }
-
-  return { payload }
+  return { payloads }
 }
 
 /**
@@ -1445,7 +1438,34 @@ const persistRouteTrip = async (payload, { transporterId, user }) => {
   }
 
   emitTripCreated(transporterId, trip)
+  await notifyAssignedDriverOnCreate(trip)
   return trip
+}
+
+/**
+ * When a trip is created already carrying a driverId, surface it to that driver
+ * in realtime (mirrors PUT /trips/:id/assign-driver): create the in-app
+ * TRIP_DRIVER_ASSIGNED notification and emit trip:driver:assigned to the
+ * driver's room so the vehicle-trip appears instantly in their Queued tab.
+ */
+const notifyAssignedDriverOnCreate = async trip => {
+  const driverId = trip.driverId?._id || trip.driverId
+  if (!driverId) {
+    return
+  }
+
+  try {
+    await notifyDriverOfTripAssignment(
+      trip,
+      `You have been assigned trip ${trip.tripId}.`
+    )
+    emitTripDriverAssigned(trip, buildAssignmentPayload(trip).assignment)
+  } catch (error) {
+    console.error(
+      'Failed to notify driver of trip assignment on create:',
+      error.message
+    )
+  }
 }
 
 /**
@@ -1515,6 +1535,7 @@ const createTripBatch = async (req, res, next) => {
         customerName: upperCustomerName,
         reference: normalizedReference,
         route: routes[i],
+        routeIndex: i,
         tripGroupId,
         photoRules,
         usedVehicleIds,
@@ -1527,7 +1548,7 @@ const createTripBatch = async (req, res, next) => {
           message: `Route ${i + 1}: ${result.error}`
         })
       }
-      preparedPayloads.push(result.payload)
+      preparedPayloads.push(...result.payloads)
     }
 
     // Phase 2: persist all trips; roll back created docs on any failure
@@ -1560,6 +1581,138 @@ const createTripBatch = async (req, res, next) => {
       message: `Trip started with ${createdTrips.length} route(s)`,
       data: {
         tripGroupId,
+        trips: serializedTrips
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+/**
+ * Coarse movement category (In Transit / Loading / Delivered) derived from a
+ * trip's status + live movementStage. Kept in sync with the transporter app's
+ * VehicleMovementCategory helper. Delivered = reached destination / POD stage;
+ * Loading = loading/unloading; everything else = In Transit.
+ */
+const deriveTripMovementCategory = trip => {
+  const status = trip?.status
+  if (
+    status === TRIP_STATUS.POD_PENDING ||
+    status === TRIP_STATUS.CLOSED_WITH_POD ||
+    status === TRIP_STATUS.CLOSED_WITHOUT_POD
+  ) {
+    return 'delivered'
+  }
+
+  const stage = (trip?.tracking?.movementStage || '').toLowerCase()
+  if (stage.includes('loading') || stage.includes('unloading')) {
+    return 'loading'
+  }
+
+  return 'inTransit'
+}
+
+/**
+ * Get an aggregated "trip group" (a multi-route/multi-vehicle trip): all trips
+ * sharing the given tripGroupId, or the single trip whose _id === groupId
+ * (legacy/ungrouped fallback). Returns a group summary + the constituent trips.
+ *
+ * GET /api/trips/group/:groupId
+ */
+const getTripGroup = async (req, res, next) => {
+  try {
+    const { groupId } = req.params
+    const transporterId = getTransporterId(req.user)
+    const isAdmin = req.user.userType === 'admin'
+
+    if (!transporterId && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to view trips.'
+      })
+    }
+
+    if (
+      req.user.userType === 'company-user' &&
+      !hasPermission(req.user, 'viewTrips')
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to view trips.'
+      })
+    }
+
+    const orClauses = [{ tripGroupId: groupId }]
+    if (mongoose.Types.ObjectId.isValid(groupId)) {
+      orClauses.push({ _id: groupId })
+    }
+
+    const query = { $or: orClauses }
+    if (!isAdmin) {
+      query.$and = [transporterPartyScopeCondition(transporterId)]
+    }
+
+    const trips = await Trip.find(query)
+      .populate('vehicleId', 'vehicleNumber trailerType status')
+      .populate('driverId', 'name mobile status')
+      .populate('transporterId', 'name company')
+      .sort({ routeIndex: 1, createdAt: 1 })
+
+    if (!trips.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip group not found'
+      })
+    }
+
+    const serializedTrips = await serializeTripsWithQueue(trips, {
+      includeCurrentMilestone: true
+    })
+
+    const containerNumbers = new Set()
+    const breakdown = { inTransit: 0, loading: 0, delivered: 0 }
+    const routesByIndex = new Map()
+
+    for (const trip of trips) {
+      if (trip.containerNumber) {
+        containerNumbers.add(trip.containerNumber)
+      }
+      breakdown[deriveTripMovementCategory(trip)] += 1
+
+      const idx = trip.routeIndex ?? 0
+      if (!routesByIndex.has(idx)) {
+        routesByIndex.set(idx, {
+          routeIndex: idx,
+          tripType: trip.tripType,
+          pickup: serializeLocation(trip.pickupLocation),
+          intermediate: serializeLocation(trip.intermediateLocation),
+          drop: serializeLocation(trip.dropLocation)
+        })
+      }
+    }
+
+    const routes = Array.from(routesByIndex.values()).sort(
+      (a, b) => a.routeIndex - b.routeIndex
+    )
+
+    const representative = trips[0]
+    const group = {
+      tripGroupId: representative.tripGroupId || String(representative._id),
+      customerName: representative.customerName || null,
+      reference: representative.reference || null,
+      counts: {
+        vehicles: trips.length,
+        containers: containerNumbers.size
+      },
+      breakdown,
+      routes
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        group,
         trips: serializedTrips
       }
     })
@@ -4420,6 +4573,7 @@ module.exports = {
   createTrip,
   createTripBatch,
   getTrips,
+  getTripGroup,
   getTripById,
   updateTrip,
   cancelTrip,

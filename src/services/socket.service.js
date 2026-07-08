@@ -23,6 +23,22 @@ const {
   logTripLocationUpdate
 } = require('./tripLocationLog.service')
 const { buildTrackingMetrics } = require('./tripEta.service')
+
+/**
+ * Persist the latest live ETA/distance/movement-stage onto the Trip so grouped
+ * list/vehicle rows can render ETA + status without each running a tracking
+ * controller. Mutates `trip.tracking`; the caller is responsible for saving.
+ */
+const persistTripTrackingMetrics = (trip, metrics) => {
+  if (!trip || !metrics) return
+  trip.tracking = {
+    ...(trip.tracking?.toObject ? trip.tracking.toObject() : trip.tracking),
+    etaSeconds: metrics.etaSeconds ?? null,
+    distanceRemainingMeters: metrics.distanceRemainingMeters ?? null,
+    movementStage: metrics.movementStage ?? null,
+    etaUpdatedAt: new Date()
+  }
+}
 const {
   DRIVER_TRACKING_STATUS,
   DRIVER_TRACKING_STALE_SECONDS,
@@ -1255,6 +1271,15 @@ const initializeSocketIO = httpServer => {
           lastLocationAt: new Date(),
           updatedAt: new Date()
         })
+
+        const trackingMetrics = buildTrackingMetrics(
+          trip,
+          lat,
+          lng,
+          speed !== null && speed !== undefined ? Number(speed) : null
+        )
+        persistTripTrackingMetrics(trip, trackingMetrics)
+
         await trip.save()
         logTripLocationUpdate({
           trip,
@@ -1279,13 +1304,6 @@ const initializeSocketIO = httpServer => {
           latitude: lat,
           longitude: lng
         })
-
-        const trackingMetrics = buildTrackingMetrics(
-          trip,
-          lat,
-          lng,
-          speed !== null && speed !== undefined ? Number(speed) : null
-        )
 
         const payload = {
           tripId: trip._id.toString(),
@@ -1437,7 +1455,6 @@ const initializeSocketIO = httpServer => {
           lastLocationAt: new Date(),
           updatedAt: new Date()
         })
-        await trip.save()
 
         const trackingMetrics = buildTrackingMetrics(
           trip,
@@ -1445,6 +1462,9 @@ const initializeSocketIO = httpServer => {
           lastValid.lng,
           lastValid.speed
         )
+        persistTripTrackingMetrics(trip, trackingMetrics)
+
+        await trip.save()
 
         if (previousDriverTrackingStatus !== DRIVER_TRACKING_STATUS.ONLINE) {
           emitDriverTrackingChanged(trip, {

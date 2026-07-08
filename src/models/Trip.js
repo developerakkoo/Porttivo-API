@@ -335,6 +335,11 @@ const tripSchema = new mongoose.Schema(
       default: null,
       index: true
     },
+    routeIndex: {
+      type: Number,
+      default: 0,
+      index: true
+    },
     reference: {
       type: String,
       trim: true
@@ -575,6 +580,27 @@ const tripSchema = new mongoose.Schema(
         type: Number,
         min: 0,
         max: 100,
+        default: null
+      }
+    },
+    tracking: {
+      etaSeconds: {
+        type: Number,
+        default: null,
+        min: 0
+      },
+      distanceRemainingMeters: {
+        type: Number,
+        default: null,
+        min: 0
+      },
+      movementStage: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      etaUpdatedAt: {
+        type: Date,
         default: null
       }
     },
