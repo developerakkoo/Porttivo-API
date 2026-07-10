@@ -503,6 +503,20 @@ const handleGatewayWebhook = async (req, res, next) => {
       })
     }
 
+    const requestBodyIsEmpty =
+      !req.rawBody ||
+      !String(req.rawBody).trim() ||
+      (body && typeof body === 'object' && Object.keys(body).length === 0)
+
+    if (provider === 'CASHFREE' && (!req.headers['x-webhook-signature'] || !String(req.headers['x-webhook-signature']).trim())) {
+      if (req.method === 'GET' || requestBodyIsEmpty) {
+        return res.status(200).json({
+          success: true,
+          message: 'Cashfree webhook endpoint reachable'
+        })
+      }
+    }
+
     const verified = verifyGatewayWebhook({
       provider,
       body,

@@ -209,6 +209,19 @@ const getPayoutByPayment = async (req, res, next) => {
 
 const handleCashfreeWebhook = async (req, res, next) => {
   try {
+    const incomingSignature = String(req.headers['x-webhook-signature'] || req.headers['X-Webhook-Signature'] || '').trim()
+    const requestBodyIsEmpty =
+      !req.rawBody ||
+      !String(req.rawBody).trim() ||
+      (req.body && typeof req.body === 'object' && Object.keys(req.body).length === 0)
+
+    if (req.method === 'GET' || (!incomingSignature && requestBodyIsEmpty)) {
+      return res.status(200).json({
+        success: true,
+        message: 'Cashfree payout webhook endpoint reachable'
+      })
+    }
+
     const payout = await handleCashfreePayoutWebhook({
       body: { ...(req.query || {}), ...(req.body || {}) },
       headers: req.headers,
