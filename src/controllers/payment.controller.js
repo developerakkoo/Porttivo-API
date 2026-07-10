@@ -353,16 +353,9 @@ const getPaymentSessionStatus = async (req, res, next) => {
     const payment = await PaymentSession.findById(id)
 
     if (!payment) {
-      logger.warn(
-        `${provider} webhook received but payment session not found`,
-        {
-          body
-        }
-      )
-
-      return res.status(200).json({
-        success: true,
-        message: 'Webhook received'
+      return res.status(404).json({
+        success: false,
+        message: 'Payment session not found'
       })
     }
 
@@ -487,9 +480,16 @@ const handleGatewayWebhook = async (req, res, next) => {
     }
 
     if (!payment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Payment session not found'
+      logger.warn(
+        `${provider} webhook received but payment session not found`,
+        {
+          body
+        }
+      )
+
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received'
       })
     }
 
