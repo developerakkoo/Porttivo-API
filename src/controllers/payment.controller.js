@@ -13,17 +13,17 @@ const {
   verifyGatewayWebhook
 } = require('../services/paymentGateway.service')
 const {
-  createAutomaticPayoutForPayment,
+  createAutomaticPayoutForPayment
 } = require('../services/cashfreePayout.service')
 
-const toObjectIdString = (value) => {
+const toObjectIdString = value => {
   if (!value) return null
   if (typeof value === 'string') return value
   if (value._id) return value._id.toString()
   return value.toString ? value.toString() : String(value)
 }
 
-const serializePaymentSession = (payment) => {
+const serializePaymentSession = payment => {
   if (!payment) {
     return null
   }
@@ -76,7 +76,7 @@ const serializePaymentSession = (payment) => {
   }
 }
 
-const escapeHtml = (value) =>
+const escapeHtml = value =>
   String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -112,10 +112,7 @@ const getPaymentGatewayOptions = async (req, res, next) => {
 
 const findCashfreePaymentByGatewayPayload = async (payload = {}) => {
   const paymentSessionId = String(
-    payload.payment_session_id ||
-      payload.paymentSessionId ||
-      payload.udf1 ||
-      ''
+    payload.payment_session_id || payload.paymentSessionId || payload.udf1 || ''
   ).trim()
   const merchantTransactionId = String(
     payload.order_id ||
@@ -143,7 +140,11 @@ const findCashfreePaymentByGatewayPayload = async (payload = {}) => {
   return null
 }
 
-const findLatestPaymentSession = async ({ referenceType, referenceId, provider }) => {
+const findLatestPaymentSession = async ({
+  referenceType,
+  referenceId,
+  provider
+}) => {
   return PaymentSession.findOne({
     referenceType,
     referenceId,
@@ -158,10 +159,13 @@ const initiatePaymentSession = async (req, res, next) => {
     const referenceType = String(body.referenceType || '').trim()
     const referenceId = String(body.referenceId || '').trim()
     const purpose = String(body.purpose || '').trim()
-    const currency = String(body.currency || 'INR').trim().toUpperCase()
+    const currency = String(body.currency || 'INR')
+      .trim()
+      .toUpperCase()
     const amount = normalizeMoney(body.amount)
     const payer = resolvePayerProfile(body.payer || {}, req.user)
-    const metadata = body.metadata && typeof body.metadata === 'object' ? body.metadata : {}
+    const metadata =
+      body.metadata && typeof body.metadata === 'object' ? body.metadata : {}
     const successUrl = body.successUrl || null
     const failureUrl = body.failureUrl || null
 
@@ -236,7 +240,10 @@ const initiatePaymentSession = async (req, res, next) => {
       })
     }
 
-    if (existingPayment?.status === 'PENDING' || existingPayment?.status === 'CREATED') {
+    if (
+      existingPayment?.status === 'PENDING' ||
+      existingPayment?.status === 'CREATED'
+    ) {
       const hasReusableRequest =
         existingPayment.paymentRequest?.fields ||
         existingPayment.paymentRequest?.rawResponse ||
@@ -262,7 +269,9 @@ const initiatePaymentSession = async (req, res, next) => {
     session.startTransaction()
 
     try {
-      const merchantTransactionId = makeTransactionId(provider === 'PAYU' ? 'PAYU' : 'CF')
+      const merchantTransactionId = makeTransactionId(
+        provider === 'PAYU' ? 'PAYU' : 'CF'
+      )
       const [payment] = await PaymentSession.create(
         [
           {
@@ -344,9 +353,16 @@ const getPaymentSessionStatus = async (req, res, next) => {
     const payment = await PaymentSession.findById(id)
 
     if (!payment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Payment session not found'
+      logger.warn(
+        `${provider} webhook received but payment session not found`,
+        {
+          body
+        }
+      )
+
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received'
       })
     }
 
@@ -383,7 +399,9 @@ const getPaymentSessionByReference = async (req, res, next) => {
   try {
     const referenceType = String(req.params.referenceType || '').trim()
     const referenceId = String(req.params.referenceId || '').trim()
-    const provider = normalizeProvider(req.query.provider || req.body?.provider || '')
+    const provider = normalizeProvider(
+      req.query.provider || req.body?.provider || ''
+    )
 
     if (!referenceType || !referenceId) {
       return res.status(400).json({
@@ -443,17 +461,18 @@ const handleGatewayWebhook = async (req, res, next) => {
       ...(req.body || {})
     }
 
-    const merchantTransactionId =
-      String(
-        body.txnid ||
-          body.order_id ||
-          body.orderId ||
-          body.merchantTransactionId ||
-          body.cf_order_id ||
-          ''
-      ).trim()
+    const merchantTransactionId = String(
+      body.txnid ||
+        body.order_id ||
+        body.orderId ||
+        body.merchantTransactionId ||
+        body.cf_order_id ||
+        ''
+    ).trim()
 
-    const paymentSessionId = String(body.udf1 || body.payment_session_id || '').trim()
+    const paymentSessionId = String(
+      body.udf1 || body.payment_session_id || ''
+    ).trim()
 
     let payment = null
     if (paymentSessionId && mongoose.Types.ObjectId.isValid(paymentSessionId)) {
@@ -510,7 +529,8 @@ const handleGatewayWebhook = async (req, res, next) => {
     payment.callbackPayload = body
     payment.providerTransactionId =
       metadata.providerTransactionId || payment.providerTransactionId
-    payment.providerOrderId = metadata.providerOrderId || payment.providerOrderId
+    payment.providerOrderId =
+      metadata.providerOrderId || payment.providerOrderId
 
     if (responseStatus === 'SUCCESS') {
       payment.status = 'SUCCESS'
@@ -521,12 +541,18 @@ const handleGatewayWebhook = async (req, res, next) => {
       payment.status = 'FAILED'
       payment.failedAt = new Date()
       payment.failureReason =
-        body.error_Message || body.error || body.failure_reason || 'Payment failed'
+        body.error_Message ||
+        body.error ||
+        body.failure_reason ||
+        'Payment failed'
     } else if (responseStatus === 'CANCELLED') {
       payment.status = 'CANCELLED'
       payment.failedAt = new Date()
       payment.failureReason =
-        body.error_Message || body.error || body.failure_reason || 'Payment cancelled'
+        body.error_Message ||
+        body.error ||
+        body.failure_reason ||
+        'Payment cancelled'
     } else if (responseStatus === 'REFUNDED') {
       payment.status = 'REFUNDED'
       payment.completedAt = payment.completedAt || new Date()
