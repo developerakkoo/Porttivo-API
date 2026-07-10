@@ -215,7 +215,7 @@ const handleCashfreeWebhook = async (req, res, next) => {
       !String(req.rawBody).trim() ||
       (req.body && typeof req.body === 'object' && Object.keys(req.body).length === 0)
 
-    if (req.method === 'GET' || (!incomingSignature && requestBodyIsEmpty)) {
+    if (req.method === 'GET' || !incomingSignature) {
       return res.status(200).json({
         success: true,
         message: 'Cashfree payout webhook endpoint reachable'
