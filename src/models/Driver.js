@@ -46,6 +46,65 @@ const driverSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    cashfreeBeneId: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true,
+    },
+    cashfreeBeneficiary: {
+      beneId: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      name: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      email: {
+        type: String,
+        trim: true,
+        lowercase: true,
+        default: null,
+      },
+      phone: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      status: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      bankAccountEncrypted: {
+        type: String,
+        default: null,
+      },
+      ifscEncrypted: {
+        type: String,
+        default: null,
+      },
+      bankAccountLast4: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      verification: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {},
+      },
+      createdAt: {
+        type: Date,
+        default: null,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+    },
     appInstalled: {
       type: Boolean,
       default: false,

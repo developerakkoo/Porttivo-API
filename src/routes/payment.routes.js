@@ -6,6 +6,7 @@ const {
   initiatePaymentSession,
   getPaymentSessionStatus,
   getPaymentSessionByReference,
+  handleCashfreeReturn,
   handleGatewayWebhook
 } = require('../controllers/payment.controller')
 
@@ -14,6 +15,7 @@ router.post('/sessions', authenticate, initiatePaymentSession)
 router.get('/sessions/:id', authenticate, getPaymentSessionStatus)
 router.get('/references/:referenceType/:referenceId', authenticate, getPaymentSessionByReference)
 
+router.get('/cashfree/return', handleCashfreeReturn)
 router.post('/:provider/webhook', handleGatewayWebhook)
 router.get('/:provider/webhook', handleGatewayWebhook)
 

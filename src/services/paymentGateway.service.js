@@ -193,8 +193,7 @@ const buildCashfreeOrderPayload = ({
   currency = DEFAULT_CURRENCY,
   payer,
   reference,
-  successUrl,
-  failureUrl
+  successUrl
 }) => {
   if (!cashfreeClientId || !cashfreeClientSecret) {
     throw new Error('Cashfree is not configured')
@@ -218,7 +217,7 @@ const buildCashfreeOrderPayload = ({
     },
     order_meta: {
       return_url: successUrl || cashfreeReturnUrl,
-      notify_url: failureUrl || cashfreeWebhookUrl
+      notify_url: cashfreeWebhookUrl
     },
     order_note: reference?.purpose || 'Payment'
   }
@@ -324,6 +323,17 @@ const normalizeCashfreeStatus = (status) => {
   return 'PENDING'
 }
 
+const extractCashfreeStatusValue = (payload = {}) => {
+  return (
+    payload.status ||
+    payload.order_status ||
+    payload.orderStatus ||
+    payload.payment_status ||
+    payload.paymentStatus ||
+    ''
+  )
+}
+
 const extractGatewayIdentifiers = (provider, payload = {}) => {
   if (provider === 'PAYU') {
     return {
@@ -423,8 +433,7 @@ const buildPaymentInitiationRequest = async ({
     amount,
     payer,
     reference,
-    successUrl,
-    failureUrl
+    successUrl
   })
 
   const orderResponse = await createCashfreeOrder(
@@ -499,12 +508,16 @@ const verifyGatewayWebhook = ({
 const getGatewayPayloadMetadata = (provider, payload = {}) => {
   const normalizedProvider = normalizeProvider(provider)
   const { transactionId, orderId } = extractGatewayIdentifiers(normalizedProvider, payload)
+  const statusValue =
+    normalizedProvider === 'CASHFREE'
+      ? extractCashfreeStatusValue(payload)
+      : payload.status
 
   return {
     provider: normalizedProvider,
     providerTransactionId: transactionId,
     providerOrderId: orderId,
-    status: normalizeGatewayStatus(normalizedProvider, payload.status)
+    status: normalizeGatewayStatus(normalizedProvider, statusValue)
   }
 }
 
@@ -522,6 +535,7 @@ module.exports = {
   normalizeGatewayStatus,
   normalizeMoney,
   normalizeProvider,
+  extractCashfreeStatusValue,
   resolvePayerProfile,
   verifyGatewayWebhook,
   verifyCashfreeWebhook,

@@ -54,6 +54,27 @@ module.exports = {
     (process.env.CASHFREE_MODE === 'production'
       ? 'https://api.cashfree.com/pg'
       : 'https://sandbox.cashfree.com/pg'),
+  cashfreePayoutMode: process.env.CASHFREE_PAYOUT_MODE || process.env.CASHFREE_MODE || 'sandbox',
+  cashfreePayoutClientId: process.env.CASHFREE_PAYOUT_CLIENT_ID || process.env.CASHFREE_CLIENT_ID || 'CF10980884D98EI779710S73ALJ92G',
+  cashfreePayoutClientSecret: process.env.CASHFREE_PAYOUT_CLIENT_SECRET || process.env.CASHFREE_CLIENT_SECRET || 'cfsk_ma_test_16860af5b9153a32a339e7ca2f23be97_a06e1672',
+  cashfreePayoutWebhookSecret:
+    process.env.CASHFREE_PAYOUT_WEBHOOK_SECRET ||
+    process.env.CASHFREE_WEBHOOK_SECRET ||
+    process.env.CASHFREE_CLIENT_SECRET ||
+    'cfsk_ma_test_91717ea9b403acaa67b1904f3e05af66_48ece372',
+  cashfreePayoutApiBaseUrl:
+    process.env.CASHFREE_PAYOUT_API_BASE_URL ||
+    (process.env.CASHFREE_PAYOUT_MODE === 'production'
+      ? 'https://api.cashfree.com/payout/v1'
+      : 'https://sandbox.cashfree.com/payout/v1'),
+  cashfreePayoutWebhookUrl:
+    process.env.CASHFREE_PAYOUT_WEBHOOK_URL || 
+    `http://localhost:${process.env.PORT || 3000}/api/payouts/cashfree/webhook`,
+  cashfreePayoutBankEncryptionSecret:
+    process.env.CASHFREE_PAYOUT_ENCRYPTION_KEY ||
+    process.env.CASHFREE_PAYOUT_BANK_ENCRYPTION_SECRET ||
+    process.env.CASHFREE_CLIENT_SECRET ||
+    '6c30290bdceae775683562ffd7b02e8792fd528699f0ade349573531ec4c5918',
   cashfreeCheckoutUrl:
     process.env.CASHFREE_CHECKOUT_URL ||
     (process.env.CASHFREE_MODE === 'production'
@@ -61,10 +82,8 @@ module.exports = {
       : 'https://sandbox.cashfree.com/checkout'),
   cashfreeReturnUrl:
     process.env.CASHFREE_RETURN_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/payments/cashfree/webhook`,
+    `http://localhost:${process.env.PORT || 3000}/api/payments/cashfree/return`,
   cashfreeWebhookUrl:
     process.env.CASHFREE_WEBHOOK_URL ||
     `http://localhost:${process.env.PORT || 3000}/api/payments/cashfree/webhook`,
 };
-
-

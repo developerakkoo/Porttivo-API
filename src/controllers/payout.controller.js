@@ -1,0 +1,398 @@
+const mongoose = require('mongoose')
+const Payout = require('../models/Payout')
+const PaymentSession = require('../models/PaymentSession')
+const {
+  buildPayoutStatusMessage,
+  createAutomaticPayoutForPayment,
+  createPayoutRecord,
+  getPayoutById,
+  getPayoutSummary,
+  handleCashfreePayoutWebhook,
+  processDuePayoutRetries,
+  registerBeneficiary,
+  serializePayout,
+  startPayoutTransfer,
+  normalizeMoney
+} = require('../services/cashfreePayout.service')
+
+const safeObjectIdString = (value) => {
+  if (!value) return null
+  if (typeof value === 'string') return value
+  if (value._id) return value._id.toString()
+  return value.toString ? value.toString() : String(value)
+}
+
+const assertPayoutAccess = (payout, user) => {
+  if (!payout || user?.userType === 'admin') {
+    return true
+  }
+
+  const actorId = safeObjectIdString(user?.id)
+  const payerId = safeObjectIdString(payout.payerId)
+  const payeeId = safeObjectIdString(payout.payeeId)
+
+  return Boolean(actorId && (actorId === payerId || actorId === payeeId))
+}
+
+const createBeneficiary = async (req, res, next) => {
+  try {
+    const body = req.body || {}
+    const payeeId = safeObjectIdString(body.payeeId)
+    const name = String(body.name || '').trim()
+    const email = String(body.email || '').trim().toLowerCase()
+    const phone = String(body.phone || '').trim()
+    const bankAccount = String(body.bankAccount || '').trim()
+    const ifsc = String(body.ifsc || '').trim().toUpperCase()
+
+    if (!payeeId) {
+      return res.status(400).json({ success: false, message: 'payeeId is required' })
+    }
+
+    if (!name || !phone || !bankAccount || !ifsc) {
+      return res.status(400).json({
+        success: false,
+        message: 'name, phone, bankAccount, and ifsc are required'
+      })
+    }
+
+    if (req.user?.userType !== 'admin' && safeObjectIdString(req.user?.id) !== payeeId) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const result = await registerBeneficiary(
+      { payeeId, name, email, phone, bankAccount, ifsc },
+      req.fetch || global.fetch
+    )
+
+    return res.status(201).json({
+      success: true,
+      message: 'Beneficiary created successfully',
+      data: {
+        payee: result.payeeSnapshot,
+        beneId: result.beneId,
+        validation: result.validation
+      }
+    })
+  } catch (error) {
+    if (error.details) {
+      return res.status(error.statusCode || 400).json({
+        success: false,
+        message: error.message,
+        details: error.details
+      })
+    }
+    next(error)
+  }
+}
+
+const createPayout = async (req, res, next) => {
+  try {
+    const body = req.body || {}
+    const paymentId = safeObjectIdString(body.paymentId)
+    const payeeId = safeObjectIdString(body.payeeId)
+    const currency = String(body.currency || 'INR').trim().toUpperCase()
+    const referenceType = String(body.referenceType || '').trim() || null
+    const referenceId = String(body.referenceId || '').trim() || null
+    const payeeType = String(body.payeeType || '').trim() || null
+
+    if (!paymentId && !payeeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'paymentId or payeeId is required'
+      })
+    }
+
+    let payment = null
+    if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
+      payment = await PaymentSession.findById(paymentId)
+    }
+
+    if (payment && payment.status !== 'SUCCESS') {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment must be successful before creating payout'
+      })
+    }
+
+    const amount = normalizeMoney(body.amount || payment?.amount)
+
+    const payerId =
+      safeObjectIdString(body.payerId) ||
+      safeObjectIdString(payment?.payer?.userId) ||
+      safeObjectIdString(payment?.initiatedBy?.userId) ||
+      null
+
+    const effectivePayeeId = payeeId || safeObjectIdString(payment?.metadata?.payout?.payeeId)
+
+    if (!effectivePayeeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'payeeId is required'
+      })
+    }
+
+    const payout = await createPayoutRecord({
+      payerId,
+      payeeId: effectivePayeeId,
+      payeeType,
+      paymentId: payment?._id || paymentId || null,
+      referenceType: referenceType || payment?.referenceType || null,
+      referenceId: referenceId || payment?.referenceId || null,
+      amount,
+      currency,
+      cashfree: {
+        beneId: body.beneId || null,
+        transferMode: String(body.transferMode || 'IMPS').trim().toUpperCase()
+      }
+    })
+
+    const started = await startPayoutTransfer(payout, { fetchImpl: req.fetch || global.fetch })
+
+    return res.status(201).json({
+      success: true,
+      message: 'Payout created successfully',
+      data: {
+        payout: serializePayout(started)
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getPayoutStatus = async (req, res, next) => {
+  try {
+    const payout = await getPayoutById(req.params.id)
+    if (!payout) {
+      return res.status(404).json({ success: false, message: 'Payout not found' })
+    }
+
+    if (!assertPayoutAccess(payout, req.user)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        payout: serializePayout(payout),
+        message: buildPayoutStatusMessage(payout)
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getPayoutByPayment = async (req, res, next) => {
+  try {
+    const paymentId = String(req.params.paymentId || '').trim()
+    const payout = await Payout.findOne({ paymentId })
+    if (!payout) {
+      return res.status(404).json({ success: false, message: 'Payout not found' })
+    }
+
+    if (!assertPayoutAccess(payout, req.user)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        payout: serializePayout(payout),
+        message: buildPayoutStatusMessage(payout)
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const handleCashfreeWebhook = async (req, res, next) => {
+  try {
+    const payout = await handleCashfreePayoutWebhook({
+      body: { ...(req.query || {}), ...(req.body || {}) },
+      headers: req.headers,
+      rawBody: req.rawBody || '',
+      fetchImpl: req.fetch || global.fetch
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Cashfree payout webhook processed successfully',
+      data: {
+        payout: serializePayout(payout)
+      }
+    })
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message
+      })
+    }
+    next(error)
+  }
+}
+
+const retryPayout = async (req, res, next) => {
+  try {
+    if (req.user?.userType !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const payout = await getPayoutById(req.params.id)
+    if (!payout) {
+      return res.status(404).json({ success: false, message: 'Payout not found' })
+    }
+
+    const updated = await startPayoutTransfer(payout, { fetchImpl: req.fetch || global.fetch })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Payout retry started',
+      data: { payout: serializePayout(updated) }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const cancelPayout = async (req, res, next) => {
+  try {
+    if (req.user?.userType !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const payout = await getPayoutById(req.params.id)
+    if (!payout) {
+      return res.status(404).json({ success: false, message: 'Payout not found' })
+    }
+
+    if (payout.status === 'SUCCESS') {
+      return res.status(400).json({
+        success: false,
+        message: 'Successful payouts cannot be cancelled'
+      })
+    }
+
+    payout.status = 'CANCELLED'
+    payout.completedAt = new Date()
+    payout.failure = {
+      code: 'CANCELLED',
+      message: 'Payout cancelled by admin',
+      reason: 'Payout cancelled by admin',
+      isRetryable: false
+    }
+    payout.retry = {
+      ...(payout.retry || {}),
+      nextRetryAt: null
+    }
+    await payout.save()
+
+    return res.status(200).json({
+      success: true,
+      message: 'Payout cancelled successfully',
+      data: { payout: serializePayout(payout) }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getAdminPayoutSummary = async (req, res, next) => {
+  try {
+    if (req.user?.userType !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const summary = await getPayoutSummary()
+    return res.status(200).json({
+      success: true,
+      data: summary
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const listPayouts = async (req, res, next) => {
+  try {
+    const query = {}
+    if (req.query.status) {
+      query.status = String(req.query.status).trim().toUpperCase()
+    }
+    if (req.query.paymentId) {
+      query.paymentId = req.query.paymentId
+    }
+
+    const payouts = await Payout.find(query).sort({ createdAt: -1 }).limit(Math.min(Number(req.query.limit) || 25, 100))
+    return res.status(200).json({
+      success: true,
+      data: {
+        payouts: payouts.map((payout) => serializePayout(payout)),
+        count: payouts.length
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const triggerAutomaticPayout = async (req, res, next) => {
+  try {
+    const paymentId = String(req.params.paymentId || '').trim()
+    const payment = await PaymentSession.findById(paymentId)
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Payment not found' })
+    }
+
+    if (!assertPayoutAccess({ payerId: payment.payer?.userId, payeeId: payment.metadata?.payout?.payeeId }, req.user)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const payout = await createAutomaticPayoutForPayment(payment, { fetchImpl: req.fetch || global.fetch })
+
+    return res.status(200).json({
+      success: true,
+      message: payout ? 'Automatic payout flow started' : 'No payout metadata found for this payment',
+      data: {
+        payout: payout ? serializePayout(payout) : null
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const runRetryCronNow = async (req, res, next) => {
+  try {
+    if (req.user?.userType !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const processed = await processDuePayoutRetries({ fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({
+      success: true,
+      message: 'Payout retry cron executed',
+      data: {
+        processed: processed.map((payout) => serializePayout(payout))
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+module.exports = {
+  cancelPayout,
+  createBeneficiary,
+  createPayout,
+  getAdminPayoutSummary,
+  getPayoutByPayment,
+  getPayoutStatus,
+  handleCashfreeWebhook,
+  listPayouts,
+  retryPayout,
+  runRetryCronNow,
+  triggerAutomaticPayout
+}

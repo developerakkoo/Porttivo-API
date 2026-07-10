@@ -139,6 +139,99 @@ const paymentTests = [
     }
   },
   {
+    name: 'initiatePaymentSession creates a Cashfree checkout request with explicit session ids',
+    async run() {
+      const paymentDoc = {
+        _id: 'payment-cf-1',
+        status: 'CREATED',
+        provider: 'CASHFREE',
+        referenceType: 'INVOICE',
+        referenceId: 'INV-2001',
+        purpose: 'Invoice payment',
+        amount: 1500,
+        currency: 'INR',
+        merchantTransactionId: 'CF-ABC',
+        payer: {
+          userId: 'payer-1',
+          userType: 'transporter',
+          name: 'Alpha Logistics',
+          email: 'alpha@example.com',
+          mobile: '9999999999'
+        },
+        metadata: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      const originalFetch = global.fetch
+      global.fetch = async () => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            order_id: 'CF-ORDER-2',
+            payment_session_id: 'CF-SESSION-2',
+            payment_link: 'https://cashfree.example/checkout/CF-ORDER-2'
+          })
+      })
+
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payment.controller.js'),
+        {
+          mongoose: {
+            ...mongoose,
+            startSession: async () => makeSession()
+          },
+          '../models/PaymentSession': {
+            findOne: () => ({
+              sort: async () => null
+            }),
+            create: async ([doc]) => {
+              Object.assign(paymentDoc, doc)
+              return [paymentDoc]
+            }
+          }
+        }
+      )
+
+      const req = {
+        user: {
+          id: 'payer-1',
+          userType: 'transporter',
+          userData: {
+            name: 'Alpha Logistics',
+            email: 'alpha@example.com',
+            mobile: '9999999999'
+          }
+        },
+        body: {
+          provider: 'CASHFREE',
+          amount: 1500,
+          currency: 'INR',
+          purpose: 'Invoice payment',
+          referenceType: 'INVOICE',
+          referenceId: 'INV-2001'
+        }
+      }
+      const res = createMockRes()
+
+      try {
+        await controller.initiatePaymentSession(req, res, (error) => {
+          throw error
+        })
+
+        assert.equal(res.statusCode, 200)
+        assert.equal(res.body.data.payment.provider, 'CASHFREE')
+        assert.equal(res.body.data.payment.cashfree.order_id, 'CF-ORDER-2')
+        assert.equal(res.body.data.payment.cashfree.payment_session_id, 'CF-SESSION-2')
+        assert.equal(res.body.data.payment.paymentRequest.fields.payment_session_id, 'CF-SESSION-2')
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
     name: 'buildPaymentInitiationRequest creates a Cashfree order payload',
     async run() {
       const originalFetch = global.fetch
@@ -197,6 +290,8 @@ const paymentTests = [
         assert.equal(request.fields.order_id, 'CF-ORDER-1')
         assert.equal(request.fields.payment_session_id, 'CF-SESSION-1')
         assert.equal(request.actionUrl, 'https://cashfree.example/checkout/CF-ORDER-1')
+        assert.equal(request.fields.order_meta.notify_url, 'https://app.example/webhook')
+        assert.deepEqual(request.fields.payment_session_id, 'CF-SESSION-1')
       } finally {
         global.fetch = originalFetch
       }
@@ -339,7 +434,7 @@ const paymentTests = [
       const bodyObject = {
         cf_order_id: 'CF-ABC',
         cf_payment_id: 'CF-PAY-1',
-        status: 'SUCCESS',
+        order_status: 'PAID',
         payment_session_id: '507f1f77bcf86cd799439012'
       }
       const rawBody = JSON.stringify(bodyObject)
@@ -395,6 +490,61 @@ const paymentTests = [
       assert.equal(paymentDoc.status, 'SUCCESS')
       assert.equal(paymentDoc.providerTransactionId, 'CF-PAY-1')
       assert.ok(paymentDoc.completedAt instanceof Date)
+    }
+  },
+  {
+    name: 'Cashfree return GET is acknowledged without failing the payment',
+    async run() {
+      const paymentDoc = {
+        _id: '507f1f77bcf86cd799439013',
+        provider: 'CASHFREE',
+        status: 'PENDING',
+        merchantTransactionId: 'CF-RETURN-1',
+        payer: {
+          userId: 'payer-1',
+          userType: 'transporter',
+          name: 'Alpha Logistics',
+          email: 'alpha@example.com',
+          mobile: '9999999999'
+        },
+        paymentResponse: {},
+        callbackPayload: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payment.controller.js'),
+        {
+          '../models/PaymentSession': {
+            findById: async () => paymentDoc,
+            findOne: () => ({
+              sort: async () => null
+            })
+          }
+        }
+      )
+
+      const req = {
+        method: 'GET',
+        query: {
+          cf_order_id: 'CF-RETURN-1',
+          order_status: 'PAID'
+        },
+        body: {},
+        headers: {},
+        rawBody: ''
+      }
+      const res = createMockRes()
+
+      await controller.handleCashfreeReturn(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(paymentDoc.status, 'PENDING')
+      assert.equal(paymentDoc.failureReason, undefined)
     }
   }
 ]

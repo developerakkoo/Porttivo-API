@@ -1,5 +1,6 @@
 const mongoose = require('mongoose')
 const PaymentSession = require('../models/PaymentSession')
+const logger = require('../utils/logger')
 const {
   buildPaymentInitiationRequest,
   getAvailableGatewayOptions,
@@ -11,6 +12,9 @@ const {
   resolvePayerProfile,
   verifyGatewayWebhook
 } = require('../services/paymentGateway.service')
+const {
+  createAutomaticPayoutForPayment,
+} = require('../services/cashfreePayout.service')
 
 const toObjectIdString = (value) => {
   if (!value) return null
@@ -23,6 +27,21 @@ const serializePaymentSession = (payment) => {
   if (!payment) {
     return null
   }
+
+  const paymentRequestFields = payment.paymentRequest?.fields || {}
+  const cashfreeOrderId =
+    payment.provider === 'CASHFREE'
+      ? payment.providerOrderId ||
+        paymentRequestFields.order_id ||
+        paymentRequestFields.cf_order_id ||
+        null
+      : null
+  const cashfreePaymentSessionId =
+    payment.provider === 'CASHFREE'
+      ? paymentRequestFields.payment_session_id ||
+        payment.paymentResponse?.payment_session_id ||
+        null
+      : null
 
   return {
     id: payment._id ? payment._id.toString() : null,
@@ -39,6 +58,13 @@ const serializePaymentSession = (payment) => {
     paymentGatewayUrl: payment.paymentGatewayUrl || null,
     paymentRequest: payment.paymentRequest || {},
     paymentResponse: payment.paymentResponse || {},
+    cashfree:
+      payment.provider === 'CASHFREE'
+        ? {
+            order_id: cashfreeOrderId,
+            payment_session_id: cashfreePaymentSessionId
+          }
+        : null,
     failureReason: payment.failureReason || null,
     payer: payment.payer || {},
     metadata: payment.metadata || {},
@@ -82,6 +108,39 @@ const getPaymentGatewayOptions = async (req, res, next) => {
   } catch (error) {
     next(error)
   }
+}
+
+const findCashfreePaymentByGatewayPayload = async (payload = {}) => {
+  const paymentSessionId = String(
+    payload.payment_session_id ||
+      payload.paymentSessionId ||
+      payload.udf1 ||
+      ''
+  ).trim()
+  const merchantTransactionId = String(
+    payload.order_id ||
+      payload.cf_order_id ||
+      payload.orderId ||
+      payload.txnid ||
+      payload.merchantTransactionId ||
+      ''
+  ).trim()
+
+  if (paymentSessionId && mongoose.Types.ObjectId.isValid(paymentSessionId)) {
+    const paymentById = await PaymentSession.findById(paymentSessionId)
+    if (paymentById) {
+      return paymentById
+    }
+  }
+
+  if (merchantTransactionId) {
+    return PaymentSession.findOne({
+      provider: 'CASHFREE',
+      merchantTransactionId
+    })
+  }
+
+  return null
 }
 
 const findLatestPaymentSession = async ({ referenceType, referenceId, provider }) => {
@@ -415,6 +474,16 @@ const handleGatewayWebhook = async (req, res, next) => {
       })
     }
 
+    if (provider === 'CASHFREE' && req.method === 'GET') {
+      return res.status(200).json({
+        success: true,
+        message: 'Cashfree return received',
+        data: {
+          payment: serializePaymentSession(payment)
+        }
+      })
+    }
+
     const verified = verifyGatewayWebhook({
       provider,
       body,
@@ -468,9 +537,62 @@ const handleGatewayWebhook = async (req, res, next) => {
 
     await payment.save()
 
+    if (payment.status === 'SUCCESS') {
+      try {
+        const payout = await createAutomaticPayoutForPayment(payment, {
+          fetchImpl: req.fetch || global.fetch
+        })
+
+        if (payout) {
+          payment.metadata = {
+            ...(payment.metadata || {}),
+            payout: {
+              id: payout._id ? payout._id.toString() : null,
+              status: payout.status,
+              transferId: payout.cashfree?.transferId || null,
+              beneId: payout.cashfree?.beneId || null
+            }
+          }
+          await payment.save()
+        }
+      } catch (payoutError) {
+        logger.warn('Automatic payout initiation failed', {
+          paymentId: payment._id ? payment._id.toString() : null,
+          message: payoutError.message
+        })
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: `${provider} webhook processed successfully`
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const handleCashfreeReturn = async (req, res, next) => {
+  try {
+    const body = {
+      ...(req.query || {}),
+      ...(req.body || {})
+    }
+
+    const payment = await findCashfreePaymentByGatewayPayload(body)
+    if (!payment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Payment session not found'
+      })
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Cashfree payment return received',
+      data: {
+        payment: serializePaymentSession(payment)
+      }
     })
   } catch (error) {
     next(error)
@@ -482,6 +604,7 @@ module.exports = {
   initiatePaymentSession,
   getPaymentSessionStatus,
   getPaymentSessionByReference,
+  handleCashfreeReturn,
   handleGatewayWebhook,
   serializePaymentSession
 }

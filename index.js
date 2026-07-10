@@ -34,12 +34,15 @@ const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
 const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
 const marketplacePaymentRoutes = require('./src/routes/marketplacePayment.routes');
 const paymentRoutes = require('./src/routes/payment.routes');
+const payoutRoutes = require('./src/routes/payout.routes');
 const messageRoutes = require('./src/routes/message.routes');
 const supportTransporterRoutes = require('./src/routes/supportTransporter.routes');
 const supportCustomerRoutes = require('./src/routes/supportCustomer.routes');
 const { getCustomerDetails, listAllCustomers, getDuplicateCustomers, listCustomersWithTripsAndActivities } = require('./src/controllers/admin.controller');
 const { authenticate } = require('./src/middleware/auth.middleware');
 const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability');
+const Payout = require('./src/models/Payout');
+const { startPayoutAutomationCron } = require('./src/services/cashfreePayout.service');
 
 logger.installConsoleFormatter();
 
@@ -127,6 +130,7 @@ app.use('/api/vehicle-posts', vehiclePostRoutes);
 app.use('/api/vehicle-bookings', vehicleBookingRoutes);
 app.use('/api/marketplace-payments', marketplacePaymentRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/payouts', payoutRoutes);
 app.use('/api/messages', messageRoutes);
 
 // 404 handler
@@ -164,6 +168,18 @@ const startServer = async () => {
         indexError.message || indexError
       );
     }
+
+    try {
+      await Payout.syncIndexes();
+      console.log('Payout indexes synced');
+    } catch (indexError) {
+      console.warn(
+        'Payout index sync skipped:',
+        indexError.message || indexError
+      );
+    }
+
+    startPayoutAutomationCron();
 
     // Start HTTP server (Socket.IO is attached to it)
     // Listen on 0.0.0.0 to make it accessible over WiFi network
