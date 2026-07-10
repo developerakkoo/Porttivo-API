@@ -459,8 +459,10 @@ const handleGatewayWebhook = async (req, res, next) => {
       ...(req.body || {})
     }
 
+    const metadata = getGatewayPayloadMetadata(provider, body)
     const merchantTransactionId = String(
-      body.txnid ||
+      metadata.providerOrderId ||
+        body.txnid ||
         body.order_id ||
         body.orderId ||
         body.merchantTransactionId ||
@@ -469,7 +471,7 @@ const handleGatewayWebhook = async (req, res, next) => {
     ).trim()
 
     const paymentSessionId = String(
-      body.udf1 || body.payment_session_id || ''
+      body.udf1 || body.payment_session_id || body.paymentSessionId || ''
     ).trim()
 
     let payment = null
@@ -540,14 +542,14 @@ const handleGatewayWebhook = async (req, res, next) => {
       })
     }
 
-    const metadata = getGatewayPayloadMetadata(provider, body)
-    const responseStatus = metadata.status
+    const gatewayMetadata = getGatewayPayloadMetadata(provider, body)
+    const responseStatus = gatewayMetadata.status
     payment.paymentResponse = { ...body, verified: true }
     payment.callbackPayload = body
     payment.providerTransactionId =
-      metadata.providerTransactionId || payment.providerTransactionId
+      gatewayMetadata.providerTransactionId || payment.providerTransactionId
     payment.providerOrderId =
-      metadata.providerOrderId || payment.providerOrderId
+      gatewayMetadata.providerOrderId || payment.providerOrderId
 
     if (responseStatus === 'SUCCESS') {
       payment.status = 'SUCCESS'
