@@ -5,7 +5,7 @@ const getPublicApiBaseUrl = () => {
     process.env.PUBLIC_API_BASE_URL ||
     process.env.APP_BASE_URL ||
     process.env.SERVER_URL ||
-    ''
+    'api.port.porttivo.com'
 
   return String(raw).trim().replace(/\/+$/, '')
 }
