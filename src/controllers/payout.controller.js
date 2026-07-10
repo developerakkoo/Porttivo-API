@@ -70,7 +70,8 @@ const createBeneficiary = async (req, res, next) => {
       data: {
         payee: result.payeeSnapshot,
         beneId: result.beneId,
-        validation: result.validation
+        validation: result.validation,
+        verificationWarning: result.verificationWarning
       }
     })
   } catch (error) {

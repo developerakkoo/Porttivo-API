@@ -325,6 +325,9 @@ const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fe
 
   const parsed = parseCashfreeResponse(result.data)
   const verified = result.ok && !['ERROR', 'FAILED', 'INVALID', 'REJECTED'].includes(parsed.status)
+  const verificationSuiteNotEnabled =
+    parsed.code === '422' ||
+    String(parsed.message || '').toLowerCase().includes('verification suite is not enabled')
 
   return {
     verified,
@@ -332,7 +335,8 @@ const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fe
     data: parsed.data,
     status: parsed.status,
     code: parsed.code,
-    message: parsed.message
+    message: parsed.message,
+    verificationSuiteNotEnabled
   }
 }
 
@@ -413,12 +417,16 @@ const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, i
   }
 
   const validation = await validateBankDetails({ name, email, phone, bankAccount, ifsc }, fetchImpl)
-  if (!validation.verified) {
+  if (!validation.verified && !validation.verificationSuiteNotEnabled) {
     const error = new Error('Bank account verification failed. Please check account details.')
     error.statusCode = 400
     error.details = validation
     throw error
   }
+
+  const verificationWarning = validation.verificationSuiteNotEnabled
+    ? 'Bank verification suite is not enabled for this account. Proceeded with beneficiary creation.'
+    : null
 
   const beneId = payee.cashfreeBeneId || buildBeneficiaryId(payee, modelName)
   const beneficiaryResponse = await addCashfreeBeneficiary(
@@ -439,7 +447,8 @@ const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, i
     payeeSnapshot: summarizePayee(updated.payee),
     beneId,
     validation,
-    beneficiaryResponse
+    beneficiaryResponse,
+    verificationWarning
   }
 }
 
