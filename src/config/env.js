@@ -1,5 +1,24 @@
 require('dotenv').config();
 
+const getPublicApiBaseUrl = () => {
+  const raw =
+    process.env.PUBLIC_API_BASE_URL ||
+    process.env.APP_BASE_URL ||
+    process.env.SERVER_URL ||
+    ''
+
+  return String(raw).trim().replace(/\/+$/, '')
+}
+
+const publicApiBaseUrl = getPublicApiBaseUrl()
+const buildApiUrl = (path) => {
+  if (publicApiBaseUrl) {
+    return `${publicApiBaseUrl}${path}`
+  }
+
+  return `http://localhost:${process.env.PORT || 3000}${path}`
+}
+
 module.exports = {
   port: process.env.PORT || 3000,
   /** Engine.IO path; must match Flutter `SOCKET_IO_PATH` / nginx when using a subpath (e.g. `/api/socket.io`). */
@@ -27,23 +46,23 @@ module.exports = {
       : 'https://test.payu.in/_payment'),
   payuSuccessUrl:
     process.env.PAYU_SUCCESS_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/marketplace-payments/payu/webhook`,
+    buildApiUrl('/api/marketplace-payments/payu/webhook'),
   payuFailureUrl:
     process.env.PAYU_FAILURE_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/marketplace-payments/payu/webhook`,
+    buildApiUrl('/api/marketplace-payments/payu/webhook'),
   payuWebhookUrl:
     process.env.PAYU_WEBHOOK_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/marketplace-payments/payu/webhook`,
+    buildApiUrl('/api/marketplace-payments/payu/webhook'),
   payuPaymentLinksUrl: process.env.PAYU_PAYMENT_LINKS_URL || '',
   paymentScreenPayuSuccessUrl:
     process.env.PAYMENT_SCREEN_PAYU_SUCCESS_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/payments/payu/webhook`,
+    buildApiUrl('/api/payments/payu/webhook'),
   paymentScreenPayuFailureUrl:
     process.env.PAYMENT_SCREEN_PAYU_FAILURE_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/payments/payu/webhook`,
+    buildApiUrl('/api/payments/payu/webhook'),
   paymentScreenPayuWebhookUrl:
     process.env.PAYMENT_SCREEN_PAYU_WEBHOOK_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/payments/payu/webhook`,
+    buildApiUrl('/api/payments/payu/webhook'),
   cashfreeMode: process.env.CASHFREE_MODE || 'sandbox',
   cashfreeClientId: process.env.CASHFREE_CLIENT_ID || 'TEST109808845e5fe00f7bbaa0e9aeb148808901',
   cashfreeClientSecret: process.env.CASHFREE_CLIENT_SECRET || 'cfsk_ma_test_20d8ab0f51dfd4cc60943d425cbeb11c_a45d1b9c',
@@ -69,7 +88,7 @@ module.exports = {
       : 'https://sandbox.cashfree.com/payout/v1'),
   cashfreePayoutWebhookUrl:
     process.env.CASHFREE_PAYOUT_WEBHOOK_URL || 
-    `http://localhost:${process.env.PORT || 3000}/api/payouts/cashfree/webhook`,
+    buildApiUrl('/api/payouts/cashfree/webhook'),
   cashfreePayoutBankEncryptionSecret:
     process.env.CASHFREE_PAYOUT_ENCRYPTION_KEY ||
     process.env.CASHFREE_PAYOUT_BANK_ENCRYPTION_SECRET ||
@@ -82,8 +101,8 @@ module.exports = {
       : 'https://sandbox.cashfree.com/checkout'),
   cashfreeReturnUrl:
     process.env.CASHFREE_RETURN_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/payments/cashfree/return`,
+    buildApiUrl('/api/payments/cashfree/return'),
   cashfreeWebhookUrl:
     process.env.CASHFREE_WEBHOOK_URL ||
-    `http://localhost:${process.env.PORT || 3000}/api/payments/cashfree/webhook`,
+    buildApiUrl('/api/payments/cashfree/webhook'),
 };
