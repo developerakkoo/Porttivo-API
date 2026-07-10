@@ -111,11 +111,16 @@ const getPaymentGatewayOptions = async (req, res, next) => {
 }
 
 const findCashfreePaymentByGatewayPayload = async (payload = {}) => {
+  const metadata = getGatewayPayloadMetadata('CASHFREE', payload || {})
   const paymentSessionId = String(
-    payload.payment_session_id || payload.paymentSessionId || payload.udf1 || ''
+    payload.payment_session_id ||
+      payload.paymentSessionId ||
+      payload.udf1 ||
+      ''
   ).trim()
   const merchantTransactionId = String(
-    payload.order_id ||
+    metadata.providerOrderId ||
+      payload.order_id ||
       payload.cf_order_id ||
       payload.orderId ||
       payload.txnid ||

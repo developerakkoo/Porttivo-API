@@ -324,10 +324,20 @@ const normalizeCashfreeStatus = (status) => {
 }
 
 const extractCashfreeStatusValue = (payload = {}) => {
+  const data = payload.data && typeof payload.data === 'object' ? payload.data : {}
+  const order = data.order && typeof data.order === 'object' ? data.order : payload.order && typeof payload.order === 'object' ? payload.order : {}
+  const payment = data.payment && typeof data.payment === 'object' ? data.payment : payload.payment && typeof payload.payment === 'object' ? payload.payment : {}
+
   return (
     payload.status ||
     payload.order_status ||
     payload.orderStatus ||
+    order.status ||
+    order.order_status ||
+    order.orderStatus ||
+    payment.status ||
+    payment.payment_status ||
+    payment.paymentStatus ||
     payload.payment_status ||
     payload.paymentStatus ||
     ''
@@ -348,14 +358,36 @@ const extractGatewayIdentifiers = (provider, payload = {}) => {
   }
 
   if (provider === 'CASHFREE') {
+    const data = payload.data && typeof payload.data === 'object' ? payload.data : {}
+    const order = data.order && typeof data.order === 'object' ? data.order : payload.order && typeof payload.order === 'object' ? payload.order : {}
+    const payment = data.payment && typeof data.payment === 'object' ? data.payment : payload.payment && typeof payload.payment === 'object' ? payload.payment : {}
+
     return {
       transactionId:
+        payment.cf_payment_id ||
+        payment.payment_id ||
+        payment.transaction_id ||
+        payment.id ||
+        data.cf_payment_id ||
+        data.payment_id ||
+        data.transaction_id ||
         payload.cf_payment_id ||
+        payload.payment_id ||
+        payload.transaction_id ||
         payload.payment_id ||
         payload.transaction_id ||
         payload.id ||
         null,
       orderId:
+        order.cf_order_id ||
+        order.order_id ||
+        order.orderId ||
+        payment.cf_order_id ||
+        payment.order_id ||
+        payment.orderId ||
+        data.cf_order_id ||
+        data.order_id ||
+        data.orderId ||
         payload.cf_order_id ||
         payload.order_id ||
         payload.orderId ||
