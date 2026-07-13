@@ -99,9 +99,7 @@ module.exports = {
     'cfsk_ma_test_91717ea9b403acaa67b1904f3e05af66_48ece372',
   cashfreePayoutApiBaseUrl:
     process.env.CASHFREE_PAYOUT_API_BASE_URL ||
-    (process.env.CASHFREE_PAYOUT_MODE === 'production'
-      ? 'https://api.cashfree.com/payout'
-      : 'https://sandbox.cashfree.com/payout'),
+    'https://sandbox.cashfree.com/payout',
   cashfreePayoutWebhookStrictValidation:
     String(process.env.CASHFREE_PAYOUT_WEBHOOK_STRICT_VALIDATION || '').trim().toLowerCase() === 'true',
   cashfreePayoutWebhookUrl:
