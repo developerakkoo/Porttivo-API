@@ -625,20 +625,67 @@ const handleCashfreeReturn = async (req, res, next) => {
     }
 
     const payment = await findCashfreePaymentByGatewayPayload(body)
-    if (!payment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Payment session not found'
-      })
+    const orderId =
+      body.order_id ||
+      body.orderId ||
+      body.cf_order_id ||
+      body.cfOrderId ||
+      body.payment_session_id ||
+      body.paymentSessionId ||
+      null
+
+    if (payment) {
+      const payload = serializePaymentSession(payment)
+      return res.status(200).type('html').send(`
+        <html>
+          <head>
+            <title>Payment Received</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <style>
+              body { font-family: Arial, sans-serif; background: #f6f7fb; color: #1f2937; margin: 0; padding: 40px; }
+              .card { max-width: 720px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.08); }
+              .title { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+              .meta { margin: 8px 0; color: #4b5563; }
+              .status { display: inline-block; padding: 6px 12px; border-radius: 999px; background: #dcfce7; color: #166534; font-weight: 700; margin-top: 16px; }
+            </style>
+          </head>
+          <body>
+            <div class="card">
+              <div class="title">Payment received</div>
+              <div class="meta">Reference: ${String(payload.referenceId || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+              <div class="meta">Payment ID: ${String(payload.id || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+              <div class="status">Status: ${String(payload.status || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+              <p class="meta" style="margin-top:16px;">You can close this page. The payout status will continue updating in the background.</p>
+            </div>
+          </body>
+        </html>
+      `)
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Cashfree payment return received',
-      data: {
-        payment: serializePaymentSession(payment)
-      }
-    })
+    return res.status(200).type('html').send(`
+      <html>
+        <head>
+          <title>Payment Return Received</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <style>
+            body { font-family: Arial, sans-serif; background: #f6f7fb; color: #1f2937; margin: 0; padding: 40px; }
+            .card { max-width: 720px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 28px; box-shadow: 0 8px 32px rgba(0,0,0,0.08); }
+            .title { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+            .meta { margin: 8px 0; color: #4b5563; }
+            .warn { display: inline-block; padding: 6px 12px; border-radius: 999px; background: #fef3c7; color: #92400e; font-weight: 700; margin-top: 16px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="title">Payment return received</div>
+            <div class="meta">Cashfree redirected back to Porttivo successfully.</div>
+            ${orderId ? `<div class="meta">Reference received: ${String(orderId).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+            <div class="warn">Waiting for payment webhook confirmation</div>
+            <p class="meta" style="margin-top:16px;">The final payment and payout status is updated by the webhook, not this return page.</p>
+          </div>
+        </body>
+      </html>
+    `)
   } catch (error) {
     next(error)
   }
