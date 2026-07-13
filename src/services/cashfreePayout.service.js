@@ -1010,37 +1010,93 @@ const stopPayoutAutomationCron = () => {
   }
 }
 
-const verifyCashfreePayoutWebhook = (body, headers = {}, rawBody = '') => {
-  const secret = cashfreePayoutWebhookSecret || cashfreePayoutClientSecret
-  if (!secret) {
+const stableStringify = (value) => {
+  if (value === null || value === undefined) {
+    return ''
+  }
+
+  if (typeof value !== 'object') {
+    return String(value)
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(',')}]`
+  }
+
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(',')}}`
+}
+
+const buildWebhookCandidates = (body, rawBody = '') => {
+  const candidates = []
+  const raw = typeof rawBody === 'string' ? rawBody.trim() : ''
+  if (raw) {
+    candidates.push(raw)
+  }
+
+  if (body && typeof body === 'object') {
+    try {
+      candidates.push(JSON.stringify(body))
+    } catch (error) {
+      // ignore JSON stringify issues and fall back to stable stringify
+    }
+    candidates.push(stableStringify(body))
+  } else if (typeof body === 'string' && body.trim()) {
+    candidates.push(body.trim())
+  }
+
+  return [...new Set(candidates.filter(Boolean))]
+}
+
+const verifyWebhookSignature = ({ signature, body, rawBody, secrets = [] }) => {
+  const normalizedSignature = String(signature || '').trim()
+  if (!normalizedSignature) {
     return false
   }
 
+  const candidates = buildWebhookCandidates(body, rawBody)
+
+  for (const secret of secrets) {
+    const cleanedSecret = String(secret || '').trim()
+    if (!cleanedSecret) {
+      continue
+    }
+
+    for (const candidate of candidates) {
+      const expectedHex = crypto.createHmac('sha256', cleanedSecret).update(candidate).digest('hex')
+      const expectedBase64 = crypto.createHmac('sha256', cleanedSecret).update(candidate).digest('base64')
+
+      if (
+        [expectedHex, expectedBase64].some(
+          (expected) => expected === normalizedSignature || expected === normalizedSignature.toLowerCase()
+        )
+      ) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+const verifyCashfreePayoutWebhook = (body, headers = {}, rawBody = '') => {
   const signature = String(
     headers['x-webhook-signature'] ||
       headers['X-Webhook-Signature'] ||
       headers['x-signature'] ||
+      headers['x-cashfree-signature'] ||
       headers.signature ||
       ''
   ).trim()
 
-  if (!signature) {
-    return false
-  }
-
-  const raw =
-    typeof rawBody === 'string' && rawBody
-      ? rawBody
-      : typeof body === 'string'
-        ? body
-        : JSON.stringify(body || {})
-
-  const expectedHex = crypto.createHmac('sha256', secret).update(raw).digest('hex')
-  const expectedBase64 = crypto.createHmac('sha256', secret).update(raw).digest('base64')
-
-  return [expectedHex, expectedBase64].some(
-    (candidate) => candidate === signature || candidate === signature.toLowerCase()
-  )
+  return verifyWebhookSignature({
+    signature,
+    body,
+    rawBody,
+    secrets: [cashfreePayoutWebhookSecret, cashfreePayoutClientSecret]
+  })
 }
 
 const handleCashfreePayoutWebhook = async ({ body = {}, headers = {}, rawBody = '', fetchImpl = global.fetch } = {}) => {
