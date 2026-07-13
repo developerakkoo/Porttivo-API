@@ -276,9 +276,32 @@ const authorizeCashfreePayout = async (fetchImpl = global.fetch) => {
     fetchImpl
   })
 
-  if (!result.ok) {
-    const message = result.data?.message || result.data?.error || `Cashfree payout authorization failed with status ${result.status}`
-    throw new Error(message)
+  const responseStatus = String(result.data?.status || '').trim().toUpperCase()
+  const responseMessage =
+    result.data?.message ||
+    result.data?.error ||
+    result.data?.errorMessage ||
+    result.data?.data?.message ||
+    `Cashfree payout authorization failed with status ${result.status}`
+
+  if (!result.ok || responseStatus === 'ERROR' || responseStatus === 'FAILED') {
+    const error = new Error(responseMessage)
+    error.statusCode = result.status
+    error.details = {
+      response: result.data,
+      status: result.status
+    }
+    throw error
+  }
+
+  if (String(result.data?.subCode || result.data?.code || '') === '403') {
+    const error = new Error(responseMessage)
+    error.statusCode = result.status
+    error.details = {
+      response: result.data,
+      status: result.status
+    }
+    throw error
   }
 
   const token =
@@ -294,7 +317,7 @@ const authorizeCashfreePayout = async (fetchImpl = global.fetch) => {
     null
 
   if (!token) {
-    const error = new Error('Cashfree payout authorization token was not returned')
+    const error = new Error(responseMessage || 'Cashfree payout authorization token was not returned')
     error.details = {
       response: result.data,
       status: result.status
