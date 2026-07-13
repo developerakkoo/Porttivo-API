@@ -43,6 +43,13 @@ const createBeneficiary = async (req, res, next) => {
     const phone = String(body.phone || '').trim()
     const bankAccount = String(body.bankAccount || '').trim()
     const ifsc = String(body.ifsc || '').trim().toUpperCase()
+    const address = {
+      address1: String(body.address1 || body.address || body.beneficiaryAddress || '').trim(),
+      city: String(body.city || body.beneficiaryCity || '').trim(),
+      state: String(body.state || body.beneficiaryState || '').trim(),
+      pincode: String(body.pincode || body.postalCode || body.beneficiaryPostalCode || '').trim(),
+      country: String(body.country || body.countryCode || body.beneficiaryCountry || 'IN').trim().toUpperCase()
+    }
 
     if (!payeeId) {
       return res.status(400).json({ success: false, message: 'payeeId is required' })
@@ -60,7 +67,7 @@ const createBeneficiary = async (req, res, next) => {
     }
 
     const result = await registerBeneficiary(
-      { payeeId, name, email, phone, bankAccount, ifsc },
+      { payeeId, name, email, phone, bankAccount, ifsc, address },
       req.fetch || global.fetch
     )
 

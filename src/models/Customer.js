@@ -89,6 +89,10 @@ const customerSchema = new mongoose.Schema(
         trim: true,
         default: null,
       },
+      address: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {},
+      },
       verification: {
         type: mongoose.Schema.Types.Mixed,
         default: {},

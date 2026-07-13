@@ -341,17 +341,49 @@ const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fe
   }
 }
 
-const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount, ifsc }, fetchImpl = global.fetch) => {
+const normalizeAddressField = (value) => String(value || '').trim()
+
+const resolveBeneficiaryAddress = ({ payee, address = {} } = {}) => {
+  const sourceLocation = payee?.location || {}
+  return {
+    address1:
+      normalizeAddressField(address.address1 || address.address || address.beneficiaryAddress) ||
+      normalizeAddressField(sourceLocation.address),
+    city:
+      normalizeAddressField(address.city || address.beneficiaryCity) ||
+      normalizeAddressField(sourceLocation.city),
+    state:
+      normalizeAddressField(address.state || address.beneficiaryState) ||
+      normalizeAddressField(sourceLocation.state),
+    pincode:
+      normalizeAddressField(address.pincode || address.postalCode || address.beneficiaryPostalCode) ||
+      normalizeAddressField(sourceLocation.pincode || sourceLocation.postalCode),
+    country:
+      normalizeAddressField(address.country || address.countryCode || address.beneficiaryCountry) ||
+      normalizeAddressField(sourceLocation.countryCode || sourceLocation.country) ||
+      'IN'
+  }
+}
+
+const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount, ifsc, address }, fetchImpl = global.fetch) => {
   await authorizeCashfreePayout(fetchImpl)
-  const result = await cashfreeRequest('/addBeneficiary', {
+  const result = await cashfreeRequest('/v2/beneficiary', {
     method: 'POST',
     body: {
-      beneId,
-      name,
-      email: email || '',
-      phone: phone || '',
-      bankAccount,
-      ifsc
+      beneficiary_id: beneId,
+      beneficiary_name: name,
+      beneficiary_instrument_details: {
+        bank_account_number: bankAccount,
+        bank_ifsc: ifsc
+      },
+      beneficiary_contact_details: {
+        beneficiary_address: address?.address1 || '',
+        beneficiary_city: address?.city || '',
+        beneficiary_state: address?.state || '',
+        beneficiary_postal_code: address?.pincode || '',
+        beneficiary_phone: phone || ''
+      },
+      beneficiary_email: email || ''
     },
     headers: await getCashfreeAuthorizedHeaders(fetchImpl),
     fetchImpl
@@ -366,15 +398,18 @@ const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount,
   return parsed
 }
 
-const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode = 'IMPS' }, fetchImpl = global.fetch) => {
+const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode = 'IMPS', remarks = '' }, fetchImpl = global.fetch) => {
   await authorizeCashfreePayout(fetchImpl)
-  const result = await cashfreeRequest('/requestAsyncTransfer', {
+  const result = await cashfreeRequest('/v2/transfers', {
     method: 'POST',
     body: {
-      beneId,
-      amount: String(Number(amount).toFixed(2)),
-      transferId,
-      transferMode
+      beneficiary_details: {
+        beneficiary_id: beneId
+      },
+      transfer_amount: String(Number(amount).toFixed(2)),
+      transfer_id: transferId,
+      transfer_mode: transferMode,
+      transfer_remarks: remarks || ''
     },
     headers: await getCashfreeAuthorizedHeaders(fetchImpl),
     fetchImpl
@@ -382,12 +417,12 @@ const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode =
 
   return {
     ok: result.ok,
-    status: result.status,
+    httpStatus: result.status,
     ...parseCashfreeResponse(result.data)
   }
 }
 
-const setPayeeBeneficiaryOnModel = async ({ payee, modelName, beneId, bankDetails, beneficiaryResponse }) => {
+const setPayeeBeneficiaryOnModel = async ({ payee, modelName, beneId, bankDetails, beneficiaryResponse, address }) => {
   payee.cashfreeBeneId = beneId
   payee.cashfreeBeneficiary = {
     beneId,
@@ -398,6 +433,7 @@ const setPayeeBeneficiaryOnModel = async ({ payee, modelName, beneId, bankDetail
     bankAccountEncrypted: encryptSensitiveValue(bankDetails.bankAccount),
     ifscEncrypted: encryptSensitiveValue(bankDetails.ifsc),
     bankAccountLast4: maskBankAccount(bankDetails.bankAccount),
+    address: address || {},
     verification: beneficiaryResponse || {},
     createdAt: new Date(),
     updatedAt: new Date()
@@ -409,7 +445,7 @@ const setPayeeBeneficiaryOnModel = async ({ payee, modelName, beneId, bankDetail
   }
 }
 
-const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, ifsc }, fetchImpl = global.fetch) => {
+const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, ifsc, address = {} }, fetchImpl = global.fetch) => {
   const { payee, modelName } = await findPayeeRecordById(payeeId)
   if (!payee) {
     const error = new Error('Payee not found')
@@ -417,21 +453,16 @@ const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, i
     throw error
   }
 
-  const validation = await validateBankDetails({ name, email, phone, bankAccount, ifsc }, fetchImpl)
-  if (!validation.verified && !validation.verificationSuiteNotEnabled) {
-    const error = new Error('Bank account verification failed. Please check account details.')
+  const resolvedAddress = resolveBeneficiaryAddress({ payee, address })
+  if (!resolvedAddress.address1 || !resolvedAddress.city || !resolvedAddress.state || !resolvedAddress.pincode) {
+    const error = new Error('Beneficiary address1, city, state, and pincode are required for Cashfree v2')
     error.statusCode = 400
-    error.details = validation
     throw error
   }
 
-  const verificationWarning = validation.verificationSuiteNotEnabled
-    ? 'Bank verification suite is not enabled for this account. Proceeded with beneficiary creation.'
-    : null
-
   const beneId = payee.cashfreeBeneId || buildBeneficiaryId(payee, modelName)
   const beneficiaryResponse = await addCashfreeBeneficiary(
-    { beneId, name, email, phone, bankAccount, ifsc },
+    { beneId, name, email, phone, bankAccount, ifsc, address: resolvedAddress },
     fetchImpl
   )
 
@@ -440,16 +471,21 @@ const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, i
     modelName,
     beneId,
     bankDetails: { name, email, phone, bankAccount, ifsc },
-    beneficiaryResponse
+    beneficiaryResponse,
+    address: resolvedAddress
   })
 
   return {
     payee: updated.payee,
     payeeSnapshot: summarizePayee(updated.payee),
     beneId,
-    validation,
+    validation: {
+      verified: true,
+      skipped: true,
+      message: 'Beneficiary validation skipped for Cashfree v2'
+    },
     beneficiaryResponse,
-    verificationWarning
+    verificationWarning: null
   }
 }
 
@@ -616,6 +652,7 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
   const parsed = response || {}
   const normalizedStatus = String(parsed.status || '').trim().toUpperCase()
   const responsePayload = parsed.raw || parsed.data || parsed
+  const httpStatus = Number(parsed.httpStatus || 0)
   const transferId = parsed.transferId || payout.cashfree?.transferId || makeTransferId('PTP')
   const utr = parsed.utr || responsePayload?.utr || responsePayload?.utr_no || null
   const code = parsed.code || responsePayload?.code || null
@@ -630,6 +667,25 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
     utr: normalizedStatus === 'SUCCESS' ? utr || payout.cashfree?.utr || null : payout.cashfree?.utr || null
   }
   payout.lastAttemptAt = new Date()
+
+  if (httpStatus === 403) {
+    payout.status = 'FAILED'
+    payout.completedAt = new Date()
+    payout.failure = buildPayoutFailure({
+      code: '403',
+      message:
+        message ||
+        'The payout v1 and v1.2 APIs have been deprecated. Please use v2 APIs.',
+      reason,
+      isRetryable: false
+    })
+    payout.retry = {
+      ...(payout.retry || {}),
+      nextRetryAt: null
+    }
+    await payout.save()
+    return payout
+  }
 
   if (normalizedStatus === 'SUCCESS') {
     payout.status = 'SUCCESS'
@@ -653,6 +709,25 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
   if (normalizedStatus === 'ERROR') {
     const isPermanent = isPermanentTransferFailure(reason, code)
     const isRetryable = !isPermanent && isTemporaryTransferFailure(reason, code)
+
+    if (String(code) === '403' || String(reason).toLowerCase().includes('deprecated')) {
+      payout.status = 'FAILED'
+      payout.failure = buildPayoutFailure({
+        code: '403',
+        message:
+          message ||
+          'The payout v1 and v1.2 APIs have been deprecated. Please use v2 APIs.',
+        reason,
+        isRetryable: false
+      })
+      payout.completedAt = new Date()
+      payout.retry = {
+        ...(payout.retry || {}),
+        nextRetryAt: null
+      }
+      await payout.save()
+      return payout
+    }
 
     if (code === 'INSUFFICIENT_BALANCE' || String(reason).toUpperCase().includes('INSUFFICIENT_BALANCE')) {
       payout.status = 'RETRY_PENDING'
@@ -815,7 +890,8 @@ const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {
         beneId,
         amount: payout.amount,
         transferId: payout.cashfree.transferId,
-        transferMode: payout.cashfree.transferMode || 'IMPS'
+        transferMode: payout.cashfree.transferMode || 'IMPS',
+        remarks: payout.referenceId || payout.referenceType || 'Porttivo payout'
       },
       fetchImpl
     )

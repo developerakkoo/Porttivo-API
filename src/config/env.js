@@ -100,8 +100,8 @@ module.exports = {
   cashfreePayoutApiBaseUrl:
     process.env.CASHFREE_PAYOUT_API_BASE_URL ||
     (process.env.CASHFREE_PAYOUT_MODE === 'production'
-      ? 'https://api.cashfree.com/payout/v1'
-      : 'https://sandbox.cashfree.com/payout/v1'),
+      ? 'https://api.cashfree.com/payout'
+      : 'https://sandbox.cashfree.com/payout'),
   cashfreePayoutWebhookStrictValidation:
     String(process.env.CASHFREE_PAYOUT_WEBHOOK_STRICT_VALIDATION || '').trim().toLowerCase() === 'true',
   cashfreePayoutWebhookUrl:
