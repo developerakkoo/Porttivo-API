@@ -5,9 +5,20 @@ const getPublicApiBaseUrl = () => {
     process.env.PUBLIC_API_BASE_URL ||
     process.env.APP_BASE_URL ||
     process.env.SERVER_URL ||
+    process.env.API_BASE_URL ||
+    process.env.BACKEND_URL ||
     ''
 
-  return String(raw).trim().replace(/\/+$/, '')
+  const normalized = String(raw).trim().replace(/\/+$/, '')
+  if (normalized) {
+    return normalized
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    return 'https://api.port.porttivo.com'
+  }
+
+  return ''
 }
 
 const publicApiBaseUrl = getPublicApiBaseUrl()
@@ -87,7 +98,7 @@ module.exports = {
       ? 'https://api.cashfree.com/payout/v1'
       : 'https://sandbox.cashfree.com/payout/v1'),
   cashfreePayoutWebhookUrl:
-    process.env.CASHFREE_PAYOUT_WEBHOOK_URL || 
+    process.env.CASHFREE_PAYOUT_WEBHOOK_URL ||
     buildApiUrl('/api/payouts/cashfree/webhook'),
   cashfreePayoutBankEncryptionSecret:
     process.env.CASHFREE_PAYOUT_ENCRYPTION_KEY ||
