@@ -57,6 +57,26 @@ const normalizeMoney = (amount) => {
   return Number(value.toFixed(2))
 }
 
+const sanitizeTransferRemarks = (value, fallback = 'Porttivo payout') => {
+  const source = String(value || '').trim()
+  const normalized = source
+    .replace(/[_/\\]+/g, ' ')
+    .replace(/[^\p{L}\p{N}\s.-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const safeValue = (normalized || fallback).trim()
+  return safeValue.length > 100 ? safeValue.slice(0, 100).trim() : safeValue
+}
+
+const buildTransferRemarks = ({ referenceType, referenceId, fallback = 'Porttivo payout' } = {}) => {
+  const parts = [referenceType, referenceId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+
+  return sanitizeTransferRemarks(parts.join(' '), fallback)
+}
+
 const getEncryptionKey = () => {
   const rawKey = String(cashfreePayoutBankEncryptionSecret || cashfreePayoutClientSecret || '').trim()
   if (!rawKey) {
@@ -344,6 +364,7 @@ const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount,
 }
 
 const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode = 'IMPS', remarks = '' }, fetchImpl = global.fetch) => {
+  const safeRemarks = sanitizeTransferRemarks(remarks, 'Porttivo payout')
   const result = await cashfreeRequest('/transfers', {
     method: 'POST',
     body: {
@@ -353,7 +374,7 @@ const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode =
       transfer_amount: Number(normalizeMoney(amount)),
       transfer_id: transferId,
       transfer_mode: transferMode,
-      transfer_remarks: remarks || ''
+      transfer_remarks: safeRemarks
     },
     fetchImpl
   })
@@ -834,7 +855,10 @@ const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {
         amount: payout.amount,
         transferId: payout.cashfree.transferId,
         transferMode: payout.cashfree.transferMode || 'IMPS',
-        remarks: payout.referenceId || payout.referenceType || 'Porttivo payout'
+        remarks: buildTransferRemarks({
+          referenceType: payout.referenceType,
+          referenceId: payout.referenceId
+        })
       },
       fetchImpl
     )

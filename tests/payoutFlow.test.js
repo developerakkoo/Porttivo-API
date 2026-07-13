@@ -214,6 +214,65 @@ const payoutTests = [
     }
   },
   {
+    name: 'requestAsyncTransfer sanitizes transfer remarks before sending to Cashfree',
+    async run() {
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/cashfreePayout.service.js'),
+        {
+          '../config/env': {
+            cashfreePayoutMode: 'sandbox',
+            cashfreePayoutClientId: 'cf-client',
+            cashfreePayoutClientSecret: 'cf-secret',
+            cashfreePayoutWebhookSecret: 'cf-secret',
+            cashfreePayoutApiBaseUrl: 'https://sandbox.cashfree.com/payout',
+            cashfreePayoutWebhookUrl: 'https://app.example/payout-webhook',
+            cashfreePayoutBankEncryptionSecret: 'encrypt-secret'
+          },
+          '../models/Transporter': {},
+          '../models/Driver': {},
+          '../models/Customer': {},
+          '../models/PumpOwner': {},
+          '../models/CompanyUser': {},
+          '../models/PaymentSession': {},
+          '../models/Payout': {}
+        }
+      )
+
+      const calls = []
+      const originalFetch = global.fetch
+      global.fetch = async (url, options = {}) => {
+        calls.push({
+          url,
+          body: JSON.parse(options.body || '{}')
+        })
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            data: {
+              status: 'SUCCESS',
+              transferId: 'TRF-1'
+            }
+          })
+        }
+      }
+
+      try {
+        await service.requestAsyncTransfer({
+          beneId: 'BEN-1',
+          amount: 5000,
+          transferId: 'TRF-1',
+          transferMode: 'IMPS',
+          remarks: 'TRIP_2013'
+        })
+
+        assert.equal(calls[0].body.transfer_remarks, 'TRIP 2013')
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
     name: 'automatic payout marks failed when Cashfree rejects deprecated API with 403',
     async run() {
       let payoutDoc = {
