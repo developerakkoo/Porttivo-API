@@ -14,11 +14,14 @@ const getPublicApiBaseUrl = () => {
     return normalized
   }
 
-  if (process.env.NODE_ENV === 'production') {
-    return 'https://api.port.porttivo.com'
+  if (
+    process.env.NODE_ENV === 'development' ||
+    String(process.env.CASHFREE_USE_LOCAL_URL || '').trim().toLowerCase() === 'true'
+  ) {
+    return ''
   }
 
-  return ''
+  return 'https://api.port.porttivo.com'
 }
 
 const publicApiBaseUrl = getPublicApiBaseUrl()
