@@ -350,7 +350,7 @@ const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode =
       beneficiary_details: {
         beneficiary_id: beneId
       },
-      transfer_amount: String(Number(amount).toFixed(2)),
+      transfer_amount: Number(normalizeMoney(amount)),
       transfer_id: transferId,
       transfer_mode: transferMode,
       transfer_remarks: remarks || ''

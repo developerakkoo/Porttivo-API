@@ -185,14 +185,6 @@ const payoutTests = [
 
       const originalFetch = global.fetch
       global.fetch = async (url) => {
-        if (String(url).includes('/authorize')) {
-          return {
-            ok: true,
-            status: 200,
-            text: async () => JSON.stringify({ data: { token: 'payout-token', expires_in: 3600 } })
-          }
-        }
-
         if (String(url).includes('/v2/transfers')) {
           return {
             ok: true,
@@ -319,14 +311,6 @@ const payoutTests = [
 
       const originalFetch = global.fetch
       global.fetch = async (url) => {
-        if (String(url).includes('/authorize')) {
-          return {
-            ok: true,
-            status: 200,
-            text: async () => JSON.stringify({ data: { token: 'payout-token', expires_in: 3600 } })
-          }
-        }
-
         if (String(url).includes('/v2/transfers')) {
           return {
             ok: false,
