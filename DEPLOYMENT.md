@@ -45,3 +45,25 @@ client_max_body_size 5m;
 ```
 
 Add this inside the `server` or `location` block that proxies to the API.
+
+## Cashfree Payout Sandbox Env
+
+For sandbox testing, set these environment variables on the server:
+
+```env
+CASHFREE_PAYOUT_MODE=sandbox
+CASHFREE_PAYOUT_API_BASE_URL=https://sandbox.cashfree.com/payout
+CASHFREE_PAYOUT_CLIENT_ID=<your sandbox payout client id>
+CASHFREE_PAYOUT_CLIENT_SECRET=<your sandbox payout client secret>
+```
+
+If you are using the Porttivo API behind a public domain, also set:
+
+```env
+PUBLIC_API_BASE_URL=https://api.port.porttivo.com
+```
+
+Notes:
+- Keep these values out of source control.
+- Restart the API after updating env values.
+- Beneficiary creation and payout transfer both depend on the payout client id and secret being present.
