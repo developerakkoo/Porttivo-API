@@ -90,8 +90,8 @@ module.exports = {
       ? 'https://api.cashfree.com/pg'
       : 'https://sandbox.cashfree.com/pg'),
   cashfreePayoutMode: process.env.CASHFREE_PAYOUT_MODE || process.env.CASHFREE_MODE || 'sandbox',
-  cashfreePayoutClientId: process.env.CASHFREE_PAYOUT_CLIENT_ID || '',
-  cashfreePayoutClientSecret: process.env.CASHFREE_PAYOUT_CLIENT_SECRET || '',
+  cashfreePayoutClientId: process.env.CASHFREE_PAYOUT_CLIENT_ID || 'CF10980884D9ABDLVQG8MC73FF4QD0',
+  cashfreePayoutClientSecret: process.env.CASHFREE_PAYOUT_CLIENT_SECRET || 'cfsk_ma_test_e30a071940f6232c76b48fd6a7a25011_bbf4bf05',
   cashfreePayoutWebhookSecret:
     process.env.CASHFREE_PAYOUT_WEBHOOK_SECRET ||
     process.env.CASHFREE_WEBHOOK_SECRET ||
