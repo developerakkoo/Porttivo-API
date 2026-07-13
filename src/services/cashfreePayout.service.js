@@ -344,7 +344,7 @@ const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount,
 }
 
 const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode = 'IMPS', remarks = '' }, fetchImpl = global.fetch) => {
-  const result = await cashfreeRequest('/v2/transfers', {
+  const result = await cashfreeRequest('/transfers', {
     method: 'POST',
     body: {
       beneficiary_details: {

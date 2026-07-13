@@ -185,7 +185,7 @@ const payoutTests = [
 
       const originalFetch = global.fetch
       global.fetch = async (url) => {
-        if (String(url).includes('/v2/transfers')) {
+        if (String(url).includes('/transfers')) {
           return {
             ok: true,
             status: 200,
@@ -311,7 +311,7 @@ const payoutTests = [
 
       const originalFetch = global.fetch
       global.fetch = async (url) => {
-        if (String(url).includes('/v2/transfers')) {
+        if (String(url).includes('/transfers')) {
           return {
             ok: false,
             status: 403,
