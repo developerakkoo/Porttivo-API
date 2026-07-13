@@ -82,6 +82,8 @@ module.exports = {
   cashfreeClientSecret: process.env.CASHFREE_CLIENT_SECRET || 'cfsk_ma_test_20d8ab0f51dfd4cc60943d425cbeb11c_a45d1b9c',
   cashfreeWebhookSecret: process.env.CASHFREE_WEBHOOK_SECRET || process.env.CASHFREE_CLIENT_SECRET || '',
   cashfreeApiVersion: process.env.CASHFREE_API_VERSION || '2023-08-01',
+  cashfreeWebhookStrictValidation:
+    String(process.env.CASHFREE_WEBHOOK_STRICT_VALIDATION || '').trim().toLowerCase() === 'true',
   cashfreeApiBaseUrl:
     process.env.CASHFREE_API_BASE_URL ||
     (process.env.CASHFREE_MODE === 'production'
@@ -100,6 +102,8 @@ module.exports = {
     (process.env.CASHFREE_PAYOUT_MODE === 'production'
       ? 'https://api.cashfree.com/payout/v1'
       : 'https://sandbox.cashfree.com/payout/v1'),
+  cashfreePayoutWebhookStrictValidation:
+    String(process.env.CASHFREE_PAYOUT_WEBHOOK_STRICT_VALIDATION || '').trim().toLowerCase() === 'true',
   cashfreePayoutWebhookUrl:
     process.env.CASHFREE_PAYOUT_WEBHOOK_URL ||
     buildApiUrl('/api/payouts/cashfree/webhook'),

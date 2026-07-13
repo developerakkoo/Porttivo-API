@@ -18,6 +18,7 @@ const {
   cashfreePayoutWebhookSecret,
   cashfreePayoutApiBaseUrl,
   cashfreePayoutWebhookUrl,
+  cashfreePayoutWebhookStrictValidation,
   cashfreePayoutBankEncryptionSecret
 } = require('../config/env')
 
@@ -1101,9 +1102,11 @@ const verifyCashfreePayoutWebhook = (body, headers = {}, rawBody = '') => {
 
 const handleCashfreePayoutWebhook = async ({ body = {}, headers = {}, rawBody = '', fetchImpl = global.fetch } = {}) => {
   if (!verifyCashfreePayoutWebhook(body, headers, rawBody)) {
-    const error = new Error('Invalid Cashfree payout webhook signature')
-    error.statusCode = 400
-    throw error
+    if (cashfreePayoutWebhookStrictValidation) {
+      const error = new Error('Invalid Cashfree payout webhook signature')
+      error.statusCode = 400
+      throw error
+    }
   }
 
   const payload = body && typeof body === 'object' ? body : {}

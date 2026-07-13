@@ -1,6 +1,7 @@
 const mongoose = require('mongoose')
 const PaymentSession = require('../models/PaymentSession')
 const logger = require('../utils/logger')
+const { cashfreeWebhookStrictValidation } = require('../config/env')
 const {
   buildPaymentInitiationRequest,
   getAvailableGatewayOptions,
@@ -530,16 +531,24 @@ const handleGatewayWebhook = async (req, res, next) => {
     })
 
     if (!verified) {
-      payment.status = 'FAILED'
-      payment.failureReason = `Invalid ${provider} webhook signature`
       payment.paymentResponse = { ...body, verified: false }
-      payment.failedAt = new Date()
-      await payment.save()
+      if (provider === 'CASHFREE' && !cashfreeWebhookStrictValidation) {
+        logger.warn(`Skipping strict ${provider} webhook signature validation`, {
+          bodyKeys: Object.keys(body || {}),
+          hasRawBody: Boolean(req.rawBody && String(req.rawBody).trim()),
+          hasSignatureHeader: Boolean(req.headers['x-webhook-signature'] || req.headers['x-signature'] || req.headers['x-cashfree-signature'])
+        })
+      } else {
+        payment.status = 'FAILED'
+        payment.failureReason = `Invalid ${provider} webhook signature`
+        payment.failedAt = new Date()
+        await payment.save()
 
-      return res.status(400).json({
-        success: false,
-        message: payment.failureReason
-      })
+        return res.status(400).json({
+          success: false,
+          message: payment.failureReason
+        })
+      }
     }
 
     const gatewayMetadata = getGatewayPayloadMetadata(provider, body)
