@@ -265,6 +265,12 @@ const authorizeCashfreePayout = async (fetchImpl = global.fetch) => {
     return cachedAuthToken
   }
 
+  if (!cashfreePayoutClientId || !cashfreePayoutClientSecret) {
+    const error = new Error('Cashfree payout client id and secret are not configured')
+    error.statusCode = 500
+    throw error
+  }
+
   const result = await cashfreeRequest('/authorize', {
     method: 'POST',
     fetchImpl
