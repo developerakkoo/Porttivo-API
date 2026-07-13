@@ -35,7 +35,7 @@ const STALE_PROCESSING_WINDOW_MS = 10 * 60 * 1000
 
 let cronTimer = null
 
-const safeObjectIdString = (value) => {
+const safeObjectIdString = value => {
   if (!value) return null
   if (typeof value === 'string') return value
   if (value._id) return value._id.toString()
@@ -46,10 +46,13 @@ const makeTransferId = (prefix = 'PTP') => {
   if (typeof crypto.randomUUID === 'function') {
     return `${prefix}-${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
   }
-  return `${prefix}-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(6).toString('hex').toUpperCase()}`
+  return `${prefix}-${Date.now().toString(36).toUpperCase()}-${crypto
+    .randomBytes(6)
+    .toString('hex')
+    .toUpperCase()}`
 }
 
-const normalizeMoney = (amount) => {
+const normalizeMoney = amount => {
   const value = Number(amount)
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error('Valid payout amount is required')
@@ -69,23 +72,29 @@ const sanitizeTransferRemarks = (value, fallback = 'Porttivo payout') => {
   return safeValue.length > 100 ? safeValue.slice(0, 100).trim() : safeValue
 }
 
-const buildTransferRemarks = ({ referenceType, referenceId, fallback = 'Porttivo payout' } = {}) => {
+const buildTransferRemarks = ({
+  referenceType,
+  referenceId,
+  fallback = 'Porttivo payout'
+} = {}) => {
   const parts = [referenceType, referenceId]
-    .map((value) => String(value || '').trim())
+    .map(value => String(value || '').trim())
     .filter(Boolean)
 
   return sanitizeTransferRemarks(parts.join(' '), fallback)
 }
 
 const getEncryptionKey = () => {
-  const rawKey = String(cashfreePayoutBankEncryptionSecret || cashfreePayoutClientSecret || '').trim()
+  const rawKey = String(
+    cashfreePayoutBankEncryptionSecret || cashfreePayoutClientSecret || ''
+  ).trim()
   if (!rawKey) {
     throw new Error('Payout encryption key is not configured')
   }
   return crypto.createHash('sha256').update(rawKey).digest()
 }
 
-const encryptSensitiveValue = (value) => {
+const encryptSensitiveValue = value => {
   const text = String(value || '').trim()
   if (!text) return null
 
@@ -97,14 +106,14 @@ const encryptSensitiveValue = (value) => {
   return Buffer.concat([iv, tag, encrypted]).toString('base64')
 }
 
-const maskBankAccount = (value) => {
+const maskBankAccount = value => {
   const text = String(value || '').trim()
   if (!text) return null
   if (text.length <= 4) return text
   return `${'*'.repeat(Math.max(0, text.length - 4))}${text.slice(-4)}`
 }
 
-const summarizePayee = (payee) => {
+const summarizePayee = payee => {
   if (!payee) return null
   return {
     id: payee._id ? payee._id.toString() : null,
@@ -144,7 +153,9 @@ const serializePayout = (payout, { includeSensitive = false } = {}) => {
       beneficiary: {
         ...beneficiary,
         bankAccount: includeSensitive ? beneficiary.bankAccount : null,
-        bankAccountMasked: maskBankAccount(beneficiary.bankAccount || beneficiary.bankAccountMasked || null)
+        bankAccountMasked: maskBankAccount(
+          beneficiary.bankAccount || beneficiary.bankAccountMasked || null
+        )
       },
       request,
       response
@@ -162,7 +173,7 @@ const serializePayout = (payout, { includeSensitive = false } = {}) => {
   }
 }
 
-const findPayeeRecordById = async (payeeId) => {
+const findPayeeRecordById = async payeeId => {
   const id = safeObjectIdString(payeeId)
   if (!id) {
     return { payee: null, modelName: null }
@@ -198,11 +209,15 @@ const getPayeeSnapshot = (payee, modelName) => {
 
 const buildBeneficiaryId = (payee, modelName) => {
   const idPart = safeObjectIdString(payee?._id) || makeTransferId('PAYEE')
-  const modelPart = String(modelName || payee?.constructor?.modelName || 'PAYEE').toUpperCase().replace(/[^A-Z0-9]+/g, '_')
+  const modelPart = String(
+    modelName || payee?.constructor?.modelName || 'PAYEE'
+  )
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
   return `${modelPart}_${idPart}`.slice(0, 50)
 }
 
-const parseCashfreeResponse = (payload) => {
+const parseCashfreeResponse = payload => {
   if (!payload) return { raw: payload, status: null }
 
   if (typeof payload === 'string') {
@@ -213,7 +228,8 @@ const parseCashfreeResponse = (payload) => {
     }
   }
 
-  const data = payload.data && typeof payload.data === 'object' ? payload.data : payload
+  const data =
+    payload.data && typeof payload.data === 'object' ? payload.data : payload
   const status = String(
     data.status ||
       data.subCode ||
@@ -221,13 +237,20 @@ const parseCashfreeResponse = (payload) => {
       data.transferStatus ||
       data.beneficiary_status ||
       ''
-  ).trim().toUpperCase()
+  )
+    .trim()
+    .toUpperCase()
 
   return {
     raw: payload,
     data,
     status,
-    transferId: data.transferId || data.transfer_id || data.referenceId || data.reference_id || null,
+    transferId:
+      data.transferId ||
+      data.transfer_id ||
+      data.referenceId ||
+      data.reference_id ||
+      null,
     beneId: data.beneId || data.bene_id || null,
     utr: data.utr || data.utr_no || data.utrNo || null,
     code: data.code || data.subCode || data.errorCode || null,
@@ -243,7 +266,16 @@ const getCashfreeHeaders = (extraHeaders = {}) => ({
   ...extraHeaders
 })
 
-const cashfreeRequest = async (path, { method = 'GET', body = null, query = null, headers = {}, fetchImpl = global.fetch } = {}) => {
+const cashfreeRequest = async (
+  path,
+  {
+    method = 'GET',
+    body = null,
+    query = null,
+    headers = {},
+    fetchImpl = global.fetch
+  } = {}
+) => {
   if (typeof fetchImpl !== 'function') {
     throw new Error('Fetch is not available for Cashfree payout requests')
   }
@@ -278,7 +310,10 @@ const cashfreeRequest = async (path, { method = 'GET', body = null, query = null
   }
 }
 
-const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fetchImpl = global.fetch) => {
+const validateBankDetails = async (
+  { name, email, phone, bankAccount, ifsc },
+  fetchImpl = global.fetch
+) => {
   const result = await cashfreeRequest('/validation/bankDetails', {
     method: 'GET',
     query: {
@@ -292,10 +327,14 @@ const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fe
   })
 
   const parsed = parseCashfreeResponse(result.data)
-  const verified = result.ok && !['ERROR', 'FAILED', 'INVALID', 'REJECTED'].includes(parsed.status)
+  const verified =
+    result.ok &&
+    !['ERROR', 'FAILED', 'INVALID', 'REJECTED'].includes(parsed.status)
   const verificationSuiteNotEnabled =
     parsed.code === '422' ||
-    String(parsed.message || '').toLowerCase().includes('verification suite is not enabled')
+    String(parsed.message || '')
+      .toLowerCase()
+      .includes('verification suite is not enabled')
 
   return {
     verified,
@@ -308,14 +347,15 @@ const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fe
   }
 }
 
-const normalizeAddressField = (value) => String(value || '').trim()
+const normalizeAddressField = value => String(value || '').trim()
 
 const resolveBeneficiaryAddress = ({ payee, address = {} } = {}) => {
   const sourceLocation = payee?.location || {}
   return {
     address1:
-      normalizeAddressField(address.address1 || address.address || address.beneficiaryAddress) ||
-      normalizeAddressField(sourceLocation.address),
+      normalizeAddressField(
+        address.address1 || address.address || address.beneficiaryAddress
+      ) || normalizeAddressField(sourceLocation.address),
     city:
       normalizeAddressField(address.city || address.beneficiaryCity) ||
       normalizeAddressField(sourceLocation.city),
@@ -323,16 +363,27 @@ const resolveBeneficiaryAddress = ({ payee, address = {} } = {}) => {
       normalizeAddressField(address.state || address.beneficiaryState) ||
       normalizeAddressField(sourceLocation.state),
     pincode:
-      normalizeAddressField(address.pincode || address.postalCode || address.beneficiaryPostalCode) ||
-      normalizeAddressField(sourceLocation.pincode || sourceLocation.postalCode),
+      normalizeAddressField(
+        address.pincode || address.postalCode || address.beneficiaryPostalCode
+      ) ||
+      normalizeAddressField(
+        sourceLocation.pincode || sourceLocation.postalCode
+      ),
     country:
-      normalizeAddressField(address.country || address.countryCode || address.beneficiaryCountry) ||
-      normalizeAddressField(sourceLocation.countryCode || sourceLocation.country) ||
+      normalizeAddressField(
+        address.country || address.countryCode || address.beneficiaryCountry
+      ) ||
+      normalizeAddressField(
+        sourceLocation.countryCode || sourceLocation.country
+      ) ||
       'IN'
   }
 }
 
-const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount, ifsc, address }, fetchImpl = global.fetch) => {
+const addCashfreeBeneficiary = async (
+  { beneId, name, email, phone, bankAccount, ifsc, address },
+  fetchImpl = global.fetch
+) => {
   const result = await cashfreeRequest('/beneficiary', {
     method: 'POST',
     body: {
@@ -356,14 +407,20 @@ const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount,
 
   const parsed = parseCashfreeResponse(result.data)
   if (!result.ok) {
-    const message = parsed.message || result.data?.message || `Cashfree add beneficiary failed with status ${result.status}`
+    const message =
+      parsed.message ||
+      result.data?.message ||
+      `Cashfree add beneficiary failed with status ${result.status}`
     throw new Error(message)
   }
 
   return parsed
 }
 
-const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode = 'IMPS', remarks = '' }, fetchImpl = global.fetch) => {
+const requestAsyncTransfer = async (
+  { beneId, amount, transferId, transferMode = 'IMPS', remarks = '' },
+  fetchImpl = global.fetch
+) => {
   const safeRemarks = sanitizeTransferRemarks(remarks, 'Porttivo payout')
   const result = await cashfreeRequest('/transfers', {
     method: 'POST',
@@ -386,11 +443,19 @@ const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode =
   }
 }
 
-const setPayeeBeneficiaryOnModel = async ({ payee, modelName, beneId, bankDetails, beneficiaryResponse, address }) => {
+const setPayeeBeneficiaryOnModel = async ({
+  payee,
+  modelName,
+  beneId,
+  bankDetails,
+  beneficiaryResponse,
+  address
+}) => {
   payee.cashfreeBeneId = beneId
   payee.cashfreeBeneficiary = {
     beneId,
-    name: bankDetails.name || payee.name || payee.company || payee.pumpName || null,
+    name:
+      bankDetails.name || payee.name || payee.company || payee.pumpName || null,
     email: bankDetails.email || payee.email || null,
     phone: bankDetails.phone || payee.mobile || null,
     status: 'ACTIVE',
@@ -409,7 +474,10 @@ const setPayeeBeneficiaryOnModel = async ({ payee, modelName, beneId, bankDetail
   }
 }
 
-const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, ifsc, address = {} }, fetchImpl = global.fetch) => {
+const registerBeneficiary = async (
+  { payeeId, name, email, phone, bankAccount, ifsc, address = {} },
+  fetchImpl = global.fetch
+) => {
   const { payee, modelName } = await findPayeeRecordById(payeeId)
   if (!payee) {
     const error = new Error('Payee not found')
@@ -418,8 +486,15 @@ const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, i
   }
 
   const resolvedAddress = resolveBeneficiaryAddress({ payee, address })
-  if (!resolvedAddress.address1 || !resolvedAddress.city || !resolvedAddress.state || !resolvedAddress.pincode) {
-    const error = new Error('Beneficiary address1, city, state, and pincode are required for Cashfree v2')
+  if (
+    !resolvedAddress.address1 ||
+    !resolvedAddress.city ||
+    !resolvedAddress.state ||
+    !resolvedAddress.pincode
+  ) {
+    const error = new Error(
+      'Beneficiary address1, city, state, and pincode are required for Cashfree v2'
+    )
     error.statusCode = 400
     throw error
   }
@@ -453,7 +528,11 @@ const registerBeneficiary = async ({ payeeId, name, email, phone, bankAccount, i
   }
 }
 
-const findExistingPayout = async ({ paymentId, referenceType, referenceId }) => {
+const findExistingPayout = async ({
+  paymentId,
+  referenceType,
+  referenceId
+}) => {
   const query = {}
   if (paymentId) query.paymentId = paymentId
   else if (referenceType || referenceId) {
@@ -466,10 +545,12 @@ const findExistingPayout = async ({ paymentId, referenceType, referenceId }) => 
   }
 
   const result = Payout.findOne(query)
-  return typeof result?.sort === 'function' ? result.sort({ createdAt: -1 }) : result
+  return typeof result?.sort === 'function'
+    ? result.sort({ createdAt: -1 })
+    : result
 }
 
-const deriveRetrySchedule = (retryCount) => {
+const deriveRetrySchedule = retryCount => {
   const index = Math.max(0, Math.min(RETRY_DELAYS_MS.length - 1, retryCount))
   return new Date(Date.now() + RETRY_DELAYS_MS[index])
 }
@@ -483,7 +564,7 @@ const isTemporaryTransferFailure = (reason, code) => {
     'NETWORK',
     'SERVER_ERROR',
     'TEMPORARY'
-  ].some((token) => value.includes(token))
+  ].some(token => value.includes(token))
 }
 
 const isPermanentTransferFailure = (reason, code) => {
@@ -495,7 +576,7 @@ const isPermanentTransferFailure = (reason, code) => {
     'BENEFICIARY_INACTIVE',
     'INVALID_BENE',
     'INVALID_BENEFICIARY'
-  ].some((token) => value.includes(token))
+  ].some(token => value.includes(token))
 }
 
 const buildPayoutFailure = ({ code, message, reason, isRetryable }) => ({
@@ -521,7 +602,9 @@ const createPayoutRecord = async ({
   retry = {}
 }) => {
   if (!payerId || !payeeId) {
-    const error = new Error('payerId and payeeId are required for payout creation')
+    const error = new Error(
+      'payerId and payeeId are required for payout creation'
+    )
     error.statusCode = 400
     throw error
   }
@@ -530,13 +613,21 @@ const createPayoutRecord = async ({
     paymentId
       ? (() => {
           const result = Payout.findOne({ paymentId })
-          return typeof result?.sort === 'function' ? result.sort({ createdAt: -1 }) : result
+          return typeof result?.sort === 'function'
+            ? result.sort({ createdAt: -1 })
+            : result
         })()
       : Promise.resolve(null),
     !paymentId && referenceId
       ? (() => {
-          const result = Payout.findOne({ referenceType, referenceId, provider })
-          return typeof result?.sort === 'function' ? result.sort({ createdAt: -1 }) : result
+          const result = Payout.findOne({
+            referenceType,
+            referenceId,
+            provider
+          })
+          return typeof result?.sort === 'function'
+            ? result.sort({ createdAt: -1 })
+            : result
         })()
       : Promise.resolve(null)
   ])
@@ -545,7 +636,12 @@ const createPayoutRecord = async ({
     return existingByPayment
   }
 
-  if (existingByReference && ['SUCCESS', 'PROCESSING', 'CREATED', 'RETRY_PENDING'].includes(existingByReference.status)) {
+  if (
+    existingByReference &&
+    ['SUCCESS', 'PROCESSING', 'CREATED', 'RETRY_PENDING'].includes(
+      existingByReference.status
+    )
+  ) {
     return existingByReference
   }
 
@@ -586,7 +682,9 @@ const createPayoutRecord = async ({
 
     return payout
   } catch (error) {
-    const isDuplicateKey = error?.code === 11000 || String(error?.message || '').includes('E11000 duplicate key error')
+    const isDuplicateKey =
+      error?.code === 11000 ||
+      String(error?.message || '').includes('E11000 duplicate key error')
     if (!isDuplicateKey) {
       throw error
     }
@@ -600,25 +698,37 @@ const createPayoutRecord = async ({
       fallbackQuery.provider = provider
     }
 
-    const result = Object.keys(fallbackQuery).length ? Payout.findOne(fallbackQuery) : null
-    return typeof result?.sort === 'function' ? result.sort({ createdAt: -1 }) : result
+    const result = Object.keys(fallbackQuery).length
+      ? Payout.findOne(fallbackQuery)
+      : null
+    return typeof result?.sort === 'function'
+      ? result.sort({ createdAt: -1 })
+      : result
   }
 }
 
-const getPayoutById = async (id) => {
+const getPayoutById = async id => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     return null
   }
   return Payout.findById(id)
 }
 
-const applyPayoutTransferResponse = async (payout, response, { fetchImpl = global.fetch } = {}) => {
+const applyPayoutTransferResponse = async (
+  payout,
+  response,
+  { fetchImpl = global.fetch } = {}
+) => {
   const parsed = response || {}
-  const normalizedStatus = String(parsed.status || '').trim().toUpperCase()
+  const normalizedStatus = String(parsed.status || '')
+    .trim()
+    .toUpperCase()
   const responsePayload = parsed.raw || parsed.data || parsed
   const httpStatus = Number(parsed.httpStatus || 0)
-  const transferId = parsed.transferId || payout.cashfree?.transferId || makeTransferId('PTP')
-  const utr = parsed.utr || responsePayload?.utr || responsePayload?.utr_no || null
+  const transferId =
+    parsed.transferId || payout.cashfree?.transferId || makeTransferId('PTP')
+  const utr =
+    parsed.utr || responsePayload?.utr || responsePayload?.utr_no || null
   const code = parsed.code || responsePayload?.code || null
   const message = parsed.message || responsePayload?.message || null
   const reason = message || code || 'Payout transfer response received'
@@ -628,7 +738,10 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
     transferId,
     referenceId: transferId,
     response: responsePayload,
-    utr: normalizedStatus === 'SUCCESS' ? utr || payout.cashfree?.utr || null : payout.cashfree?.utr || null
+    utr:
+      normalizedStatus === 'SUCCESS'
+        ? utr || payout.cashfree?.utr || null
+        : payout.cashfree?.utr || null
   }
   payout.lastAttemptAt = new Date()
 
@@ -674,7 +787,10 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
     const isPermanent = isPermanentTransferFailure(reason, code)
     const isRetryable = !isPermanent && isTemporaryTransferFailure(reason, code)
 
-    if (String(code) === '403' || String(reason).toLowerCase().includes('deprecated')) {
+    if (
+      String(code) === '403' ||
+      String(reason).toLowerCase().includes('deprecated')
+    ) {
       payout.status = 'FAILED'
       payout.failure = buildPayoutFailure({
         code: '403',
@@ -693,11 +809,15 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
       return payout
     }
 
-    if (code === 'INSUFFICIENT_BALANCE' || String(reason).toUpperCase().includes('INSUFFICIENT_BALANCE')) {
+    if (
+      code === 'INSUFFICIENT_BALANCE' ||
+      String(reason).toUpperCase().includes('INSUFFICIENT_BALANCE')
+    ) {
       payout.status = 'RETRY_PENDING'
       payout.failure = buildPayoutFailure({
         code,
-        message: 'Payment received successfully. Payout is queued and will process shortly.',
+        message:
+          'Payment received successfully. Payout is queued and will process shortly.',
         reason,
         isRetryable: true
       })
@@ -715,7 +835,9 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
       payout.status = 'FAILED'
       payout.failure = buildPayoutFailure({
         code,
-        message: message || 'Payee bank details are incorrect. Please update account details.',
+        message:
+          message ||
+          'Payee bank details are incorrect. Please update account details.',
         reason,
         isRetryable: false
       })
@@ -741,7 +863,10 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
         ...(payout.retry || {}),
         count: retryCount,
         maxRetry: payout.retry?.maxRetry || 3,
-        nextRetryAt: retryCount >= (payout.retry?.maxRetry || 3) ? null : deriveRetrySchedule(retryCount - 1)
+        nextRetryAt:
+          retryCount >= (payout.retry?.maxRetry || 3)
+            ? null
+            : deriveRetrySchedule(retryCount - 1)
       }
       if (retryCount >= (payout.retry?.maxRetry || 3)) {
         payout.status = 'FAILED'
@@ -773,8 +898,11 @@ const applyPayoutTransferResponse = async (payout, response, { fetchImpl = globa
   return payout
 }
 
-const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {}) => {
-  const payout =
+const startPayoutTransfer = async (
+  payoutInput,
+  { fetchImpl = global.fetch } = {}
+) => {
+  let payout =
     payoutInput && payoutInput._id && typeof payoutInput.save === 'function'
       ? payoutInput
       : await getPayoutById(payoutInput)
@@ -784,8 +912,22 @@ const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {
     error.statusCode = 404
     throw error
   }
+  logger.info('[PAYOUT] Starting payout transfer', {
+    payoutId: payout._id.toString(),
+    paymentId: payout.paymentId?.toString(),
+    status: payout.status,
+    amount: payout.amount
+  })
 
-  const payment = payout.paymentId ? await PaymentSession.findById(payout.paymentId) : null
+  // Already finished
+  if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(payout.status)) {
+    return payout
+  }
+
+  const payment = payout.paymentId
+    ? await PaymentSession.findById(payout.paymentId)
+    : null
+
   if (payment && payment.status !== 'SUCCESS') {
     payout.status = 'FAILED'
     payout.failure = buildPayoutFailure({
@@ -794,30 +936,42 @@ const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {
       reason: 'Payment not successful',
       isRetryable: false
     })
+
     await payout.save()
     return payout
   }
 
   const { payee } = await findPayeeRecordById(payout.payeeId)
+
   const beneficiary = payee?.cashfreeBeneficiary
-  const beneId = payout.cashfree?.beneId || payee?.cashfreeBeneId || beneficiary?.beneId || null
+
+  const beneId =
+    payout.cashfree?.beneId ||
+    payee?.cashfreeBeneId ||
+    beneficiary?.beneId ||
+    null
 
   if (!beneId || beneficiary?.status !== 'ACTIVE') {
     payout.status = 'RETRY_PENDING'
+
     payout.failure = buildPayoutFailure({
       code: 'BENEFICIARY_NOT_FOUND',
       message: 'Payment safe. Transfer pending.',
       reason: 'Payee beneficiary is not active',
       isRetryable: false
     })
+
     payout.retry = {
       ...(payout.retry || {}),
       nextRetryAt: null
     }
+
     await payout.save()
+
     return payout
   }
 
+  // Another payout for same payment already succeeded
   const successfulDuplicate = await Payout.findOne({
     _id: { $ne: payout._id },
     paymentId: payout.paymentId || null,
@@ -828,25 +982,70 @@ const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {
     return successfulDuplicate
   }
 
-  payout.cashfree = {
-    ...(payout.cashfree || {}),
-    beneId,
-    transferId: payout.cashfree?.transferId || makeTransferId('PTP'),
-    transferMode: payout.cashfree?.transferMode || 'IMPS',
-    beneficiary: beneficiary || payout.cashfree?.beneficiary || {},
-    request: {
-      beneId,
-      amount: String(Number(normalizeMoney(payout.amount)).toFixed(2)),
-      transferId: payout.cashfree?.transferId || makeTransferId('PTP'),
-      transferMode: payout.cashfree?.transferMode || 'IMPS'
+  // ----------------------------------------------------
+  // ATOMIC LOCK (prevents duplicate Cashfree transfers)
+  // ----------------------------------------------------
+
+  const transferId = payout.cashfree?.transferId || makeTransferId('PTP')
+  logger.info('[PAYOUT] Attempting lock', {
+    payoutId: payout._id.toString()
+  })
+
+  const lockedPayout = await Payout.findOneAndUpdate(
+    {
+      _id: payout._id,
+      status: {
+        $in: ['CREATED', 'RETRY_PENDING']
+      }
+    },
+    {
+      $set: {
+        status: 'PROCESSING',
+        startedAt: payout.startedAt || new Date(),
+        lastAttemptAt: new Date(),
+        'cashfree.beneId': beneId,
+        'cashfree.transferId': transferId,
+        'cashfree.transferMode': payout.cashfree?.transferMode || 'IMPS',
+        'cashfree.beneficiary':
+          beneficiary || payout.cashfree?.beneficiary || {},
+        'cashfree.request': {
+          beneId,
+          amount: String(Number(normalizeMoney(payout.amount)).toFixed(2)),
+          transferId,
+          transferMode: payout.cashfree?.transferMode || 'IMPS'
+        }
+      }
+    },
+    {
+      new: true
     }
+  )
+
+  // Another webhook already acquired the lock
+  if (!lockedPayout) {
+    const latest = await getPayoutById(payout._id)
+
+    logger.info('[PAYOUT] Transfer already running', {
+      payoutId: payout._id.toString(),
+      status: latest?.status,
+      transferId: latest?.cashfree?.transferId
+    })
+
+    return latest
   }
 
+  payout = lockedPayout
+  logger.info('[PAYOUT] Lock acquired', {
+    payoutId: payout._id.toString(),
+    transferId: payout.cashfree?.transferId
+  })
+
+  // If another process already finished meanwhile
   if (payout.status === 'SUCCESS') {
     return payout
   }
 
-  await payout.save()
+  // ===== Continue with requestAsyncTransfer() =====
 
   try {
     const response = await requestAsyncTransfer(
@@ -862,14 +1061,36 @@ const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {
       },
       fetchImpl
     )
+    logger.info('[PAYOUT] Sending transfer request', {
+      payoutId: payout._id.toString(),
+      transferId: payout.cashfree.transferId,
+      beneId,
+      amount: payout.amount
+    })
 
-    payout.cashfree.request = {
-      ...(payout.cashfree.request || {}),
-      amount: String(Number(normalizeMoney(payout.amount)).toFixed(2))
+    payout.cashfree = {
+      ...(payout.cashfree || {}),
+      request: {
+        ...(payout.cashfree?.request || {}),
+        beneId,
+        amount: String(Number(normalizeMoney(payout.amount)).toFixed(2)),
+        transferId: payout.cashfree.transferId,
+        transferMode: payout.cashfree.transferMode || 'IMPS'
+      }
     }
-    return applyPayoutTransferResponse(payout, response, { fetchImpl })
+
+    return await applyPayoutTransferResponse(payout, response, {
+      fetchImpl
+    })
   } catch (error) {
     const message = error?.message || 'Cashfree payout request failed'
+    logger.error('[PAYOUT] Transfer failed', {
+      payoutId: payout._id.toString(),
+      transferId: payout.cashfree?.transferId,
+      message: error.message,
+      stack: error.stack
+    })
+
     const isNetworkOrServerIssue = [
       'ECONNRESET',
       'ETIMEDOUT',
@@ -878,53 +1099,62 @@ const startPayoutTransfer = async (payoutInput, { fetchImpl = global.fetch } = {
       '500',
       '502',
       '504'
-    ].some((token) => String(message).toUpperCase().includes(token))
+    ].some(token => String(message).toUpperCase().includes(token))
 
     payout.lastAttemptAt = new Date()
-    payout.cashfree = {
-      ...(payout.cashfree || {}),
-      transferId: payout.cashfree?.transferId || makeTransferId('PTP')
-    }
 
     if (isNetworkOrServerIssue) {
       payout.status = 'PROCESSING'
+
       payout.failure = buildPayoutFailure({
         code: 'CASHFREE_SERVER_ERROR',
         message: 'Payout processing',
         reason: message,
         isRetryable: true
       })
+
       await payout.save()
       return payout
     }
 
     const isPermanent = isPermanentTransferFailure(message, '')
+
     payout.retry = {
       ...(payout.retry || {}),
       count: (payout.retry?.count || 0) + 1,
       maxRetry: payout.retry?.maxRetry || 3,
       nextRetryAt: null
     }
+
     payout.status = isPermanent ? 'FAILED' : 'RETRY_PENDING'
+
     payout.failure = buildPayoutFailure({
       code: isPermanent ? 'INVALID_BENEFICIARY' : 'TRANSFER_ERROR',
       message,
       reason: message,
       isRetryable: !isPermanent
     })
+
     if (payout.status === 'FAILED') {
       payout.completedAt = new Date()
     } else {
-      payout.retry.nextRetryAt = deriveRetrySchedule(Math.max(0, payout.retry.count - 1))
+      payout.retry.nextRetryAt = deriveRetrySchedule(
+        Math.max(0, payout.retry.count - 1)
+      )
     }
+
     await payout.save()
+
     return payout
   }
 }
 
-const ensureAutomaticPayoutMetadata = (payment) => {
+const ensureAutomaticPayoutMetadata = payment => {
   const metadata = payment?.metadata || {}
-  const payoutMeta = metadata.payout && typeof metadata.payout === 'object' ? metadata.payout : metadata
+  const payoutMeta =
+    metadata.payout && typeof metadata.payout === 'object'
+      ? metadata.payout
+      : metadata
 
   const payeeId = payoutMeta.payeeId || metadata.payeeId || null
   if (!payeeId) {
@@ -942,7 +1172,10 @@ const ensureAutomaticPayoutMetadata = (payment) => {
   }
 }
 
-const createAutomaticPayoutForPayment = async (paymentInput, { fetchImpl = global.fetch } = {}) => {
+const createAutomaticPayoutForPayment = async (
+  paymentInput,
+  { fetchImpl = global.fetch } = {}
+) => {
   const payment =
     paymentInput && paymentInput._id && paymentInput.status
       ? paymentInput
@@ -979,7 +1212,11 @@ const createAutomaticPayoutForPayment = async (paymentInput, { fetchImpl = globa
   })
 
   if (existing) {
-    if (existing.status === 'CREATED' || existing.status === 'RETRY_PENDING' || existing.status === 'PROCESSING') {
+    if (
+      existing.status === 'CREATED' ||
+      existing.status === 'RETRY_PENDING' ||
+      existing.status === 'PROCESSING'
+    ) {
       return startPayoutTransfer(existing, { fetchImpl })
     }
     return existing
@@ -999,7 +1236,8 @@ const createAutomaticPayoutForPayment = async (paymentInput, { fetchImpl = globa
     currency: autoMetadata.currency || payment.currency || 'INR',
     status: 'CREATED',
     cashfree: {
-      beneId: payee?.cashfreeBeneId || payee?.cashfreeBeneficiary?.beneId || null,
+      beneId:
+        payee?.cashfreeBeneId || payee?.cashfreeBeneficiary?.beneId || null,
       transferMode: autoMetadata.transferMode || 'IMPS',
       beneficiary: payee?.cashfreeBeneficiary || {},
       request: {},
@@ -1007,7 +1245,10 @@ const createAutomaticPayoutForPayment = async (paymentInput, { fetchImpl = globa
     }
   })
 
-  if (!payee?.cashfreeBeneId || payee?.cashfreeBeneficiary?.status !== 'ACTIVE') {
+  if (
+    !payee?.cashfreeBeneId ||
+    payee?.cashfreeBeneficiary?.status !== 'ACTIVE'
+  ) {
     payout.status = 'RETRY_PENDING'
     payout.failure = buildPayoutFailure({
       code: 'BENEFICIARY_NOT_FOUND',
@@ -1022,24 +1263,34 @@ const createAutomaticPayoutForPayment = async (paymentInput, { fetchImpl = globa
   return startPayoutTransfer(payout, { fetchImpl })
 }
 
-const isPayoutRetryDue = (payout) => {
+const isPayoutRetryDue = payout => {
   if (!payout) return false
   if (payout.status === 'RETRY_PENDING') {
     if (!payout.retry?.nextRetryAt) {
-      return payout.failure?.code === 'INSUFFICIENT_BALANCE' || payout.failure?.isRetryable === true
+      return (
+        payout.failure?.code === 'INSUFFICIENT_BALANCE' ||
+        payout.failure?.isRetryable === true
+      )
     }
     return new Date(payout.retry.nextRetryAt).getTime() <= Date.now()
   }
 
   if (payout.status === 'PROCESSING') {
-    const lastAttempt = payout.lastAttemptAt || payout.updatedAt || payout.createdAt
-    return !lastAttempt || Date.now() - new Date(lastAttempt).getTime() >= STALE_PROCESSING_WINDOW_MS
+    const lastAttempt =
+      payout.lastAttemptAt || payout.updatedAt || payout.createdAt
+    return (
+      !lastAttempt ||
+      Date.now() - new Date(lastAttempt).getTime() >= STALE_PROCESSING_WINDOW_MS
+    )
   }
 
   return false
 }
 
-const processDuePayoutRetries = async ({ fetchImpl = global.fetch, limit = 25 } = {}) => {
+const processDuePayoutRetries = async ({
+  fetchImpl = global.fetch,
+  limit = 25
+} = {}) => {
   const payouts = await Payout.find({
     status: { $in: ['RETRY_PENDING', 'PROCESSING'] }
   })
@@ -1066,7 +1317,7 @@ const startPayoutAutomationCron = ({ fetchImpl = global.fetch } = {}) => {
   }
 
   cronTimer = setInterval(() => {
-    processDuePayoutRetries({ fetchImpl }).catch((error) => {
+    processDuePayoutRetries({ fetchImpl }).catch(error => {
       logger.error('Payout retry cron failed', {
         message: error.message,
         stack: error.stack
@@ -1088,7 +1339,7 @@ const stopPayoutAutomationCron = () => {
   }
 }
 
-const stableStringify = (value) => {
+const stableStringify = value => {
   if (value === null || value === undefined) {
     return ''
   }
@@ -1098,12 +1349,12 @@ const stableStringify = (value) => {
   }
 
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(',')}]`
+    return `[${value.map(item => stableStringify(item)).join(',')}]`
   }
 
   return `{${Object.keys(value)
     .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
     .join(',')}}`
 }
 
@@ -1143,12 +1394,20 @@ const verifyWebhookSignature = ({ signature, body, rawBody, secrets = [] }) => {
     }
 
     for (const candidate of candidates) {
-      const expectedHex = crypto.createHmac('sha256', cleanedSecret).update(candidate).digest('hex')
-      const expectedBase64 = crypto.createHmac('sha256', cleanedSecret).update(candidate).digest('base64')
+      const expectedHex = crypto
+        .createHmac('sha256', cleanedSecret)
+        .update(candidate)
+        .digest('hex')
+      const expectedBase64 = crypto
+        .createHmac('sha256', cleanedSecret)
+        .update(candidate)
+        .digest('base64')
 
       if (
         [expectedHex, expectedBase64].some(
-          (expected) => expected === normalizedSignature || expected === normalizedSignature.toLowerCase()
+          expected =>
+            expected === normalizedSignature ||
+            expected === normalizedSignature.toLowerCase()
         )
       ) {
         return true
@@ -1177,7 +1436,12 @@ const verifyCashfreePayoutWebhook = (body, headers = {}, rawBody = '') => {
   })
 }
 
-const handleCashfreePayoutWebhook = async ({ body = {}, headers = {}, rawBody = '', fetchImpl = global.fetch } = {}) => {
+const handleCashfreePayoutWebhook = async ({
+  body = {},
+  headers = {},
+  rawBody = '',
+  fetchImpl = global.fetch
+} = {}) => {
   if (!verifyCashfreePayoutWebhook(body, headers, rawBody)) {
     if (cashfreePayoutWebhookStrictValidation) {
       const error = new Error('Invalid Cashfree payout webhook signature')
@@ -1188,19 +1452,29 @@ const handleCashfreePayoutWebhook = async ({ body = {}, headers = {}, rawBody = 
 
   const payload = body && typeof body === 'object' ? body : {}
   const transferId = String(
-    payload.transferId || payload.transfer_id || payload.referenceId || payload.reference_id || payload.beneId || ''
+    payload.transferId ||
+      payload.transfer_id ||
+      payload.referenceId ||
+      payload.reference_id ||
+      payload.beneId ||
+      ''
   ).trim()
-  const referenceId = String(payload.referenceId || payload.reference_id || '').trim()
+  const referenceId = String(
+    payload.referenceId || payload.reference_id || ''
+  ).trim()
   const utr = payload.utr || payload.utr_no || payload.utrNo || null
 
   const payoutQuery = Payout.findOne(
     transferId
       ? { 'cashfree.transferId': transferId }
       : referenceId
-        ? { 'cashfree.referenceId': referenceId }
-        : {}
+      ? { 'cashfree.referenceId': referenceId }
+      : {}
   )
-  const payout = typeof payoutQuery?.sort === 'function' ? await payoutQuery.sort({ createdAt: -1 }) : await payoutQuery
+  const payout =
+    typeof payoutQuery?.sort === 'function'
+      ? await payoutQuery.sort({ createdAt: -1 })
+      : await payoutQuery
 
   if (!payout) {
     const error = new Error('Payout record not found')
@@ -1212,11 +1486,19 @@ const handleCashfreePayoutWebhook = async ({ body = {}, headers = {}, rawBody = 
   payout.cashfree = {
     ...(payout.cashfree || {}),
     response: payload,
-    referenceId: referenceId || payout.cashfree?.referenceId || payout.cashfree?.transferId || null,
+    referenceId:
+      referenceId ||
+      payout.cashfree?.referenceId ||
+      payout.cashfree?.transferId ||
+      null,
     utr: utr || payout.cashfree?.utr || null
   }
 
-  const status = String(payload.status || payload.transferStatus || payload.payout_status || '').trim().toUpperCase()
+  const status = String(
+    payload.status || payload.transferStatus || payload.payout_status || ''
+  )
+    .trim()
+    .toUpperCase()
   if (status === 'SUCCESS') {
     payout.status = 'SUCCESS'
     payout.completedAt = new Date()
@@ -1227,7 +1509,9 @@ const handleCashfreePayoutWebhook = async ({ body = {}, headers = {}, rawBody = 
     }
   } else if (status === 'FAILED') {
     const code = String(payload.code || payload.errorCode || '').trim()
-    const message = String(payload.message || payload.error || 'Payout failed').trim()
+    const message = String(
+      payload.message || payload.error || 'Payout failed'
+    ).trim()
     const isRetryable = isTemporaryTransferFailure(message, code)
     payout.status = isRetryable ? 'RETRY_PENDING' : 'FAILED'
     payout.failure = buildPayoutFailure({
@@ -1261,7 +1545,7 @@ const handleCashfreePayoutWebhook = async ({ body = {}, headers = {}, rawBody = 
   return payout
 }
 
-const buildPayoutStatusMessage = (payout) => {
+const buildPayoutStatusMessage = payout => {
   if (!payout) {
     return 'Payout not found'
   }
@@ -1290,15 +1574,16 @@ const buildPayoutStatusMessage = (payout) => {
 }
 
 const getPayoutSummary = async () => {
-  const [created, processing, success, failed, retryPending, cancelled, total] = await Promise.all([
-    Payout.countDocuments({ status: 'CREATED' }),
-    Payout.countDocuments({ status: 'PROCESSING' }),
-    Payout.countDocuments({ status: 'SUCCESS' }),
-    Payout.countDocuments({ status: 'FAILED' }),
-    Payout.countDocuments({ status: 'RETRY_PENDING' }),
-    Payout.countDocuments({ status: 'CANCELLED' }),
-    Payout.countDocuments({})
-  ])
+  const [created, processing, success, failed, retryPending, cancelled, total] =
+    await Promise.all([
+      Payout.countDocuments({ status: 'CREATED' }),
+      Payout.countDocuments({ status: 'PROCESSING' }),
+      Payout.countDocuments({ status: 'SUCCESS' }),
+      Payout.countDocuments({ status: 'FAILED' }),
+      Payout.countDocuments({ status: 'RETRY_PENDING' }),
+      Payout.countDocuments({ status: 'CANCELLED' }),
+      Payout.countDocuments({})
+    ])
 
   return {
     total,

@@ -114,10 +114,7 @@ const getPaymentGatewayOptions = async (req, res, next) => {
 const findCashfreePaymentByGatewayPayload = async (payload = {}) => {
   const metadata = getGatewayPayloadMetadata('CASHFREE', payload || {})
   const paymentSessionId = String(
-    payload.payment_session_id ||
-      payload.paymentSessionId ||
-      payload.udf1 ||
-      ''
+    payload.payment_session_id || payload.paymentSessionId || payload.udf1 || ''
   ).trim()
   const merchantTransactionId = String(
     metadata.providerOrderId ||
@@ -446,9 +443,23 @@ const getPaymentSessionByReference = async (req, res, next) => {
 }
 
 const handleGatewayWebhook = async (req, res, next) => {
+  const requestId = crypto.randomUUID()
+
   try {
     const provider = normalizeProvider(req.params.provider)
+
+    logger.info(`[${requestId}] Incoming payment webhook`, {
+      provider,
+      method: req.method,
+      ip: req.ip,
+      url: req.originalUrl
+    })
+
     if (!provider) {
+      logger.warn(`[${requestId}] Unsupported provider`, {
+        provider: req.params.provider
+      })
+
       return res.status(400).json({
         success: false,
         message: 'Unsupported payment provider'
@@ -460,7 +471,14 @@ const handleGatewayWebhook = async (req, res, next) => {
       ...(req.body || {})
     }
 
+    logger.info(`[${requestId}] Webhook payload received`, {
+      provider,
+      bodyKeys: Object.keys(body || {}),
+      hasRawBody: Boolean(req.rawBody)
+    })
+
     const metadata = getGatewayPayloadMetadata(provider, body)
+
     const merchantTransactionId = String(
       metadata.providerOrderId ||
         body.txnid ||
@@ -475,7 +493,13 @@ const handleGatewayWebhook = async (req, res, next) => {
       body.udf1 || body.payment_session_id || body.paymentSessionId || ''
     ).trim()
 
+    logger.info(`[${requestId}] Payment lookup`, {
+      merchantTransactionId,
+      paymentSessionId
+    })
+
     let payment = null
+
     if (paymentSessionId && mongoose.Types.ObjectId.isValid(paymentSessionId)) {
       payment = await PaymentSession.findById(paymentSessionId)
     }
@@ -488,12 +512,10 @@ const handleGatewayWebhook = async (req, res, next) => {
     }
 
     if (!payment) {
-      logger.warn(
-        `${provider} webhook received but payment session not found`,
-        {
-          body
-        }
-      )
+      logger.warn(`[${requestId}] Payment session not found`, {
+        provider,
+        merchantTransactionId
+      })
 
       return res.status(200).json({
         success: true,
@@ -501,7 +523,14 @@ const handleGatewayWebhook = async (req, res, next) => {
       })
     }
 
+    logger.info(`[${requestId}] Payment found`, {
+      paymentId: payment._id.toString(),
+      currentStatus: payment.status
+    })
+
     if (provider === 'CASHFREE' && req.method === 'GET') {
+      logger.info(`[${requestId}] Cashfree return URL invoked`)
+
       return res.status(200).json({
         success: true,
         message: 'Cashfree return received',
@@ -511,12 +540,13 @@ const handleGatewayWebhook = async (req, res, next) => {
       })
     }
 
-    const requestBodyIsEmpty =
-      !req.rawBody ||
-      !String(req.rawBody).trim() ||
-      (body && typeof body === 'object' && Object.keys(body).length === 0)
+    if (
+      provider === 'CASHFREE' &&
+      (!req.headers['x-webhook-signature'] ||
+        !String(req.headers['x-webhook-signature']).trim())
+    ) {
+      logger.info(`[${requestId}] Cashfree webhook reachability check`)
 
-    if (provider === 'CASHFREE' && (!req.headers['x-webhook-signature'] || !String(req.headers['x-webhook-signature']).trim())) {
       return res.status(200).json({
         success: true,
         message: 'Cashfree webhook endpoint reachable'
@@ -531,18 +561,26 @@ const handleGatewayWebhook = async (req, res, next) => {
     })
 
     if (!verified) {
-      payment.paymentResponse = { ...body, verified: false }
+      payment.paymentResponse = {
+        ...body,
+        verified: false
+      }
+
       if (provider === 'CASHFREE' && !cashfreeWebhookStrictValidation) {
-        logger.warn(`Skipping strict ${provider} webhook signature validation`, {
-          bodyKeys: Object.keys(body || {}),
-          hasRawBody: Boolean(req.rawBody && String(req.rawBody).trim()),
-          hasSignatureHeader: Boolean(req.headers['x-webhook-signature'] || req.headers['x-signature'] || req.headers['x-cashfree-signature'])
+        logger.warn(`[${requestId}] Skipping webhook signature validation`, {
+          provider,
+          paymentId: payment._id.toString()
         })
       } else {
         payment.status = 'FAILED'
         payment.failureReason = `Invalid ${provider} webhook signature`
         payment.failedAt = new Date()
+
         await payment.save()
+
+        logger.error(`[${requestId}] Invalid webhook signature`, {
+          paymentId: payment._id.toString()
+        })
 
         return res.status(400).json({
           success: false,
@@ -551,14 +589,36 @@ const handleGatewayWebhook = async (req, res, next) => {
       }
     }
 
+    const previousStatus = payment.status
+
     const gatewayMetadata = getGatewayPayloadMetadata(provider, body)
+
     const responseStatus = gatewayMetadata.status
-    payment.paymentResponse = { ...body, verified: true }
+
+    logger.info(`[${requestId}] Gateway status`, {
+      paymentId: payment._id.toString(),
+      previousStatus,
+      gatewayStatus: responseStatus
+    })
+
+    payment.paymentResponse = {
+      ...body,
+      verified: true
+    }
+
     payment.callbackPayload = body
+
     payment.providerTransactionId =
       gatewayMetadata.providerTransactionId || payment.providerTransactionId
+
     payment.providerOrderId =
       gatewayMetadata.providerOrderId || payment.providerOrderId
+
+   
+
+    // ==========================================
+    // Update Payment Status
+    // ==========================================
 
     if (responseStatus === 'SUCCESS') {
       payment.status = 'SUCCESS'
@@ -591,7 +651,29 @@ const handleGatewayWebhook = async (req, res, next) => {
 
     await payment.save()
 
-    if (payment.status === 'SUCCESS') {
+    logger.info(`[${requestId}] Payment updated`, {
+      paymentId: payment._id.toString(),
+      previousStatus,
+      currentStatus: payment.status
+    })
+
+    // ===================================================
+    // IMPORTANT:
+    // Trigger automatic payout ONLY on first SUCCESS
+    // ===================================================
+
+    const shouldCreatePayout =
+      previousStatus !== 'SUCCESS' && payment.status === 'SUCCESS'
+
+    if (shouldCreatePayout) {
+      logger.info(`[${requestId}] First SUCCESS detected. Starting payout...`, {
+        paymentId: payment._id.toString()
+      })
+      logger.info(`[${requestId}] Creating automatic payout`, {
+        paymentId: payment._id.toString(),
+        amount: payment.amount,
+        providerTransactionId: payment.providerTransactionId
+      })
       try {
         const payout = await createAutomaticPayoutForPayment(payment, {
           fetchImpl: req.fetch || global.fetch
@@ -601,27 +683,50 @@ const handleGatewayWebhook = async (req, res, next) => {
           payment.metadata = {
             ...(payment.metadata || {}),
             payout: {
-              id: payout._id ? payout._id.toString() : null,
+              id: payout._id?.toString() || null,
               status: payout.status,
               transferId: payout.cashfree?.transferId || null,
               beneId: payout.cashfree?.beneId || null
             }
           }
+
           await payment.save()
+
+          logger.info(`[${requestId}] Automatic payout created`, {
+            payoutId: payout._id?.toString(),
+            transferId: payout.cashfree?.transferId,
+            status: payout.status
+          })
         }
       } catch (payoutError) {
-        logger.warn('Automatic payout initiation failed', {
-          paymentId: payment._id ? payment._id.toString() : null,
-          message: payoutError.message
+        logger.error(`[${requestId}] Automatic payout failed`, {
+          paymentId: payment._id.toString(),
+          message: payoutError.message,
+          stack: payoutError.stack
         })
       }
+    } else if (payment.status === 'SUCCESS') {
+      logger.info(`[${requestId}] Duplicate SUCCESS webhook ignored`, {
+        paymentId: payment._id.toString(),
+        providerTransactionId: payment.providerTransactionId
+      })
     }
+
+    logger.info(`[${requestId}] Webhook completed`, {
+      paymentId: payment._id.toString(),
+      paymentStatus: payment.status
+    })
 
     return res.status(200).json({
       success: true,
       message: `${provider} webhook processed successfully`
     })
   } catch (error) {
+    logger.error('Payment webhook failed', {
+      message: error.message,
+      stack: error.stack
+    })
+
     next(error)
   }
 }
@@ -661,9 +766,15 @@ const handleCashfreeReturn = async (req, res, next) => {
           <body>
             <div class="card">
               <div class="title">Payment received</div>
-              <div class="meta">Reference: ${String(payload.referenceId || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-              <div class="meta">Payment ID: ${String(payload.id || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
-              <div class="status">Status: ${String(payload.status || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+              <div class="meta">Reference: ${String(payload.referenceId || '')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')}</div>
+              <div class="meta">Payment ID: ${String(payload.id || '')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')}</div>
+              <div class="status">Status: ${String(payload.status || '')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')}</div>
               <p class="meta" style="margin-top:16px;">You can close this page. The payout status will continue updating in the background.</p>
             </div>
           </body>
@@ -688,7 +799,13 @@ const handleCashfreeReturn = async (req, res, next) => {
           <div class="card">
             <div class="title">Payment return received</div>
             <div class="meta">Cashfree redirected back to Porttivo successfully.</div>
-            ${orderId ? `<div class="meta">Reference received: ${String(orderId).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>` : ''}
+            ${
+              orderId
+                ? `<div class="meta">Reference received: ${String(orderId)
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')}</div>`
+                : ''
+            }
             <div class="warn">Waiting for payment webhook confirmation</div>
             <p class="meta" style="margin-top:16px;">The final payment and payout status is updated by the webhook, not this return page.</p>
           </div>
