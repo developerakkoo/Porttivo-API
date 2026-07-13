@@ -33,8 +33,6 @@ const PAYEE_MODELS = [
 const RETRY_DELAYS_MS = [15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000]
 const STALE_PROCESSING_WINDOW_MS = 10 * 60 * 1000
 
-let cachedAuthToken = null
-let cachedAuthTokenExpiresAt = 0
 let cronTimer = null
 
 const safeObjectIdString = (value) => {
@@ -260,86 +258,7 @@ const cashfreeRequest = async (path, { method = 'GET', body = null, query = null
   }
 }
 
-const authorizeCashfreePayout = async (fetchImpl = global.fetch) => {
-  if (cachedAuthToken && Date.now() < cachedAuthTokenExpiresAt) {
-    return cachedAuthToken
-  }
-
-  if (!cashfreePayoutClientId || !cashfreePayoutClientSecret) {
-    const error = new Error('Cashfree payout client id and secret are not configured')
-    error.statusCode = 500
-    throw error
-  }
-
-  const result = await cashfreeRequest('/authorize', {
-    method: 'POST',
-    fetchImpl
-  })
-
-  const responseStatus = String(result.data?.status || '').trim().toUpperCase()
-  const responseMessage =
-    result.data?.message ||
-    result.data?.error ||
-    result.data?.errorMessage ||
-    result.data?.data?.message ||
-    `Cashfree payout authorization failed with status ${result.status}`
-
-  if (!result.ok || responseStatus === 'ERROR' || responseStatus === 'FAILED') {
-    const error = new Error(responseMessage)
-    error.statusCode = result.status
-    error.details = {
-      response: result.data,
-      status: result.status
-    }
-    throw error
-  }
-
-  if (String(result.data?.subCode || result.data?.code || '') === '403') {
-    const error = new Error(responseMessage)
-    error.statusCode = result.status
-    error.details = {
-      response: result.data,
-      status: result.status
-    }
-    throw error
-  }
-
-  const token =
-    result.data?.data?.token ||
-    result.data?.data?.access_token ||
-    result.data?.data?.accessToken ||
-    result.data?.token ||
-    result.data?.authToken ||
-    result.data?.access_token ||
-    result.data?.accessToken ||
-    result.data?.data?.result?.token ||
-    result.data?.result?.token ||
-    null
-
-  if (!token) {
-    const error = new Error(responseMessage || 'Cashfree payout authorization token was not returned')
-    error.details = {
-      response: result.data,
-      status: result.status
-    }
-    throw error
-  }
-
-  const expiresInSeconds = Number(result.data?.data?.expires_in || result.data?.expires_in || 45 * 60)
-  cachedAuthToken = token
-  cachedAuthTokenExpiresAt = Date.now() + Math.max(60, expiresInSeconds - 60) * 1000
-  return token
-}
-
-const getCashfreeAuthorizedHeaders = async (fetchImpl = global.fetch) => {
-  const token = await authorizeCashfreePayout(fetchImpl)
-  return {
-    Authorization: `Bearer ${token}`
-  }
-}
-
 const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fetchImpl = global.fetch) => {
-  const authHeaders = await getCashfreeAuthorizedHeaders(fetchImpl)
   const result = await cashfreeRequest('/validation/bankDetails', {
     method: 'GET',
     query: {
@@ -349,7 +268,6 @@ const validateBankDetails = async ({ name, email, phone, bankAccount, ifsc }, fe
       bankAccount,
       ifsc
     },
-    headers: authHeaders,
     fetchImpl
   })
 
@@ -395,8 +313,7 @@ const resolveBeneficiaryAddress = ({ payee, address = {} } = {}) => {
 }
 
 const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount, ifsc, address }, fetchImpl = global.fetch) => {
-  await authorizeCashfreePayout(fetchImpl)
-  const result = await cashfreeRequest('/v2/beneficiary', {
+  const result = await cashfreeRequest('/beneficiary', {
     method: 'POST',
     body: {
       beneficiary_id: beneId,
@@ -414,7 +331,6 @@ const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount,
       },
       beneficiary_email: email || ''
     },
-    headers: await getCashfreeAuthorizedHeaders(fetchImpl),
     fetchImpl
   })
 
@@ -428,7 +344,6 @@ const addCashfreeBeneficiary = async ({ beneId, name, email, phone, bankAccount,
 }
 
 const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode = 'IMPS', remarks = '' }, fetchImpl = global.fetch) => {
-  await authorizeCashfreePayout(fetchImpl)
   const result = await cashfreeRequest('/v2/transfers', {
     method: 'POST',
     body: {
@@ -440,7 +355,6 @@ const requestAsyncTransfer = async ({ beneId, amount, transferId, transferMode =
       transfer_mode: transferMode,
       transfer_remarks: remarks || ''
     },
-    headers: await getCashfreeAuthorizedHeaders(fetchImpl),
     fetchImpl
   })
 
