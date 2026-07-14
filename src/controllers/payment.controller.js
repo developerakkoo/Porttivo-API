@@ -912,6 +912,10 @@ const getAdminPaymentHistory = async (req, res, next) => {
       filter.status = req.query.paymentStatus.toUpperCase()
     }
 
+    if (req.query.providerTransactionId) {
+      filter.providerTransactionId = req.query.providerTransactionId.trim()
+    }
+
     // ----------------------------
     // Date Filter
     // ----------------------------
