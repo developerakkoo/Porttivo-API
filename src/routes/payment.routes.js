@@ -7,6 +7,8 @@ const {
   getPaymentSessionStatus,
   getPaymentSessionByReference,
   handleCashfreeReturn,
+  getTransporterPaymentHistory,
+  getAdminPaymentHistory,
   handleGatewayWebhook
 } = require('../controllers/payment.controller')
 
@@ -18,5 +20,7 @@ router.get('/references/:referenceType/:referenceId', authenticate, getPaymentSe
 router.get('/cashfree/return', handleCashfreeReturn)
 router.post('/:provider/webhook', handleGatewayWebhook)
 router.get('/:provider/webhook', handleGatewayWebhook)
+router.get('/transporter/history',authenticate, getTransporterPaymentHistory)
+router.get('/admin/history', authenticate, getAdminPaymentHistory)
 
 module.exports = router

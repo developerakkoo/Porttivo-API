@@ -18,6 +18,8 @@ const {
   createAutomaticPayoutForPayment
 } = require('../services/cashfreePayout.service')
 
+const Payout = require('../models/Payout')
+
 const toObjectIdString = value => {
   if (!value) return null
   if (typeof value === 'string') return value
@@ -615,8 +617,6 @@ const handleGatewayWebhook = async (req, res, next) => {
     payment.providerOrderId =
       gatewayMetadata.providerOrderId || payment.providerOrderId
 
-   
-
     // ==========================================
     // Update Payment Status
     // ==========================================
@@ -732,6 +732,375 @@ const handleGatewayWebhook = async (req, res, next) => {
   }
 }
 
+// const mongoose = require('mongoose')
+// const PaymentSession = require('../models/PaymentSession')
+// const Payout = require('../models/Payout')
+
+const getTransporterPaymentHistory = async (req, res, next) => {
+  try {
+    const transporterId = req.user.id
+
+    const page = Math.max(Number(req.query.page) || 1, 1)
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+    const skip = (page - 1) * limit
+
+    const filter = {
+      $or: [
+        // New payments (recommended)
+        {
+          'metadata.transporterId': mongoose.Types.ObjectId.isValid(
+            transporterId
+          )
+            ? new mongoose.Types.ObjectId(transporterId)
+            : transporterId
+        },
+
+        // Existing payments
+        {
+          'initiatedBy.userId': mongoose.Types.ObjectId.isValid(transporterId)
+            ? new mongoose.Types.ObjectId(transporterId)
+            : transporterId,
+          'initiatedBy.userType': 'transporter'
+        }
+      ]
+    }
+
+    if (req.query.status) {
+      filter.status = String(req.query.status).trim().toUpperCase()
+    }
+
+    if (req.query.provider) {
+      filter.provider = String(req.query.provider).trim().toUpperCase()
+    }
+
+    if (req.query.fromDate || req.query.toDate) {
+      filter.createdAt = {}
+
+      if (req.query.fromDate) {
+        filter.createdAt.$gte = new Date(req.query.fromDate)
+      }
+
+      if (req.query.toDate) {
+        const end = new Date(req.query.toDate)
+        end.setHours(23, 59, 59, 999)
+        filter.createdAt.$lte = end
+      }
+    }
+
+    const total = await PaymentSession.countDocuments(filter)
+
+    const payments = await PaymentSession.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+
+    const paymentIds = payments.map(payment => payment._id)
+
+    const payouts = await Payout.find({
+      paymentId: { $in: paymentIds }
+    }).lean()
+
+    const payoutMap = new Map()
+
+    payouts.forEach(payout => {
+      payoutMap.set(String(payout.paymentId), payout)
+    })
+
+    const results = payments.map(payment => {
+      const payout = payoutMap.get(String(payment._id))
+
+      return {
+        paymentId: payment._id,
+
+        referenceId: payment.referenceId,
+
+        purpose: payment.purpose,
+
+        providerTransactionId: payment.providerTransactionId,
+
+        provider: payment.provider,
+
+        amount: payment.amount,
+
+        paymentStatus: payment.status,
+
+        paymentDate: payment.completedAt || payment.createdAt,
+
+        payoutStatus: payout ? payout.status : 'NOT_CREATED',
+
+        payout: payout
+          ? {
+              id: payout._id,
+              status: payout.status,
+              transferId: payout.cashfree?.transferId || null,
+              beneId: payout.cashfree?.beneId || null
+            }
+          : null
+      }
+    })
+    return res.status(200).json({
+      success: true,
+      data: {
+        page,
+        limit,
+        total,
+        count: results.length,
+        hasNext: page * limit < total,
+        hasPrevious: page > 1,
+        payments: results
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// const mongoose = require('mongoose')
+// const PaymentSession = require('../models/PaymentSession')
+// const Payout = require('../models/Payout')
+
+const getAdminPaymentHistory = async (req, res, next) => {
+  try {
+    // Admin only
+    if (req.user?.userType !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      })
+    }
+
+    const page = Math.max(Number(req.query.page) || 1, 1)
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+    const skip = (page - 1) * limit
+
+    const filter = {}
+
+    // ----------------------------
+    // Transporter
+    // ----------------------------
+    if (req.query.transporterId) {
+      const transporterId = req.query.transporterId.trim()
+
+      filter['initiatedBy.userId'] = mongoose.Types.ObjectId.isValid(
+        transporterId
+      )
+        ? new mongoose.Types.ObjectId(transporterId)
+        : transporterId
+
+      filter['initiatedBy.userType'] = 'transporter'
+    }
+
+    // ----------------------------
+    // Reference
+    // ----------------------------
+    if (req.query.referenceId) {
+      filter.referenceId = req.query.referenceId.trim()
+    }
+
+    // ----------------------------
+    // Provider
+    // ----------------------------
+    if (req.query.provider) {
+      filter.provider = req.query.provider.toUpperCase()
+    }
+
+    // ----------------------------
+    // Payment Status
+    // ----------------------------
+    if (req.query.paymentStatus) {
+      filter.status = req.query.paymentStatus.toUpperCase()
+    }
+
+    // ----------------------------
+    // Date Filter
+    // ----------------------------
+    if (req.query.fromDate || req.query.toDate) {
+      filter.createdAt = {}
+
+      if (req.query.fromDate) {
+        filter.createdAt.$gte = new Date(req.query.fromDate)
+      }
+
+      if (req.query.toDate) {
+        const end = new Date(req.query.toDate)
+        end.setHours(23, 59, 59, 999)
+        filter.createdAt.$lte = end
+      }
+    }
+
+    // ----------------------------
+    // Search
+    // ----------------------------
+    if (req.query.search) {
+      const search = req.query.search.trim()
+
+      filter.$or = [
+        {
+          'payer.name': {
+            $regex: search,
+            $options: 'i'
+          }
+        },
+        {
+          'payer.email': {
+            $regex: search,
+            $options: 'i'
+          }
+        },
+        {
+          'payer.mobile': {
+            $regex: search,
+            $options: 'i'
+          }
+        }
+      ]
+    }
+    if (req.query.paymentId) {
+      const paymentId = req.query.paymentId.trim()
+
+      if (mongoose.Types.ObjectId.isValid(paymentId)) {
+        filter._id = new mongoose.Types.ObjectId(paymentId)
+      }
+    }
+    // ----------------------------
+    // Count
+    // ----------------------------
+    const total = await PaymentSession.countDocuments(filter)
+
+    // ----------------------------
+    // Payments
+    // ----------------------------
+    const payments = await PaymentSession.find(filter)
+      .select(
+        `
+        referenceId
+        purpose
+        provider
+        providerTransactionId
+        amount
+        status
+        completedAt
+        createdAt
+        payer
+        initiatedBy
+      `
+      )
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+
+    const paymentIds = payments.map(p => p._id)
+
+    // ----------------------------
+    // Payouts
+    // ----------------------------
+    const payoutFilter = {
+      paymentId: {
+        $in: paymentIds
+      }
+    }
+
+    if (req.query.transferId) {
+      payoutFilter['cashfree.transferId'] = req.query.transferId.trim()
+    }
+
+    const payouts = await Payout.find(payoutFilter)
+      .select(
+        `
+    paymentId
+    status
+    cashfree.transferId
+    cashfree.beneId
+  `
+      )
+      .lean()
+      .select(
+        `
+        paymentId
+        status
+        cashfree.transferId
+        cashfree.beneId
+      `
+      )
+      .lean()
+
+    const payoutMap = new Map()
+
+    payouts.forEach(payout => {
+      payoutMap.set(String(payout.paymentId), payout)
+    })
+
+    // ----------------------------
+    // Response
+    // ----------------------------
+    let results = payments.map(payment => {
+      const payout = payoutMap.get(String(payment._id))
+
+      return {
+        paymentId: payment._id,
+
+        transporter: {
+          id: payment.initiatedBy?.userId || null,
+          name: payment.payer?.name || null,
+          email: payment.payer?.email || null,
+          mobile: payment.payer?.mobile || null
+        },
+
+        referenceId: payment.referenceId,
+
+        purpose: payment.purpose,
+
+        provider: payment.provider,
+
+        providerTransactionId: payment.providerTransactionId,
+
+        amount: payment.amount,
+
+        paymentStatus: payment.status,
+
+        paymentDate: payment.completedAt || payment.createdAt,
+
+        payoutStatus: payout ? payout.status : 'NOT_CREATED',
+
+        payout: payout
+          ? {
+              id: payout._id,
+              status: payout.status,
+              transferId: payout.cashfree?.transferId || null,
+              beneId: payout.cashfree?.beneId || null
+            }
+          : null
+      }
+    })
+
+    // ----------------------------
+    // Filter By Payout Status
+    // ----------------------------
+    if (req.query.payoutStatus) {
+      const payoutStatus = req.query.payoutStatus.toUpperCase()
+
+      results = results.filter(item => item.payoutStatus === payoutStatus)
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        page,
+        limit,
+        total,
+        count: results.length,
+        hasNext: page * limit < total,
+        hasPrevious: page > 1,
+        payments: results
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 const handleCashfreeReturn = async (req, res, next) => {
   try {
     const body = {
@@ -825,5 +1194,7 @@ module.exports = {
   getPaymentSessionByReference,
   handleCashfreeReturn,
   handleGatewayWebhook,
+  getTransporterPaymentHistory,
+  getAdminPaymentHistory,
   serializePaymentSession
 }
