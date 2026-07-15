@@ -1,5 +1,4 @@
 const express = require("express");
-
 const router = express.Router();
 
 const {
@@ -7,10 +6,15 @@ const {
   getDeletedAccounts,
 } = require("../controllers/accountDeletion.controller");
 
-// Public
+router.get("/delete-account", (req, res) => {
+  res.json({
+    success: true,
+    message: "Delete Account API is working",
+  });
+});
+
 router.post("/delete-account", deleteAccount);
 
-// Admin
 router.get("/admin/deleted-accounts", getDeletedAccounts);
 
 module.exports = router;
