@@ -41,36 +41,29 @@ async function deleteAccount() {
     try {
 
         const response = await fetch("/api/delete-account", {
-
             method: "POST",
-
             headers: {
                 "Content-Type": "application/json"
             },
-
             body: JSON.stringify(formData)
-
         });
 
         const result = await response.json();
 
-        if (result.success) {
-
-            alert("Your account has been deleted successfully.");
-
-            window.location.href = "/api/delete-account";
-
-        } else {
-
-            alert(result.message);
-
+        if (!response.ok || !result.success) {
+            alert(result.message || "Account not found.");
+            return;
         }
 
-    } catch (err) {
+        alert("✅ Account deleted successfully.");
 
-        console.error(err);
+        window.location.reload();
 
-        alert("Something went wrong.");
+    } catch (error) {
+
+        console.error(error);
+
+        alert("Something went wrong. Please try again.");
 
     }
 
