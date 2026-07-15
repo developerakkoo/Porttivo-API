@@ -1,62 +1,53 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
+  <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Delete Account | Porttivo</title>
 
-    <link rel="stylesheet" href="/account-deletion/delete-account.css">
-</head>
+    <link rel="stylesheet" href="/account-deletion/delete-account.css" />
+  </head>
 
-<body>
-
+  <body>
     <div class="container">
+      <div class="card">
+        <div class="logo">
+          <img src="porttivo logo.jpg" alt="Porttivo Logo" />
+        </div>
 
-        <div class="card">
+        <h1>Delete Your Account</h1>
 
-            <div class="icon">
-                ⚠️
-            </div>
+        <p class="desc">
+          Deleting your Porttivo account is permanent and cannot be undone.
+        </p>
 
-            <h1>Delete Your Account</h1>
+        <ul>
+          <li>✔ Customer Account</li>
+          <li>✔ Driver Account</li>
+          <li>✔ Transporter Account</li>
+          <li>✔ Wallet & Profile</li>
+          <li>✔ Trip History</li>
+        </ul>
 
-            <p class="desc">
-                Deleting your Porttivo account is permanent and cannot be undone.
-            </p>
+        <form id="deleteForm">
+          <label>User Type</label>
 
-            <ul>
+          <select id="userType" required>
+            <option value="">Select User Type</option>
+            <option value="customer">Customer</option>
+            <option value="driver">Driver</option>
+            <option value="transporter">Transporter</option>
+          </select>
 
-                <li>✔ Customer Account</li>
-                <li>✔ Driver Account</li>
-                <li>✔ Transporter Account</li>
-                <li>✔ Wallet & Profile</li>
-                <li>✔ Trip History</li>
+          <label>Email or Mobile Number</label>
 
-            </ul>
-
-            <form id="deleteForm">
-
-                <label>User Type</label>
-
-                <select id="userType" required>
-
-                    <option value="">Select User Type</option>
-                    <option value="customer">Customer</option>
-                    <option value="driver">Driver</option>
-                    <option value="transporter">Transporter</option>
-
-                </select>
-
-                <label>Email or Mobile Number</label>
-
-                <input
-                    id="identifier"
-                    type="text"
-                    placeholder="Enter Email or Mobile Number"
-                    required
-                >
-<!-- 
+          <input
+            id="identifier"
+            type="text"
+            placeholder="Enter Email or Mobile Number"
+            required
+          />
+          <!-- 
                 <label>Reason (Optional)</label>
 
                 <textarea
@@ -65,64 +56,44 @@
                     placeholder="Tell us why you're leaving..."
                 ></textarea> -->
 
-                <div class="buttons">
+          <div class="buttons">
+            <button
+              type="button"
+              class="cancel"
+              onclick="window.location.href='https://porttivo.com';"
+            >
+              Keep Account
+            </button>
 
-                    <button
-                        type="button"
-                        class="cancel"
-                        onclick="window.location.href='https://porttivo.com';"
-                    >
-                        Keep Account
-                    </button>
-
-                    <button
-                        type="submit"
-                        class="delete"
-                    >
-                        Delete Account
-                    </button>
-
-                </div>
-
-            </form>
-
-        </div>
-
+            <button type="submit" class="delete">Delete Account</button>
+          </div>
+        </form>
+      </div>
     </div>
 
     <!-- Confirmation Modal -->
 
-   <!-- Universal Popup Modal -->
-<div class="modal" id="popupModal">
-
-    <div class="modal-content">
-
+    <!-- Universal Popup Modal -->
+    <div class="modal" id="popupModal">
+      <div class="modal-content">
         <div id="popupIcon" class="popup-icon">⚠️</div>
 
         <h2 id="popupTitle">Confirm Account Deletion</h2>
 
         <p id="popupMessage">
-            Are you sure you want to permanently delete your account?
+          Are you sure you want to permanently delete your account?
         </p>
 
         <div class="buttons" id="popupButtons">
+          <button class="cancel" onclick="closePopup()">Cancel</button>
 
-            <button class="cancel" onclick="closePopup()">
-                Cancel
-            </button>
-
-            <button class="delete" onclick="confirmDelete()">
-                Confirm Delete
-            </button>
-
+          <button class="delete" onclick="confirmDelete()">
+            Confirm Delete
+          </button>
         </div>
-
+      </div>
     </div>
 
-</div>
-
-<script src="/account-deletion/delete-account.js"></script>
-
-</body>
-
+    <script src="/account-deletion/delete-account.js"></script>
+  </body>
 </html>
