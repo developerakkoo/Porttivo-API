@@ -44,6 +44,8 @@ const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability'
 const Payout = require('./src/models/Payout');
 const { startPayoutAutomationCron } = require('./src/services/cashfreePayout.service');
 
+const accountDeletionRoutes = require("./src/routes/accountDeletion.routes");
+
 logger.installConsoleFormatter();
 
 function requireAdminUser(req, res, next) {
@@ -98,6 +100,9 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Public accunt deletion
+app.use("/api", accountDeletionRoutes);
 
 // API Routes
 app.use('/api/auth', authRoutes);

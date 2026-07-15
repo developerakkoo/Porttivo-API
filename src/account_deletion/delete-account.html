@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Delete Account | Porttivo</title>
+
+    <link rel="stylesheet" href="delete-account.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <div class="card">
+
+            <div class="icon">
+                ⚠️
+            </div>
+
+            <h1>Delete Your Account</h1>
+
+            <p class="desc">
+                Deleting your Porttivo account is permanent and cannot be undone.
+            </p>
+
+            <ul>
+
+                <li>✔ Customer Account</li>
+                <li>✔ Driver Account</li>
+                <li>✔ Transporter Account</li>
+                <li>✔ Wallet & Profile</li>
+                <li>✔ Trip History</li>
+
+            </ul>
+
+            <form id="deleteForm">
+
+                <label>User Type</label>
+
+                <select id="userType" required>
+
+                    <option value="">Select User Type</option>
+                    <option value="customer">Customer</option>
+                    <option value="driver">Driver</option>
+                    <option value="transporter">Transporter</option>
+
+                </select>
+
+                <label>Email or Mobile Number</label>
+
+                <input
+                    id="identifier"
+                    type="text"
+                    placeholder="Enter Email or Mobile Number"
+                    required
+                >
+
+                <label>Reason (Optional)</label>
+
+                <textarea
+                    id="reason"
+                    rows="4"
+                    placeholder="Tell us why you're leaving..."
+                ></textarea>
+
+                <div class="buttons">
+
+                    <button
+                        type="button"
+                        class="cancel"
+                        onclick="window.location.href='https://porttivo.com';"
+                    >
+                        Keep Account
+                    </button>
+
+                    <button
+                        type="submit"
+                        class="delete"
+                    >
+                        Delete Account
+                    </button>
+
+                </div>
+
+            </form>
+
+        </div>
+
+    </div>
+
+    <!-- Confirmation Modal -->
+
+    <div class="modal" id="confirmModal">
+
+        <div class="modal-content">
+
+            <h2>Confirm Account Deletion</h2>
+
+            <p>
+                Are you sure you want to permanently delete your account?
+            </p>
+
+            <div class="buttons">
+
+                <button onclick="closeModal()">
+                    Cancel
+                </button>
+
+                <button class="delete" onclick="deleteAccount()">
+                    Confirm Delete
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+<script src="delete-account.js"></script>
+
+</body>
+
+</html>
