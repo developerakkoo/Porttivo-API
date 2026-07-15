@@ -92,31 +92,34 @@
 
     <!-- Confirmation Modal -->
 
-    <div class="modal" id="confirmModal">
+   <!-- Universal Popup Modal -->
+<div class="modal" id="popupModal">
 
-        <div class="modal-content">
+    <div class="modal-content">
 
-            <h2>Confirm Account Deletion</h2>
+        <div id="popupIcon" class="popup-icon">⚠️</div>
 
-            <p>
-                Are you sure you want to permanently delete your account?
-            </p>
+        <h2 id="popupTitle">Confirm Account Deletion</h2>
 
-            <div class="buttons">
+        <p id="popupMessage">
+            Are you sure you want to permanently delete your account?
+        </p>
 
-                <button onclick="closeModal()">
-                    Cancel
-                </button>
+        <div class="buttons" id="popupButtons">
 
-                <button class="delete" onclick="deleteAccount()">
-                    Confirm Delete
-                </button>
+            <button class="cancel" onclick="closePopup()">
+                Cancel
+            </button>
 
-            </div>
+            <button class="delete" onclick="confirmDelete()">
+                Confirm Delete
+            </button>
 
         </div>
 
     </div>
+
+</div>
 
 <script src="/account-deletion/delete-account.js"></script>
 

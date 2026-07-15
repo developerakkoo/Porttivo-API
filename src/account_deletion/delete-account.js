@@ -1,12 +1,14 @@
 const form = document.getElementById("deleteForm");
 
-const modal = document.getElementById("confirmModal");
+const popup = document.getElementById("popupModal");
 
 let formData = {};
 
 form.addEventListener("submit", function (e) {
 
     e.preventDefault();
+
+    formData = {};
 
     formData.userType = document.getElementById("userType").value;
 
@@ -24,46 +26,104 @@ form.addEventListener("submit", function (e) {
 
     }
 
-    modal.style.display = "block";
+    showConfirmPopup();
 
 });
 
-function closeModal(){
+function showConfirmPopup() {
 
-    modal.style.display="none";
+    popup.style.display = "block";
+
+    document.getElementById("popupIcon").innerHTML = "⚠️";
+
+    document.getElementById("popupTitle").innerHTML = "Confirm Account Deletion";
+
+    document.getElementById("popupMessage").innerHTML =
+        "Are you sure you want to permanently delete your account?";
+
+    document.getElementById("popupButtons").innerHTML = `
+        <button class="cancel" onclick="closePopup()">
+            Cancel
+        </button>
+
+        <button class="delete" onclick="confirmDelete()">
+            Confirm Delete
+        </button>
+    `;
 
 }
 
-async function deleteAccount() {
+function closePopup() {
 
-    closeModal();
+    popup.style.display = "none";
+
+}
+
+async function confirmDelete() {
 
     try {
 
         const response = await fetch("/api/delete-account", {
+
             method: "POST",
+
             headers: {
                 "Content-Type": "application/json"
             },
+
             body: JSON.stringify(formData)
+
         });
 
         const result = await response.json();
 
-        if (!response.ok || !result.success) {
-            alert(result.message || "Account not found.");
-            return;
+        if (response.ok && result.success) {
+
+            document.getElementById("popupIcon").innerHTML = "✅";
+
+            document.getElementById("popupTitle").innerHTML = "Account Deleted";
+
+            document.getElementById("popupMessage").innerHTML = result.message;
+
+            document.getElementById("popupButtons").innerHTML = `
+                <button class="cancel" onclick="window.location.reload()">
+                    OK
+                </button>
+            `;
+
+        } else {
+
+            document.getElementById("popupIcon").innerHTML = "❌";
+
+            document.getElementById("popupTitle").innerHTML = "Account Not Found";
+
+            document.getElementById("popupMessage").innerHTML =
+                result.message || "No account found.";
+
+            document.getElementById("popupButtons").innerHTML = `
+                <button class="delete" onclick="closePopup()">
+                    OK
+                </button>
+            `;
+
         }
-
-        alert("✅ Account deleted successfully.");
-
-        window.location.reload();
 
     } catch (error) {
 
         console.error(error);
 
-        alert("Something went wrong. Please try again.");
+        document.getElementById("popupIcon").innerHTML = "❌";
+
+        document.getElementById("popupTitle").innerHTML = "Server Error";
+
+        document.getElementById("popupMessage").innerHTML =
+            "Something went wrong. Please try again.";
+
+        document.getElementById("popupButtons").innerHTML = `
+            <button class="delete" onclick="closePopup()">
+                OK
+            </button>
+        `;
 
     }
 
