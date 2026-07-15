@@ -34,39 +34,41 @@ function closeModal(){
 
 }
 
-async function deleteAccount(){
+async function deleteAccount() {
 
     closeModal();
 
-    try{
+    try {
 
-        const response = await fetch("/api/delete-account",{
+        const response = await fetch("/api/delete-account", {
 
-            method:"POST",
+            method: "POST",
 
-            headers:{
-                "Content-Type":"application/json"
+            headers: {
+                "Content-Type": "application/json"
             },
 
-            body:JSON.stringify(formData)
+            body: JSON.stringify(formData)
 
         });
 
         const result = await response.json();
 
-        if(result.success){
+        if (result.success) {
 
-            alert("✅ Account deleted successfully.");
+            alert("Your account has been deleted successfully.");
 
-            window.location.reload();
+            window.location.href = "/api/delete-account";
 
-        }else{
+        } else {
 
             alert(result.message);
 
         }
 
-    }catch(error){
+    } catch (err) {
+
+        console.error(err);
 
         alert("Something went wrong.");
 

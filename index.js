@@ -101,6 +101,11 @@ app.get('/health', (req, res) => {
   });
 });
 
+
+app.use(
+  "/account-deletion",
+  express.static(path.join(__dirname, "src/account_deletion"))
+);
 // Public accunt deletion
 app.use("/api", accountDeletionRoutes);
 

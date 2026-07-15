@@ -1,16 +1,17 @@
 const express = require("express");
+const path = require("path");
+
 const router = express.Router();
 
 const {
-  deleteAccount,
-  getDeletedAccounts,
+    deleteAccount,
+    getDeletedAccounts
 } = require("../controllers/accountDeletion.controller");
 
 router.get("/delete-account", (req, res) => {
-  res.json({
-    success: true,
-    message: "Delete Account API is working",
-  });
+    res.sendFile(
+        path.join(__dirname, "../account_deletion/delete-account.html")
+    );
 });
 
 router.post("/delete-account", deleteAccount);
