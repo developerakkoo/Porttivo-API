@@ -14,7 +14,7 @@ form.addEventListener("submit", function (e) {
 
     const identifier = document.getElementById("identifier").value.trim();
 
-    formData.reason = document.getElementById("reason").value.trim();
+    formData.reason = "";
 
     if (identifier.includes("@")) {
 
