@@ -1,6 +1,11 @@
+const crypto = require('node:crypto')
 const mongoose = require('mongoose')
 const Payout = require('../models/Payout')
 const PaymentSession = require('../models/PaymentSession')
+const {
+  cashfreePayoutBankEncryptionSecret,
+  cashfreePayoutClientSecret
+} = require('../config/env')
 const {
   buildPayoutStatusMessage,
   createAutomaticPayoutForPayment,
@@ -25,6 +30,52 @@ const safeObjectIdString = (value) => {
   if (typeof value === 'string') return value
   if (value._id) return value._id.toString()
   return value.toString ? value.toString() : String(value)
+}
+
+const getBeneficiaryEncryptionKey = () => {
+  const rawKey = String(
+    cashfreePayoutBankEncryptionSecret || cashfreePayoutClientSecret || ''
+  ).trim()
+  if (!rawKey) {
+    return null
+  }
+
+  return crypto.createHash('sha256').update(rawKey).digest()
+}
+
+const decryptSensitiveValue = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return null
+
+  const key = getBeneficiaryEncryptionKey()
+  if (!key) return null
+
+  const payload = Buffer.from(text, 'base64')
+  if (payload.length <= 28) {
+    return null
+  }
+
+  try {
+    const iv = payload.subarray(0, 12)
+    const authTag = payload.subarray(12, 28)
+    const encrypted = payload.subarray(28)
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
+    decipher.setAuthTag(authTag)
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+  } catch (error) {
+    return null
+  }
+}
+
+const extractAccountLast4 = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return null
+  return text.slice(-4)
+}
+
+const formatMaskedAccountNumber = (value) => {
+  const last4 = extractAccountLast4(value)
+  return last4 ? `****${last4}` : null
 }
 
 const assertPayoutAccess = (payout, user) => {
@@ -67,6 +118,25 @@ const hasBeneficiaryAccess = (req, payee) => {
   return safeObjectIdString(req.user?.id) === safeObjectIdString(payee?._id)
 }
 
+const resolveManagedPayeeId = (req, requestedPayeeId = null) => {
+  const normalizedRequestedPayeeId = safeObjectIdString(requestedPayeeId)
+
+  if (req.user?.userType === 'admin') {
+    return normalizedRequestedPayeeId
+  }
+
+  const actorId = safeObjectIdString(req.user?.id)
+  if (!actorId) {
+    return null
+  }
+
+  if (normalizedRequestedPayeeId && normalizedRequestedPayeeId !== actorId) {
+    return null
+  }
+
+  return actorId
+}
+
 const canManageBeneficiary = (req) =>
   ['admin', 'driver', 'transporter', 'customer'].includes(
     req.user?.userType
@@ -91,126 +161,32 @@ const resolveSelfManagedPayeeId = (req, requestedPayeeId) => {
   return actorId
 }
 
-const normalizeBeneficiaryPayload = (beneficiary = {}) => {
-  const instrumentDetails =
-    beneficiary.beneficiaryInstrumentDetails ||
-    beneficiary.beneficiary_instrument_details ||
-    {}
-  const contactDetails =
-    beneficiary.beneficiaryContactDetails ||
-    beneficiary.beneficiary_contact_details ||
-    {}
+const serializeBeneficiaryForFrontend = (payee = {}) => {
+  const beneficiary = payee.cashfreeBeneficiary || {}
+  const decryptedBankAccount =
+    decryptSensitiveValue(beneficiary.bankAccountEncrypted) || null
+  const last4 =
+    beneficiary.bankAccountLast4 ||
+    extractAccountLast4(decryptedBankAccount)
+  const ifsc =
+    decryptSensitiveValue(beneficiary.ifscEncrypted) ||
+    null
 
   return {
-    beneficiaryId:
-      beneficiary.beneficiaryId ||
-      beneficiary.beneficiary_id ||
-      beneficiary.beneId ||
-      beneficiary.bene_id ||
-      null,
-    beneficiaryName:
-      beneficiary.beneficiaryName ||
-      beneficiary.beneficiary_name ||
+    name:
       beneficiary.name ||
+      payee.name ||
+      payee.company ||
+      payee.pumpName ||
       null,
-    beneficiaryInstrumentDetails: {
-      bankAccountNumber:
-        instrumentDetails.bankAccountNumber ||
-        instrumentDetails.bank_account_number ||
-        null,
-      bankIfsc:
-        instrumentDetails.bankIfsc ||
-        instrumentDetails.bank_ifsc ||
-        null,
-      vpa: instrumentDetails.vpa || null
-    },
-    beneficiaryContactDetails: {
-      beneficiaryEmail:
-        contactDetails.beneficiaryEmail ||
-        contactDetails.beneficiary_email ||
-        null,
-      beneficiaryPhone:
-        contactDetails.beneficiaryPhone ||
-        contactDetails.beneficiary_phone ||
-        null,
-      beneficiaryCountryCode:
-        contactDetails.beneficiaryCountryCode ||
-        contactDetails.beneficiary_country_code ||
-        null,
-      beneficiaryAddress:
-        contactDetails.beneficiaryAddress ||
-        contactDetails.beneficiary_address ||
-        null,
-      beneficiaryCity:
-        contactDetails.beneficiaryCity || contactDetails.beneficiary_city || null,
-      beneficiaryState:
-        contactDetails.beneficiaryState ||
-        contactDetails.beneficiary_state ||
-        null,
-      beneficiaryPostalCode:
-        contactDetails.beneficiaryPostalCode ||
-        contactDetails.beneficiary_postal_code ||
-        null
-    },
-    beneficiaryStatus:
-      beneficiary.beneficiaryStatus ||
-      beneficiary.beneficiary_status ||
-      beneficiary.status ||
-      null,
-    addedOn: beneficiary.addedOn || beneficiary.added_on || null,
-    providerResponse: beneficiary
-  }
-}
-
-const normalizeBeneficiaryForFrontend = (beneficiary = {}) => {
-  const instrumentDetails =
-    beneficiary.beneficiaryInstrumentDetails ||
-    beneficiary.beneficiary_instrument_details ||
-    {}
-  const contactDetails =
-    beneficiary.beneficiaryContactDetails ||
-    beneficiary.beneficiary_contact_details ||
-    {}
-
-  return {
-    beneficiaryId:
-      beneficiary.beneficiaryId ||
-      beneficiary.beneficiary_id ||
-      beneficiary.beneId ||
-      beneficiary.bene_id ||
-      null,
-    beneficiaryName:
-      beneficiary.beneficiaryName ||
-      beneficiary.beneficiary_name ||
-      beneficiary.name ||
-      null,
-    status:
-      beneficiary.beneficiaryStatus ||
-      beneficiary.beneficiary_status ||
-      beneficiary.status ||
-      null,
-    accountNumber:
-      instrumentDetails.bankAccountNumber ||
-      instrumentDetails.bank_account_number ||
-      null,
-    ifsc: instrumentDetails.bankIfsc || instrumentDetails.bank_ifsc || null,
-    phone:
-      contactDetails.beneficiaryPhone ||
-      contactDetails.beneficiary_phone ||
-      null,
-    address:
-      contactDetails.beneficiaryAddress ||
-      contactDetails.beneficiary_address ||
-      null,
-    city:
-      contactDetails.beneficiaryCity || contactDetails.beneficiary_city || null,
-    state:
-      contactDetails.beneficiaryState || contactDetails.beneficiary_state || null,
-    postalCode:
-      contactDetails.beneficiaryPostalCode ||
-      contactDetails.beneficiary_postal_code ||
-      null,
-    addedAt: beneficiary.addedOn || beneficiary.added_on || null
+    verificationStatus: beneficiary.status || null,
+    maskedAccountNumber: formatMaskedAccountNumber(last4),
+    ifsc,
+    phone: beneficiary.phone || payee.mobile || null,
+    createdAt: beneficiary.createdAt || payee.createdAt || null,
+    updatedAt: beneficiary.updatedAt || payee.updatedAt || null,
+    verifiedAt: beneficiary.verifiedAt || null,
+    deletedAt: beneficiary.deletedAt || null
   }
 }
 
@@ -255,8 +231,7 @@ const createBeneficiary = async (req, res, next) => {
       success: true,
       message: 'Beneficiary created successfully',
       data: {
-        payee: result.payeeSnapshot,
-        beneId: result.beneId,
+        beneficiary: serializeBeneficiaryForFrontend(result.payee),
         validation: result.validation,
         verificationWarning: result.verificationWarning
       }
@@ -279,7 +254,10 @@ const getBeneficiary = async (req, res, next) => {
       ...(req.query || {}),
       ...(req.body || {})
     })
-    const payeeId = resolveSelfManagedPayeeId(req, payload.payeeId)
+    const payeeId =
+      req.user?.userType === 'admin'
+        ? resolveManagedPayeeId(req, payload.payeeId)
+        : safeObjectIdString(req.user?.id)
 
     if (!payeeId) {
       return res.status(403).json({ success: false, message: 'Access denied' })
@@ -287,7 +265,7 @@ const getBeneficiary = async (req, res, next) => {
 
     const localLookup = payeeId
       ? await findPayeeRecordById(payeeId)
-      : payload.beneficiaryId
+      : req.user?.userType === 'admin' && payload.beneficiaryId
       ? await findPayeeRecordByBeneficiaryId(payload.beneficiaryId)
       : { payee: null, modelName: null }
 
@@ -299,17 +277,22 @@ const getBeneficiary = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Beneficiary not found' })
     }
 
+    const resolvedPayeeId =
+      safeObjectIdString(localLookup.payee?._id) || payeeId
+
     const result = await getRegisteredBeneficiary(
-      { ...payload, payeeId },
+      { ...payload, payeeId: resolvedPayeeId },
       req.fetch || global.fetch
     )
-    const normalizedBeneficiary = normalizeBeneficiaryForFrontend(
-      result.beneficiary
+    const normalizedBeneficiary = serializeBeneficiaryForFrontend(
+      result.payee || localLookup.payee || {}
     )
 
     return res.status(200).json({
       success: true,
-      data: normalizedBeneficiary
+      data: {
+        beneficiary: normalizedBeneficiary
+      }
     })
   } catch (error) {
     if (error.details) {
@@ -329,7 +312,10 @@ const removeBeneficiary = async (req, res, next) => {
       ...(req.query || {}),
       ...(req.body || {})
     })
-    const payeeId = resolveSelfManagedPayeeId(req, payload.payeeId)
+    const payeeId =
+      req.user?.userType === 'admin'
+        ? resolveManagedPayeeId(req, payload.payeeId)
+        : safeObjectIdString(req.user?.id)
 
     if (!payeeId) {
       return res.status(403).json({ success: false, message: 'Access denied' })
@@ -337,7 +323,7 @@ const removeBeneficiary = async (req, res, next) => {
 
     const localLookup = payeeId
       ? await findPayeeRecordById(payeeId)
-      : payload.beneficiaryId
+      : req.user?.userType === 'admin' && payload.beneficiaryId
       ? await findPayeeRecordByBeneficiaryId(payload.beneficiaryId)
       : { payee: null, modelName: null }
 
@@ -349,18 +335,23 @@ const removeBeneficiary = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Beneficiary not found' })
     }
 
+    const resolvedPayeeId =
+      safeObjectIdString(localLookup.payee?._id) || payeeId
+
     const result = await removeRegisteredBeneficiary(
-      { ...payload, payeeId },
+      { ...payload, payeeId: resolvedPayeeId },
       req.fetch || global.fetch
     )
-    const normalizedBeneficiary = normalizeBeneficiaryForFrontend(
-      result.beneficiary
+    const normalizedBeneficiary = serializeBeneficiaryForFrontend(
+      result.payee || localLookup.payee || {}
     )
 
     return res.status(200).json({
       success: true,
       message: 'Beneficiary removed successfully',
-      data: normalizedBeneficiary
+      data: {
+        beneficiary: normalizedBeneficiary
+      }
     })
   } catch (error) {
     if (error.details) {

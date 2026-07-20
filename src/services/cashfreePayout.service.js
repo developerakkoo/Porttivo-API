@@ -32,6 +32,7 @@ const PAYEE_MODELS = [
 
 const RETRY_DELAYS_MS = [15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000]
 const STALE_PROCESSING_WINDOW_MS = 10 * 60 * 1000
+const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
 let cronTimer = null
 
@@ -52,6 +53,31 @@ const makeTransferId = (prefix = 'PTP') => {
     .toUpperCase()}`
 }
 
+const encodeUlidComponent = (value, length) => {
+  let remaining = BigInt(value)
+  const chars = Array(length).fill('0')
+
+  for (let index = length - 1; index >= 0; index -= 1) {
+    const charIndex = Number(remaining % 32n)
+    chars[index] = ULID_ALPHABET[charIndex]
+    remaining /= 32n
+  }
+
+  return chars.join('')
+}
+
+const generateUlid = () => {
+  const timeComponent = encodeUlidComponent(BigInt(Date.now()), 10)
+  const randomComponent = encodeUlidComponent(
+    BigInt(`0x${crypto.randomBytes(10).toString('hex')}`),
+    16
+  )
+
+  return `${timeComponent}${randomComponent}`
+}
+
+const buildBeneficiaryId = () => `BENE_${generateUlid()}`
+
 const normalizeMoney = amount => {
   const value = Number(amount)
   if (!Number.isFinite(value) || value <= 0) {
@@ -70,6 +96,17 @@ const sanitizeTransferRemarks = (value, fallback = 'Porttivo payout') => {
 
   const safeValue = (normalized || fallback).trim()
   return safeValue.length > 100 ? safeValue.slice(0, 100).trim() : safeValue
+}
+
+const extractAccountLast4 = value => {
+  const text = String(value || '').trim()
+  if (!text) return null
+  return text.slice(-4)
+}
+
+const formatMaskedAccountNumber = value => {
+  const last4 = extractAccountLast4(value)
+  return last4 ? `****${last4}` : null
 }
 
 const buildTransferRemarks = ({
@@ -106,11 +143,23 @@ const encryptSensitiveValue = value => {
   return Buffer.concat([iv, tag, encrypted]).toString('base64')
 }
 
-const maskBankAccount = value => {
+const decryptSensitiveValue = value => {
   const text = String(value || '').trim()
   if (!text) return null
-  if (text.length <= 4) return text
-  return `${'*'.repeat(Math.max(0, text.length - 4))}${text.slice(-4)}`
+
+  const payload = Buffer.from(text, 'base64')
+  if (payload.length <= 28) {
+    return null
+  }
+
+  const iv = payload.subarray(0, 12)
+  const authTag = payload.subarray(12, 28)
+  const encrypted = payload.subarray(28)
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), iv)
+  decipher.setAuthTag(authTag)
+
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
 }
 
 const summarizePayee = payee => {
@@ -120,9 +169,32 @@ const summarizePayee = payee => {
     model: payee.constructor?.modelName || payee.userType || null,
     name: payee.name || payee.company || payee.pumpName || null,
     email: payee.email || null,
-    mobile: payee.mobile || null,
-    cashfreeBeneId: payee.cashfreeBeneId || null,
-    beneficiary: payee.cashfreeBeneficiary || null
+    mobile: payee.mobile || null
+  }
+}
+
+const getLocalBeneficiaryRecord = payee => {
+  if (!payee?.cashfreeBeneficiary) {
+    return null
+  }
+
+  return payee.cashfreeBeneficiary
+}
+
+const resolveStoredBankDetails = (payee = {}) => {
+  const beneficiary = getLocalBeneficiaryRecord(payee) || {}
+  const bankAccount =
+    decryptSensitiveValue(beneficiary.bankAccountEncrypted) ||
+    decryptSensitiveValue(payee.bankAccountEncrypted) ||
+    null
+  const ifsc =
+    decryptSensitiveValue(beneficiary.ifscEncrypted) ||
+    decryptSensitiveValue(payee.ifscEncrypted) ||
+    null
+
+  return {
+    bankAccount,
+    ifsc
   }
 }
 
@@ -132,6 +204,14 @@ const serializePayout = (payout, { includeSensitive = false } = {}) => {
   const beneficiary = payout.cashfree?.beneficiary || {}
   const request = payout.cashfree?.request || {}
   const response = payout.cashfree?.response || {}
+  const {
+    beneId,
+    bankAccountEncrypted,
+    ifscEncrypted,
+    providerResponse,
+    removalResponse,
+    ...safeBeneficiary
+  } = beneficiary
 
   return {
     id: payout._id ? payout._id.toString() : null,
@@ -145,17 +225,16 @@ const serializePayout = (payout, { includeSensitive = false } = {}) => {
     currency: payout.currency,
     provider: payout.provider,
     cashfree: {
-      beneId: payout.cashfree?.beneId || null,
       transferId: payout.cashfree?.transferId || null,
       referenceId: payout.cashfree?.referenceId || null,
       transferMode: payout.cashfree?.transferMode || null,
       utr: payout.cashfree?.utr || null,
       beneficiary: {
-        ...beneficiary,
+        ...safeBeneficiary,
         bankAccount: includeSensitive ? beneficiary.bankAccount : null,
-        bankAccountMasked: maskBankAccount(
-          beneficiary.bankAccount || beneficiary.bankAccountMasked || null
-        )
+        bankAccountMasked:
+          beneficiary.bankAccountMasked ||
+          formatMaskedAccountNumber(beneficiary.bankAccountLast4)
       },
       request,
       response
@@ -204,10 +283,7 @@ const findPayeeRecordByBeneficiaryId = async beneficiaryId => {
     try {
       // eslint-disable-next-line no-await-in-loop
       const payee = await entry.Model.findOne({
-        $or: [
-          { cashfreeBeneId: id },
-          { 'cashfreeBeneficiary.beneId': id }
-        ]
+        'cashfreeBeneficiary.beneId': id
       })
       if (payee) {
         return { payee, modelName: entry.modelName }
@@ -231,16 +307,6 @@ const getPayeeSnapshot = (payee, modelName) => {
     email: payee.email || null,
     mobile: payee.mobile || null
   }
-}
-
-const buildBeneficiaryId = (payee, modelName) => {
-  const idPart = safeObjectIdString(payee?._id) || makeTransferId('PAYEE')
-  const modelPart = String(
-    modelName || payee?.constructor?.modelName || 'PAYEE'
-  )
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, '_')
-  return `${modelPart}_${idPart}`.slice(0, 50)
 }
 
 const parseCashfreeResponse = payload => {
@@ -477,7 +543,7 @@ const setPayeeBeneficiaryOnModel = async ({
   beneficiaryResponse,
   address
 }) => {
-  payee.cashfreeBeneId = beneId
+  const now = new Date()
   payee.cashfreeBeneficiary = {
     beneId,
     name:
@@ -487,11 +553,14 @@ const setPayeeBeneficiaryOnModel = async ({
     status: 'ACTIVE',
     bankAccountEncrypted: encryptSensitiveValue(bankDetails.bankAccount),
     ifscEncrypted: encryptSensitiveValue(bankDetails.ifsc),
-    bankAccountLast4: maskBankAccount(bankDetails.bankAccount),
+    bankAccountLast4: extractAccountLast4(bankDetails.bankAccount),
     address: address || {},
-    verification: beneficiaryResponse || {},
-    createdAt: new Date(),
-    updatedAt: new Date()
+    providerResponse: beneficiaryResponse || {},
+    removalResponse: null,
+    verifiedAt: now,
+    deletedAt: null,
+    createdAt: now,
+    updatedAt: now
   }
   await payee.save()
   return {
@@ -506,16 +575,14 @@ const setPayeeBeneficiaryDeletedOnModel = async ({
   beneficiaryResponse
 }) => {
   const currentBeneficiary = payee.cashfreeBeneficiary || {}
+  const now = new Date()
   payee.cashfreeBeneficiary = {
     ...currentBeneficiary,
-    beneId: currentBeneficiary.beneId || payee.cashfreeBeneId || null,
+    beneId: currentBeneficiary.beneId || null,
     status: 'DELETED',
-    verification: {
-      ...(currentBeneficiary.verification || {}),
-      removal: beneficiaryResponse || {},
-      removedAt: new Date()
-    },
-    updatedAt: new Date()
+    removalResponse: beneficiaryResponse || {},
+    deletedAt: now,
+    updatedAt: now
   }
   await payee.save()
   return {
@@ -619,7 +686,10 @@ const registerBeneficiary = async (
     throw error
   }
 
-  const beneId = payee.cashfreeBeneId || buildBeneficiaryId(payee, modelName)
+  const beneId =
+    payee.cashfreeBeneficiary?.beneId ||
+    payee.cashfreeBeneId ||
+    buildBeneficiaryId()
   const beneficiaryResponse = await addCashfreeBeneficiary(
     { beneId, name, email, phone, bankAccount, ifsc, address: resolvedAddress },
     fetchImpl
@@ -664,18 +734,23 @@ const getRegisteredBeneficiary = async (
     resolvedPayee = await findPayeeRecordById(payeeId)
     resolvedBeneficiaryId =
       resolvedBeneficiaryId ||
-      resolvedPayee.payee?.cashfreeBeneId ||
       resolvedPayee.payee?.cashfreeBeneficiary?.beneId ||
+      resolvedPayee.payee?.cashfreeBeneId ||
       ''
   } else if (resolvedBeneficiaryId) {
     resolvedPayee = await findPayeeRecordByBeneficiaryId(resolvedBeneficiaryId)
   }
 
+  const storedBankDetails =
+    resolvedPayee.payee && !resolvedBeneficiaryId
+      ? resolveStoredBankDetails(resolvedPayee.payee)
+      : { bankAccount: bankAccountNumber, ifsc: bankIfsc }
+
   const remoteBeneficiary = await getCashfreeBeneficiary(
     {
       beneficiaryId: resolvedBeneficiaryId || beneficiaryId,
-      bankAccountNumber,
-      bankIfsc
+      bankAccountNumber: storedBankDetails.bankAccount || bankAccountNumber,
+      bankIfsc: storedBankDetails.ifsc || bankIfsc
     },
     fetchImpl
   )
@@ -699,8 +774,8 @@ const removeRegisteredBeneficiary = async (
 
   const resolvedBeneficiaryId =
     beneficiaryId ||
-    resolvedPayee.payee?.cashfreeBeneId ||
     resolvedPayee.payee?.cashfreeBeneficiary?.beneId ||
+    resolvedPayee.payee?.cashfreeBeneId ||
     null
 
   if (!resolvedBeneficiaryId) {
@@ -1148,7 +1223,6 @@ const startPayoutTransfer = async (
 
   const beneId =
     payout.cashfree?.beneId ||
-    payee?.cashfreeBeneId ||
     beneficiary?.beneId ||
     null
 
@@ -1438,7 +1512,9 @@ const createAutomaticPayoutForPayment = async (
     status: 'CREATED',
     cashfree: {
       beneId:
-        payee?.cashfreeBeneId || payee?.cashfreeBeneficiary?.beneId || null,
+        payee?.cashfreeBeneficiary?.beneId ||
+        payee?.cashfreeBeneId ||
+        null,
       transferMode: autoMetadata.transferMode || 'IMPS',
       beneficiary: payee?.cashfreeBeneficiary || {},
       request: {},
@@ -1447,7 +1523,7 @@ const createAutomaticPayoutForPayment = async (
   })
 
   if (
-    !payee?.cashfreeBeneId ||
+    (!payee?.cashfreeBeneficiary?.beneId && !payee?.cashfreeBeneId) ||
     payee?.cashfreeBeneficiary?.status !== 'ACTIVE'
   ) {
     payout.status = 'RETRY_PENDING'
@@ -1804,6 +1880,7 @@ module.exports = {
   createAutomaticPayoutForPayment,
   createPayoutRecord,
   encryptSensitiveValue,
+  decryptSensitiveValue,
   findExistingPayout,
   findPayeeRecordById,
   findPayeeRecordByBeneficiaryId,
@@ -1816,7 +1893,8 @@ module.exports = {
   isPermanentTransferFailure,
   isTemporaryTransferFailure,
   makeTransferId,
-  maskBankAccount,
+  extractAccountLast4,
+  formatMaskedAccountNumber,
   normalizeMoney,
   processDuePayoutRetries,
   registerBeneficiary,

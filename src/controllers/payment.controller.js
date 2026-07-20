@@ -27,6 +27,26 @@ const toObjectIdString = value => {
   return value.toString ? value.toString() : String(value)
 }
 
+const sanitizePaymentMetadata = (metadata = {}) => {
+  if (!metadata || typeof metadata !== 'object') {
+    return {}
+  }
+
+  const payout = metadata.payout && typeof metadata.payout === 'object'
+    ? metadata.payout
+    : null
+
+  if (!payout) {
+    return metadata
+  }
+
+  const { beneId, ...safePayout } = payout
+  return {
+    ...metadata,
+    payout: safePayout
+  }
+}
+
 const serializePaymentSession = payment => {
   if (!payment) {
     return null
@@ -71,7 +91,7 @@ const serializePaymentSession = payment => {
         : null,
     failureReason: payment.failureReason || null,
     payer: payment.payer || {},
-    metadata: payment.metadata || {},
+    metadata: sanitizePaymentMetadata(payment.metadata || {}),
     initiatedAt: payment.initiatedAt || null,
     completedAt: payment.completedAt || null,
     failedAt: payment.failedAt || null,
@@ -686,8 +706,7 @@ const handleGatewayWebhook = async (req, res, next) => {
             payout: {
               id: payout._id?.toString() || null,
               status: payout.status,
-              transferId: payout.cashfree?.transferId || null,
-              beneId: payout.cashfree?.beneId || null
+              transferId: payout.cashfree?.transferId || null
             }
           }
 
@@ -829,14 +848,13 @@ const getTransporterPaymentHistory = async (req, res, next) => {
 
         payoutStatus: payout ? payout.status : 'NOT_CREATED',
 
-        payout: payout
-          ? {
-              id: payout._id,
-              status: payout.status,
-              transferId: payout.cashfree?.transferId || null,
-              beneId: payout.cashfree?.beneId || null
-            }
-          : null
+              payout: payout
+                ? {
+                    id: payout._id,
+                    status: payout.status,
+                    transferId: payout.cashfree?.transferId || null
+                  }
+                : null
       }
     })
     return res.status(200).json({
@@ -1068,14 +1086,13 @@ const getAdminPaymentHistory = async (req, res, next) => {
 
         payoutStatus: payout ? payout.status : 'NOT_CREATED',
 
-        payout: payout
-          ? {
-              id: payout._id,
-              status: payout.status,
-              transferId: payout.cashfree?.transferId || null,
-              beneId: payout.cashfree?.beneId || null
-            }
-          : null
+              payout: payout
+                ? {
+                    id: payout._id,
+                    status: payout.status,
+                    transferId: payout.cashfree?.transferId || null
+                  }
+                : null
       }
     })
 

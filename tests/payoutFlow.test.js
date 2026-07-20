@@ -54,12 +54,15 @@ const payoutTests = [
             registerBeneficiary: async (args) => {
               capturedArgs = args
               return {
-                payeeSnapshot: {
-                  userId: 'transporter-1',
-                  userType: 'TRANSPORTER',
+                payee: {
                   name: 'Transporter One',
-                  email: null,
-                  mobile: '9999999999'
+                  mobile: '9999999999',
+                  cashfreeBeneficiary: {
+                    status: 'ACTIVE',
+                    bankAccountLast4: '7890',
+                    createdAt: new Date('2026-07-20T00:00:00.000Z'),
+                    updatedAt: new Date('2026-07-20T00:00:00.000Z')
+                  }
                 },
                 beneId: 'TRANSPORTER_transporter-1',
                 validation: { verified: true },
@@ -95,7 +98,9 @@ const payoutTests = [
 
       assert.equal(res.statusCode, 201)
       assert.equal(capturedArgs.payeeId, 'transporter-1')
-      assert.equal(res.body.data.beneId, 'TRANSPORTER_transporter-1')
+      assert.equal(res.body.data.beneficiary.name, 'Transporter One')
+      assert.equal(res.body.data.beneficiary.maskedAccountNumber, '****7890')
+      assert.ok(!Object.prototype.hasOwnProperty.call(res.body.data, 'beneId'))
     }
   },
   {
@@ -109,12 +114,15 @@ const payoutTests = [
             registerBeneficiary: async (args) => {
               capturedArgs = args
               return {
-                payeeSnapshot: {
-                  userId: 'customer-1',
-                  userType: 'CUSTOMER',
+                payee: {
                   name: 'Customer One',
-                  email: null,
-                  mobile: '8888888888'
+                  mobile: '8888888888',
+                  cashfreeBeneficiary: {
+                    status: 'ACTIVE',
+                    bankAccountLast4: '7890',
+                    createdAt: new Date('2026-07-20T00:00:00.000Z'),
+                    updatedAt: new Date('2026-07-20T00:00:00.000Z')
+                  }
                 },
                 beneId: 'CUSTOMER_customer-1',
                 validation: { verified: true },
@@ -150,7 +158,9 @@ const payoutTests = [
 
       assert.equal(res.statusCode, 201)
       assert.equal(capturedArgs.payeeId, 'customer-1')
-      assert.equal(res.body.data.beneId, 'CUSTOMER_customer-1')
+      assert.equal(res.body.data.beneficiary.name, 'Customer One')
+      assert.equal(res.body.data.beneficiary.maskedAccountNumber, '****7890')
+      assert.ok(!Object.prototype.hasOwnProperty.call(res.body.data, 'beneId'))
     }
   },
   {
@@ -164,12 +174,15 @@ const payoutTests = [
             registerBeneficiary: async (args) => {
               capturedArgs = args
               return {
-                payeeSnapshot: {
-                  userId: 'driver-1',
-                  userType: 'DRIVER',
+                payee: {
                   name: 'Driver One',
-                  email: null,
-                  mobile: '9999999999'
+                  mobile: '9999999999',
+                  cashfreeBeneficiary: {
+                    status: 'ACTIVE',
+                    bankAccountLast4: '7890',
+                    createdAt: new Date('2026-07-20T00:00:00.000Z'),
+                    updatedAt: new Date('2026-07-20T00:00:00.000Z')
+                  }
                 },
                 beneId: 'DRIVER_driver-1',
                 validation: { verified: true },
@@ -205,7 +218,9 @@ const payoutTests = [
 
       assert.equal(res.statusCode, 201)
       assert.equal(capturedArgs.payeeId, 'driver-1')
-      assert.equal(res.body.data.beneId, 'DRIVER_driver-1')
+      assert.equal(res.body.data.beneficiary.name, 'Driver One')
+      assert.equal(res.body.data.beneficiary.maskedAccountNumber, '****7890')
+      assert.ok(!Object.prototype.hasOwnProperty.call(res.body.data, 'beneId'))
     }
   },
   {
@@ -216,7 +231,6 @@ const payoutTests = [
         name: 'Alpha Logistics',
         email: 'alpha@example.com',
         mobile: '9999999999',
-        cashfreeBeneId: null,
         cashfreeBeneficiary: null,
         async save() {
           return this
@@ -283,9 +297,15 @@ const payoutTests = [
           }
         })
 
-        assert.equal(result.beneId, 'TRANSPORTER_payee-1')
-        assert.equal(payeeDoc.cashfreeBeneId, 'TRANSPORTER_payee-1')
+        assert.match(result.beneId, /^BENE_[0-9A-HJKMNP-TV-Z]{26}$/)
+        assert.equal(payeeDoc.cashfreeBeneficiary.beneId, result.beneId)
         assert.equal(payeeDoc.cashfreeBeneficiary.status, 'ACTIVE')
+        assert.ok(payeeDoc.cashfreeBeneficiary.verifiedAt instanceof Date)
+        assert.equal(payeeDoc.cashfreeBeneficiary.providerResponse.status, 'ACTIVE')
+        assert.equal(
+          payeeDoc.cashfreeBeneficiary.providerResponse.data.beneficiary_id,
+          result.beneId
+        )
         assert.ok(payeeDoc.cashfreeBeneficiary.bankAccountEncrypted)
       } finally {
         global.fetch = originalFetch
@@ -300,7 +320,6 @@ const payoutTests = [
         name: 'Alpha Logistics',
         email: 'alpha@example.com',
         mobile: '9999999999',
-        cashfreeBeneId: 'TRANSPORTER_payee-1',
         cashfreeBeneficiary: {
           beneId: 'TRANSPORTER_payee-1',
           status: 'ACTIVE'
@@ -370,7 +389,6 @@ const payoutTests = [
         name: 'Alpha Logistics',
         email: 'alpha@example.com',
         mobile: '9999999999',
-        cashfreeBeneId: 'TRANSPORTER_payee-1',
         cashfreeBeneficiary: {
           beneId: 'TRANSPORTER_payee-1',
           status: 'ACTIVE',
@@ -433,8 +451,9 @@ const payoutTests = [
         assert.equal(result.beneficiaryId, 'TRANSPORTER_payee-1')
         assert.equal(calls[0].method, 'DELETE')
         assert.equal(payeeDoc.cashfreeBeneficiary.status, 'DELETED')
+        assert.ok(payeeDoc.cashfreeBeneficiary.deletedAt instanceof Date)
         assert.equal(
-          payeeDoc.cashfreeBeneficiary.verification.removal.beneficiary_status,
+          payeeDoc.cashfreeBeneficiary.removalResponse.beneficiary_status,
           'DELETED'
         )
       } finally {
@@ -491,7 +510,6 @@ const payoutTests = [
 
       const payeeDoc = {
         _id: 'payee-1',
-        cashfreeBeneId: 'TRANSPORTER_payee-1',
         cashfreeBeneficiary: {
           beneId: 'TRANSPORTER_payee-1',
           status: 'ACTIVE'
@@ -522,6 +540,13 @@ const payoutTests = [
           },
           '../models/Payout': {
             findOne: async () => null,
+            findOneAndUpdate: async (_query, update) => {
+              payoutDoc = {
+                ...payoutDoc,
+                ...(update?.$set || {})
+              }
+              return payoutDoc
+            },
             create: async ([doc]) => {
               payoutDoc = {
                 ...payoutDoc,
@@ -676,7 +701,6 @@ const payoutTests = [
 
       const payeeDoc = {
         _id: 'payee-1',
-        cashfreeBeneId: 'TRANSPORTER_payee-1',
         cashfreeBeneficiary: {
           beneId: 'TRANSPORTER_payee-1',
           status: 'ACTIVE'
@@ -707,6 +731,13 @@ const payoutTests = [
           },
           '../models/Payout': {
             findOne: async () => null,
+            findOneAndUpdate: async (_query, update) => {
+              payoutDoc = {
+                ...payoutDoc,
+                ...(update?.$set || {})
+              }
+              return payoutDoc
+            },
             create: async ([doc]) => {
               payoutDoc = {
                 ...payoutDoc,

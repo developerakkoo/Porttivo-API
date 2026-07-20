@@ -97,6 +97,22 @@ const customerSchema = new mongoose.Schema(
         type: mongoose.Schema.Types.Mixed,
         default: {},
       },
+      providerResponse: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {},
+      },
+      removalResponse: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {},
+      },
+      verifiedAt: {
+        type: Date,
+        default: null,
+      },
+      deletedAt: {
+        type: Date,
+        default: null,
+      },
       createdAt: {
         type: Date,
         default: null,
