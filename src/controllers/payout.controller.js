@@ -231,10 +231,6 @@ const createBeneficiary = async (req, res, next) => {
       country: String(body.country || body.countryCode || body.beneficiaryCountry || 'IN').trim().toUpperCase()
     }
 
-    if (!payeeId) {
-      return res.status(400).json({ success: false, message: 'payeeId is required' })
-    }
-
     if (!name || !phone || !bankAccount || !ifsc) {
       return res.status(400).json({
         success: false,
