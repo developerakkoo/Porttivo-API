@@ -127,8 +127,8 @@ const serializePaymentSession = payment => {
 
   return {
     id: getPaymentPublicId(payment),
-    paymentId: payment._id ? payment._id.toString() : null,
-    publicId: getPaymentPublicId(payment),
+    // paymentId: payment._id ? payment._id.toString() : null,
+    // publicId: getPaymentPublicId(payment),
     referenceType: payment.referenceType,
     referenceId: payment.referenceId,
     purpose: payment.purpose,
