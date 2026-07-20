@@ -67,6 +67,129 @@ const hasBeneficiaryAccess = (req, payee) => {
   return safeObjectIdString(req.user?.id) === safeObjectIdString(payee?._id)
 }
 
+const normalizeBeneficiaryPayload = (beneficiary = {}) => {
+  const instrumentDetails =
+    beneficiary.beneficiaryInstrumentDetails ||
+    beneficiary.beneficiary_instrument_details ||
+    {}
+  const contactDetails =
+    beneficiary.beneficiaryContactDetails ||
+    beneficiary.beneficiary_contact_details ||
+    {}
+
+  return {
+    beneficiaryId:
+      beneficiary.beneficiaryId ||
+      beneficiary.beneficiary_id ||
+      beneficiary.beneId ||
+      beneficiary.bene_id ||
+      null,
+    beneficiaryName:
+      beneficiary.beneficiaryName ||
+      beneficiary.beneficiary_name ||
+      beneficiary.name ||
+      null,
+    beneficiaryInstrumentDetails: {
+      bankAccountNumber:
+        instrumentDetails.bankAccountNumber ||
+        instrumentDetails.bank_account_number ||
+        null,
+      bankIfsc:
+        instrumentDetails.bankIfsc ||
+        instrumentDetails.bank_ifsc ||
+        null,
+      vpa: instrumentDetails.vpa || null
+    },
+    beneficiaryContactDetails: {
+      beneficiaryEmail:
+        contactDetails.beneficiaryEmail ||
+        contactDetails.beneficiary_email ||
+        null,
+      beneficiaryPhone:
+        contactDetails.beneficiaryPhone ||
+        contactDetails.beneficiary_phone ||
+        null,
+      beneficiaryCountryCode:
+        contactDetails.beneficiaryCountryCode ||
+        contactDetails.beneficiary_country_code ||
+        null,
+      beneficiaryAddress:
+        contactDetails.beneficiaryAddress ||
+        contactDetails.beneficiary_address ||
+        null,
+      beneficiaryCity:
+        contactDetails.beneficiaryCity || contactDetails.beneficiary_city || null,
+      beneficiaryState:
+        contactDetails.beneficiaryState ||
+        contactDetails.beneficiary_state ||
+        null,
+      beneficiaryPostalCode:
+        contactDetails.beneficiaryPostalCode ||
+        contactDetails.beneficiary_postal_code ||
+        null
+    },
+    beneficiaryStatus:
+      beneficiary.beneficiaryStatus ||
+      beneficiary.beneficiary_status ||
+      beneficiary.status ||
+      null,
+    addedOn: beneficiary.addedOn || beneficiary.added_on || null,
+    providerResponse: beneficiary
+  }
+}
+
+const normalizeBeneficiaryForFrontend = (beneficiary = {}) => {
+  const instrumentDetails =
+    beneficiary.beneficiaryInstrumentDetails ||
+    beneficiary.beneficiary_instrument_details ||
+    {}
+  const contactDetails =
+    beneficiary.beneficiaryContactDetails ||
+    beneficiary.beneficiary_contact_details ||
+    {}
+
+  return {
+    beneficiaryId:
+      beneficiary.beneficiaryId ||
+      beneficiary.beneficiary_id ||
+      beneficiary.beneId ||
+      beneficiary.bene_id ||
+      null,
+    beneficiaryName:
+      beneficiary.beneficiaryName ||
+      beneficiary.beneficiary_name ||
+      beneficiary.name ||
+      null,
+    status:
+      beneficiary.beneficiaryStatus ||
+      beneficiary.beneficiary_status ||
+      beneficiary.status ||
+      null,
+    accountNumber:
+      instrumentDetails.bankAccountNumber ||
+      instrumentDetails.bank_account_number ||
+      null,
+    ifsc: instrumentDetails.bankIfsc || instrumentDetails.bank_ifsc || null,
+    phone:
+      contactDetails.beneficiaryPhone ||
+      contactDetails.beneficiary_phone ||
+      null,
+    address:
+      contactDetails.beneficiaryAddress ||
+      contactDetails.beneficiary_address ||
+      null,
+    city:
+      contactDetails.beneficiaryCity || contactDetails.beneficiary_city || null,
+    state:
+      contactDetails.beneficiaryState || contactDetails.beneficiary_state || null,
+    postalCode:
+      contactDetails.beneficiaryPostalCode ||
+      contactDetails.beneficiary_postal_code ||
+      null,
+    addedAt: beneficiary.addedOn || beneficiary.added_on || null
+  }
+}
+
 const createBeneficiary = async (req, res, next) => {
   try {
     const body = req.body || {}
@@ -148,13 +271,13 @@ const getBeneficiary = async (req, res, next) => {
     }
 
     const result = await getRegisteredBeneficiary(payload, req.fetch || global.fetch)
+    const normalizedBeneficiary = normalizeBeneficiaryForFrontend(
+      result.beneficiary
+    )
 
     return res.status(200).json({
       success: true,
-      data: {
-        payee: result.payee ? getPayeeSnapshot(result.payee, result.modelName) : null,
-        beneficiary: result.beneficiary
-      }
+      data: normalizedBeneficiary
     })
   } catch (error) {
     if (error.details) {
@@ -190,15 +313,14 @@ const removeBeneficiary = async (req, res, next) => {
     }
 
     const result = await removeRegisteredBeneficiary(payload, req.fetch || global.fetch)
+    const normalizedBeneficiary = normalizeBeneficiaryForFrontend(
+      result.beneficiary
+    )
 
     return res.status(200).json({
       success: true,
       message: 'Beneficiary removed successfully',
-      data: {
-        payee: result.payee ? getPayeeSnapshot(result.payee, result.modelName) : null,
-        beneficiaryId: result.beneficiaryId,
-        beneficiary: result.beneficiary
-      }
+      data: normalizedBeneficiary
     })
   } catch (error) {
     if (error.details) {
