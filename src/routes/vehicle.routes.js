@@ -10,6 +10,7 @@ const {
   deleteVehicle,
   getVehicleTrips,
   verifyVehicleNumber,
+  verifyRechargeKitVehicleNumber,
 } = require('../controllers/vehicle.controller');
 const {
   uploadDocument,
@@ -42,6 +43,9 @@ router.post('/', createVehicle);
  * @access  Private
  */
 router.post('/verify', verifyVehicleNumber);
+
+
+router.post('/rechargekitverify', verifyRechargeKitVehicleNumber);
 
 /**
  * @route   POST /api/vehicles/bulk-import

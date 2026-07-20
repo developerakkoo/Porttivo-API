@@ -10,6 +10,7 @@ const {
 const { getTransporterId, hasPermission } = require('../middleware/permission.middleware');
 const { assertVehicleTypeAllowed } = require('../services/vehicleTypeCatalog.service');
 const { verifyRcFull } = require('../services/surepass.service');
+const { verifyRechargeKitRc  } = require('../services/rechargeKit.service');
 
 const formatVehicleResponse = (vehicle) => {
   if (!vehicle) return null;
@@ -403,6 +404,47 @@ const verifyVehicleNumber = async (req, res, next) => {
     next(error);
   }
 };
+
+
+
+
+const verifyRechargeKitVehicleNumber = async (req, res, next) => {
+  try {
+    const { vehicleNumber } = req.body;
+
+    const validation = validateIndianVehicleRegistrationFormat(vehicleNumber);
+
+    if (validation.error) {
+      return res.status(400).json({
+        success: false,
+        status_code: 400,
+        message: validation.error,
+        message_code: 'invalid_input',
+        isVerified: false,
+      });
+    }
+
+    const rcVerification = await verifyRechargeKitRc(validation.normalized);
+
+    const statusCode = rcVerification.statusCode || 500;
+
+    const responseBody = {
+      success: !!rcVerification.ok,
+      status_code: statusCode,
+      message: rcVerification.message || null,
+      isVerified: !!rcVerification.verified,
+      source: rcVerification.source,
+    };
+
+    return res
+      .status(rcVerification.ok ? 200 : statusCode)
+      .json(responseBody);
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 
 /**
  * Get vehicle by ID
@@ -962,4 +1004,5 @@ module.exports = {
   deleteVehicle,
   getVehicleTrips,
   verifyVehicleNumber,
+  verifyRechargeKitVehicleNumber,
 };
