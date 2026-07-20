@@ -88,6 +88,156 @@ const payoutTests = [
     }
   },
   {
+    name: 'getRegisteredBeneficiary fetches a beneficiary from Cashfree by payee id',
+    async run() {
+      const payeeDoc = {
+        _id: 'payee-1',
+        name: 'Alpha Logistics',
+        email: 'alpha@example.com',
+        mobile: '9999999999',
+        cashfreeBeneId: 'TRANSPORTER_payee-1',
+        cashfreeBeneficiary: {
+          beneId: 'TRANSPORTER_payee-1',
+          status: 'ACTIVE'
+        },
+        async save() {
+          return this
+        }
+      }
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/cashfreePayout.service.js'),
+        {
+          '../config/env': {
+            cashfreePayoutMode: 'sandbox',
+            cashfreePayoutClientId: 'cf-client',
+            cashfreePayoutClientSecret: 'cf-secret',
+            cashfreePayoutWebhookSecret: 'cf-secret',
+            cashfreePayoutApiBaseUrl: 'https://sandbox.cashfree.com/payout',
+            cashfreePayoutWebhookUrl: 'https://app.example/payout-webhook',
+            cashfreePayoutBankEncryptionSecret: 'encrypt-secret'
+          },
+          '../models/Transporter': {
+            findById: async (id) => (id === 'payee-1' ? payeeDoc : null),
+            findOne: async () => null
+          },
+          '../models/Driver': { findById: async () => null, findOne: async () => null },
+          '../models/Customer': { findById: async () => null, findOne: async () => null },
+          '../models/PumpOwner': { findById: async () => null, findOne: async () => null },
+          '../models/CompanyUser': { findById: async () => null, findOne: async () => null },
+          '../models/PaymentSession': {},
+          '../models/Payout': {}
+        }
+      )
+
+      const calls = []
+      const originalFetch = global.fetch
+      global.fetch = async (url) => {
+        calls.push(String(url))
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            beneficiary_id: 'TRANSPORTER_payee-1',
+            beneficiary_name: 'Alpha Logistics',
+            beneficiary_status: 'VERIFIED'
+          })
+        }
+      }
+
+      try {
+        const result = await service.getRegisteredBeneficiary({
+          payeeId: 'payee-1'
+        })
+
+        assert.equal(result.payee._id, 'payee-1')
+        assert.match(calls[0], /beneficiary_id=TRANSPORTER_payee-1/)
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
+    name: 'removeRegisteredBeneficiary marks the local payee beneficiary as deleted',
+    async run() {
+      const payeeDoc = {
+        _id: 'payee-1',
+        name: 'Alpha Logistics',
+        email: 'alpha@example.com',
+        mobile: '9999999999',
+        cashfreeBeneId: 'TRANSPORTER_payee-1',
+        cashfreeBeneficiary: {
+          beneId: 'TRANSPORTER_payee-1',
+          status: 'ACTIVE',
+          verification: {
+            beneficiary_status: 'VERIFIED'
+          }
+        },
+        async save() {
+          return this
+        }
+      }
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/cashfreePayout.service.js'),
+        {
+          '../config/env': {
+            cashfreePayoutMode: 'sandbox',
+            cashfreePayoutClientId: 'cf-client',
+            cashfreePayoutClientSecret: 'cf-secret',
+            cashfreePayoutWebhookSecret: 'cf-secret',
+            cashfreePayoutApiBaseUrl: 'https://sandbox.cashfree.com/payout',
+            cashfreePayoutWebhookUrl: 'https://app.example/payout-webhook',
+            cashfreePayoutBankEncryptionSecret: 'encrypt-secret'
+          },
+          '../models/Transporter': {
+            findById: async (id) => (id === 'payee-1' ? payeeDoc : null),
+            findOne: async () => payeeDoc
+          },
+          '../models/Driver': { findById: async () => null, findOne: async () => null },
+          '../models/Customer': { findById: async () => null, findOne: async () => null },
+          '../models/PumpOwner': { findById: async () => null, findOne: async () => null },
+          '../models/CompanyUser': { findById: async () => null, findOne: async () => null },
+          '../models/PaymentSession': {},
+          '../models/Payout': {}
+        }
+      )
+
+      const calls = []
+      const originalFetch = global.fetch
+      global.fetch = async (url, options = {}) => {
+        calls.push({
+          url: String(url),
+          method: options.method
+        })
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            beneficiary_id: 'TRANSPORTER_payee-1',
+            beneficiary_status: 'DELETED'
+          })
+        }
+      }
+
+      try {
+        const result = await service.removeRegisteredBeneficiary({
+          payeeId: 'payee-1'
+        })
+
+        assert.equal(result.beneficiaryId, 'TRANSPORTER_payee-1')
+        assert.equal(calls[0].method, 'DELETE')
+        assert.equal(payeeDoc.cashfreeBeneficiary.status, 'DELETED')
+        assert.equal(
+          payeeDoc.cashfreeBeneficiary.verification.removal.beneficiary_status,
+          'DELETED'
+        )
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
     name: 'automatic payout transitions to success when Cashfree accepts the transfer',
     async run() {
       let payoutDoc = {

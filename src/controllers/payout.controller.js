@@ -5,11 +5,16 @@ const {
   buildPayoutStatusMessage,
   createAutomaticPayoutForPayment,
   createPayoutRecord,
+  findPayeeRecordByBeneficiaryId,
+  findPayeeRecordById,
   getPayoutById,
   getPayoutSummary,
+  getPayeeSnapshot,
+  getRegisteredBeneficiary,
   handleCashfreePayoutWebhook,
   processDuePayoutRetries,
   registerBeneficiary,
+  removeRegisteredBeneficiary,
   serializePayout,
   startPayoutTransfer,
   normalizeMoney
@@ -32,6 +37,34 @@ const assertPayoutAccess = (payout, user) => {
   const payeeId = safeObjectIdString(payout.payeeId)
 
   return Boolean(actorId && (actorId === payerId || actorId === payeeId))
+}
+
+const parseBeneficiaryRequest = (source = {}) => ({
+  payeeId: safeObjectIdString(
+    source.payeeId || source.payee_id || source.payee || null
+  ),
+  beneficiaryId: String(
+    source.beneficiaryId ||
+      source.beneficiary_id ||
+      source.beneId ||
+      source.bene_id ||
+      ''
+  ).trim(),
+  bankAccountNumber: String(
+    source.bankAccountNumber ||
+      source.bank_account_number ||
+      source.bankAccount ||
+      ''
+  ).trim(),
+  bankIfsc: String(source.bankIfsc || source.bank_ifsc || source.ifsc || '').trim().toUpperCase()
+})
+
+const hasBeneficiaryAccess = (req, payee) => {
+  if (req.user?.userType === 'admin') {
+    return true
+  }
+
+  return safeObjectIdString(req.user?.id) === safeObjectIdString(payee?._id)
 }
 
 const createBeneficiary = async (req, res, next) => {
@@ -79,6 +112,92 @@ const createBeneficiary = async (req, res, next) => {
         beneId: result.beneId,
         validation: result.validation,
         verificationWarning: result.verificationWarning
+      }
+    })
+  } catch (error) {
+    if (error.details) {
+      return res.status(error.statusCode || 400).json({
+        success: false,
+        message: error.message,
+        details: error.details
+      })
+    }
+    next(error)
+  }
+}
+
+const getBeneficiary = async (req, res, next) => {
+  try {
+    const payload = parseBeneficiaryRequest({
+      ...(req.query || {}),
+      ...(req.body || {})
+    })
+
+    const localLookup = payload.payeeId
+      ? await findPayeeRecordById(payload.payeeId)
+      : payload.beneficiaryId
+      ? await findPayeeRecordByBeneficiaryId(payload.beneficiaryId)
+      : { payee: null, modelName: null }
+
+    if (localLookup.payee && !hasBeneficiaryAccess(req, localLookup.payee)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    if (!localLookup.payee && req.user?.userType !== 'admin') {
+      return res.status(404).json({ success: false, message: 'Beneficiary not found' })
+    }
+
+    const result = await getRegisteredBeneficiary(payload, req.fetch || global.fetch)
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        payee: result.payee ? getPayeeSnapshot(result.payee, result.modelName) : null,
+        beneficiary: result.beneficiary
+      }
+    })
+  } catch (error) {
+    if (error.details) {
+      return res.status(error.statusCode || 400).json({
+        success: false,
+        message: error.message,
+        details: error.details
+      })
+    }
+    next(error)
+  }
+}
+
+const removeBeneficiary = async (req, res, next) => {
+  try {
+    const payload = parseBeneficiaryRequest({
+      ...(req.query || {}),
+      ...(req.body || {})
+    })
+
+    const localLookup = payload.payeeId
+      ? await findPayeeRecordById(payload.payeeId)
+      : payload.beneficiaryId
+      ? await findPayeeRecordByBeneficiaryId(payload.beneficiaryId)
+      : { payee: null, modelName: null }
+
+    if (localLookup.payee && !hasBeneficiaryAccess(req, localLookup.payee)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    if (!localLookup.payee && req.user?.userType !== 'admin') {
+      return res.status(404).json({ success: false, message: 'Beneficiary not found' })
+    }
+
+    const result = await removeRegisteredBeneficiary(payload, req.fetch || global.fetch)
+
+    return res.status(200).json({
+      success: true,
+      message: 'Beneficiary removed successfully',
+      data: {
+        payee: result.payee ? getPayeeSnapshot(result.payee, result.modelName) : null,
+        beneficiaryId: result.beneficiaryId,
+        beneficiary: result.beneficiary
       }
     })
   } catch (error) {
@@ -409,11 +528,13 @@ module.exports = {
   createBeneficiary,
   createPayout,
   getAdminPayoutSummary,
+  getBeneficiary,
   getPayoutByPayment,
   getPayoutStatus,
   handleCashfreeWebhook,
   listPayouts,
   retryPayout,
   runRetryCronNow,
+  removeBeneficiary,
   triggerAutomaticPayout
 }

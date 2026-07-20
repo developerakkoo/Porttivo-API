@@ -6,12 +6,14 @@ const {
   createBeneficiary,
   createPayout,
   getAdminPayoutSummary,
+  getBeneficiary,
   getPayoutByPayment,
   getPayoutStatus,
   handleCashfreeWebhook,
   listPayouts,
   retryPayout,
   runRetryCronNow,
+  removeBeneficiary,
   triggerAutomaticPayout
 } = require('../controllers/payout.controller')
 
@@ -21,6 +23,8 @@ router.get('/cashfree/webhook', handleCashfreeWebhook)
 router.use(authenticate)
 
 router.post('/beneficiary', createBeneficiary)
+router.get('/beneficiary', getBeneficiary)
+router.delete('/beneficiary', removeBeneficiary)
 router.post('/', createPayout)
 router.get('/', listPayouts)
 router.get('/admin/summary', getAdminPayoutSummary)

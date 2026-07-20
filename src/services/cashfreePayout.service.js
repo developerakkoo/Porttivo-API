@@ -194,6 +194,32 @@ const findPayeeRecordById = async payeeId => {
   return { payee: null, modelName: null }
 }
 
+const findPayeeRecordByBeneficiaryId = async beneficiaryId => {
+  const id = String(beneficiaryId || '').trim()
+  if (!id) {
+    return { payee: null, modelName: null }
+  }
+
+  for (const entry of PAYEE_MODELS) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const payee = await entry.Model.findOne({
+        $or: [
+          { cashfreeBeneId: id },
+          { 'cashfreeBeneficiary.beneId': id }
+        ]
+      })
+      if (payee) {
+        return { payee, modelName: entry.modelName }
+      }
+    } catch (error) {
+      continue
+    }
+  }
+
+  return { payee: null, modelName: null }
+}
+
 const getPayeeSnapshot = (payee, modelName) => {
   if (!payee) return null
 
@@ -474,6 +500,100 @@ const setPayeeBeneficiaryOnModel = async ({
   }
 }
 
+const setPayeeBeneficiaryDeletedOnModel = async ({
+  payee,
+  modelName,
+  beneficiaryResponse
+}) => {
+  const currentBeneficiary = payee.cashfreeBeneficiary || {}
+  payee.cashfreeBeneficiary = {
+    ...currentBeneficiary,
+    beneId: currentBeneficiary.beneId || payee.cashfreeBeneId || null,
+    status: 'DELETED',
+    verification: {
+      ...(currentBeneficiary.verification || {}),
+      removal: beneficiaryResponse || {},
+      removedAt: new Date()
+    },
+    updatedAt: new Date()
+  }
+  await payee.save()
+  return {
+    payee,
+    modelName
+  }
+}
+
+const requestCashfreeBeneficiary = async (
+  method,
+  query,
+  fetchImpl = global.fetch
+) => {
+  const result = await cashfreeRequest('/beneficiary', {
+    method,
+    query,
+    fetchImpl
+  })
+
+  if (!result.ok) {
+    const message =
+      result.data?.message ||
+      result.data?.error ||
+      `Cashfree beneficiary request failed with status ${result.status}`
+    const error = new Error(message)
+    error.statusCode = result.status
+    error.details = result.data || {}
+    throw error
+  }
+
+  return result.data || {}
+}
+
+const getCashfreeBeneficiary = async (
+  { beneficiaryId, bankAccountNumber, bankIfsc },
+  fetchImpl = global.fetch
+) => {
+  const query = {}
+  const resolvedBeneficiaryId = String(beneficiaryId || '').trim()
+  const resolvedBankAccountNumber = String(bankAccountNumber || '').trim()
+  const resolvedBankIfsc = String(bankIfsc || '').trim().toUpperCase()
+
+  if (resolvedBeneficiaryId) {
+    query.beneficiary_id = resolvedBeneficiaryId
+  } else if (resolvedBankAccountNumber && resolvedBankIfsc) {
+    query.bank_account_number = resolvedBankAccountNumber
+    query.bank_ifsc = resolvedBankIfsc
+  }
+
+  if (!query.beneficiary_id && (!query.bank_account_number || !query.bank_ifsc)) {
+    const error = new Error(
+      'beneficiaryId or bankAccountNumber with bankIfsc is required'
+    )
+    error.statusCode = 400
+    throw error
+  }
+
+  return requestCashfreeBeneficiary('GET', query, fetchImpl)
+}
+
+const removeCashfreeBeneficiary = async (
+  { beneficiaryId },
+  fetchImpl = global.fetch
+) => {
+  const id = String(beneficiaryId || '').trim()
+  if (!id) {
+    const error = new Error('beneficiaryId is required')
+    error.statusCode = 400
+    throw error
+  }
+
+  return requestCashfreeBeneficiary(
+    'DELETE',
+    { beneficiary_id: id },
+    fetchImpl
+  )
+}
+
 const registerBeneficiary = async (
   { payeeId, name, email, phone, bankAccount, ifsc, address = {} },
   fetchImpl = global.fetch
@@ -525,6 +645,87 @@ const registerBeneficiary = async (
     },
     beneficiaryResponse,
     verificationWarning: null
+  }
+}
+
+const getRegisteredBeneficiary = async (
+  {
+    payeeId = null,
+    beneficiaryId = null,
+    bankAccountNumber = null,
+    bankIfsc = null
+  } = {},
+  fetchImpl = global.fetch
+) => {
+  let resolvedPayee = { payee: null, modelName: null }
+  let resolvedBeneficiaryId = String(beneficiaryId || '').trim()
+
+  if (payeeId) {
+    resolvedPayee = await findPayeeRecordById(payeeId)
+    resolvedBeneficiaryId =
+      resolvedBeneficiaryId ||
+      resolvedPayee.payee?.cashfreeBeneId ||
+      resolvedPayee.payee?.cashfreeBeneficiary?.beneId ||
+      ''
+  } else if (resolvedBeneficiaryId) {
+    resolvedPayee = await findPayeeRecordByBeneficiaryId(resolvedBeneficiaryId)
+  }
+
+  const remoteBeneficiary = await getCashfreeBeneficiary(
+    {
+      beneficiaryId: resolvedBeneficiaryId || beneficiaryId,
+      bankAccountNumber,
+      bankIfsc
+    },
+    fetchImpl
+  )
+
+  return {
+    payee: resolvedPayee.payee,
+    modelName: resolvedPayee.modelName,
+    beneficiary: remoteBeneficiary
+  }
+}
+
+const removeRegisteredBeneficiary = async (
+  { payeeId = null, beneficiaryId = null } = {},
+  fetchImpl = global.fetch
+) => {
+  const resolvedPayee = payeeId
+    ? await findPayeeRecordById(payeeId)
+    : beneficiaryId
+    ? await findPayeeRecordByBeneficiaryId(beneficiaryId)
+    : { payee: null, modelName: null }
+
+  const resolvedBeneficiaryId =
+    beneficiaryId ||
+    resolvedPayee.payee?.cashfreeBeneId ||
+    resolvedPayee.payee?.cashfreeBeneficiary?.beneId ||
+    null
+
+  if (!resolvedBeneficiaryId) {
+    const error = new Error('beneficiaryId is required')
+    error.statusCode = 400
+    throw error
+  }
+
+  const remoteBeneficiary = await removeCashfreeBeneficiary(
+    { beneficiaryId: resolvedBeneficiaryId },
+    fetchImpl
+  )
+
+  if (resolvedPayee.payee) {
+    await setPayeeBeneficiaryDeletedOnModel({
+      payee: resolvedPayee.payee,
+      modelName: resolvedPayee.modelName,
+      beneficiaryResponse: remoteBeneficiary
+    })
+  }
+
+  return {
+    ...resolvedPayee,
+    beneficiary: remoteBeneficiary,
+    beneficiaryId: resolvedBeneficiaryId
   }
 }
 
@@ -1605,9 +1806,12 @@ module.exports = {
   encryptSensitiveValue,
   findExistingPayout,
   findPayeeRecordById,
+  findPayeeRecordByBeneficiaryId,
   getPayoutById,
   getPayoutSummary,
   getPayeeSnapshot,
+  getCashfreeBeneficiary,
+  getRegisteredBeneficiary,
   handleCashfreePayoutWebhook,
   isPermanentTransferFailure,
   isTemporaryTransferFailure,
@@ -1616,9 +1820,12 @@ module.exports = {
   normalizeMoney,
   processDuePayoutRetries,
   registerBeneficiary,
+  removeCashfreeBeneficiary,
+  removeRegisteredBeneficiary,
   requestAsyncTransfer,
   serializePayout,
   setPayeeBeneficiaryOnModel,
+  setPayeeBeneficiaryDeletedOnModel,
   startPayoutAutomationCron,
   startPayoutTransfer,
   stopPayoutAutomationCron,
