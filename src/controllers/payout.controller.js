@@ -72,6 +72,25 @@ const canManageBeneficiary = (req) =>
     req.user?.userType
   )
 
+const resolveSelfManagedPayeeId = (req, requestedPayeeId) => {
+  const normalizedRequestedPayeeId = safeObjectIdString(requestedPayeeId)
+
+  if (req.user?.userType === 'admin') {
+    return normalizedRequestedPayeeId
+  }
+
+  const actorId = safeObjectIdString(req.user?.id)
+  if (!actorId) {
+    return null
+  }
+
+  if (normalizedRequestedPayeeId && normalizedRequestedPayeeId !== actorId) {
+    return null
+  }
+
+  return actorId
+}
+
 const normalizeBeneficiaryPayload = (beneficiary = {}) => {
   const instrumentDetails =
     beneficiary.beneficiaryInstrumentDetails ||
@@ -198,7 +217,7 @@ const normalizeBeneficiaryForFrontend = (beneficiary = {}) => {
 const createBeneficiary = async (req, res, next) => {
   try {
     const body = req.body || {}
-    const payeeId = safeObjectIdString(body.payeeId)
+    const payeeId = resolveSelfManagedPayeeId(req, body.payeeId)
     const name = String(body.name || '').trim()
     const email = String(body.email || '').trim().toLowerCase()
     const phone = String(body.phone || '').trim()
@@ -227,7 +246,7 @@ const createBeneficiary = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Access denied' })
     }
 
-    if (req.user?.userType !== 'admin' && safeObjectIdString(req.user?.id) !== payeeId) {
+    if (!payeeId) {
       return res.status(403).json({ success: false, message: 'Access denied' })
     }
 
@@ -264,9 +283,14 @@ const getBeneficiary = async (req, res, next) => {
       ...(req.query || {}),
       ...(req.body || {})
     })
+    const payeeId = resolveSelfManagedPayeeId(req, payload.payeeId)
 
-    const localLookup = payload.payeeId
-      ? await findPayeeRecordById(payload.payeeId)
+    if (!payeeId) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const localLookup = payeeId
+      ? await findPayeeRecordById(payeeId)
       : payload.beneficiaryId
       ? await findPayeeRecordByBeneficiaryId(payload.beneficiaryId)
       : { payee: null, modelName: null }
@@ -279,7 +303,10 @@ const getBeneficiary = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Beneficiary not found' })
     }
 
-    const result = await getRegisteredBeneficiary(payload, req.fetch || global.fetch)
+    const result = await getRegisteredBeneficiary(
+      { ...payload, payeeId },
+      req.fetch || global.fetch
+    )
     const normalizedBeneficiary = normalizeBeneficiaryForFrontend(
       result.beneficiary
     )
@@ -306,9 +333,14 @@ const removeBeneficiary = async (req, res, next) => {
       ...(req.query || {}),
       ...(req.body || {})
     })
+    const payeeId = resolveSelfManagedPayeeId(req, payload.payeeId)
 
-    const localLookup = payload.payeeId
-      ? await findPayeeRecordById(payload.payeeId)
+    if (!payeeId) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const localLookup = payeeId
+      ? await findPayeeRecordById(payeeId)
       : payload.beneficiaryId
       ? await findPayeeRecordByBeneficiaryId(payload.beneficiaryId)
       : { payee: null, modelName: null }
@@ -321,7 +353,10 @@ const removeBeneficiary = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Beneficiary not found' })
     }
 
-    const result = await removeRegisteredBeneficiary(payload, req.fetch || global.fetch)
+    const result = await removeRegisteredBeneficiary(
+      { ...payload, payeeId },
+      req.fetch || global.fetch
+    )
     const normalizedBeneficiary = normalizeBeneficiaryForFrontend(
       result.beneficiary
     )
