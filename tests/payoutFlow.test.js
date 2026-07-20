@@ -1,8 +1,213 @@
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const { loadWithMocks } = require('./helpers/loadWithMocks')
+const { createMockRes } = require('./helpers/http')
 
 const payoutTests = [
+  {
+    name: 'createBeneficiary rejects transporter accounts for another payee',
+    async run() {
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {
+            registerBeneficiary: async () => ({})
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        body: {
+          payeeId: 'other-payee',
+          name: 'Transporter Co',
+          email: 'transporter@example.com',
+          phone: '9999999999',
+          bankAccount: '1234567890',
+          ifsc: 'HDFC0001234',
+          address1: '1 Road',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          pincode: '400001'
+        }
+      }
+      const res = createMockRes()
+
+      await controller.createBeneficiary(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 403)
+      assert.equal(res.body.message, 'Access denied')
+    }
+  },
+  {
+    name: 'createBeneficiary allows transporter accounts to create their own beneficiary',
+    async run() {
+      let capturedArgs = null
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {
+            registerBeneficiary: async (args) => {
+              capturedArgs = args
+              return {
+                payeeSnapshot: {
+                  userId: 'transporter-1',
+                  userType: 'TRANSPORTER',
+                  name: 'Transporter One',
+                  email: null,
+                  mobile: '9999999999'
+                },
+                beneId: 'TRANSPORTER_transporter-1',
+                validation: { verified: true },
+                verificationWarning: null
+              }
+            }
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        user: { id: 'transporter-1', userType: 'transporter' },
+        body: {
+          payeeId: 'transporter-1',
+          name: 'Transporter One',
+          email: 'transport@example.com',
+          phone: '9999999999',
+          bankAccount: '1234567890',
+          ifsc: 'HDFC0001234',
+          address1: '1 Road',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          pincode: '400001'
+        }
+      }
+      const res = createMockRes()
+
+      await controller.createBeneficiary(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 201)
+      assert.equal(capturedArgs.payeeId, 'transporter-1')
+      assert.equal(res.body.data.beneId, 'TRANSPORTER_transporter-1')
+    }
+  },
+  {
+    name: 'createBeneficiary allows customer accounts to create their own beneficiary',
+    async run() {
+      let capturedArgs = null
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {
+            registerBeneficiary: async (args) => {
+              capturedArgs = args
+              return {
+                payeeSnapshot: {
+                  userId: 'customer-1',
+                  userType: 'CUSTOMER',
+                  name: 'Customer One',
+                  email: null,
+                  mobile: '8888888888'
+                },
+                beneId: 'CUSTOMER_customer-1',
+                validation: { verified: true },
+                verificationWarning: null
+              }
+            }
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        user: { id: 'customer-1', userType: 'customer' },
+        body: {
+          payeeId: 'customer-1',
+          name: 'Customer One',
+          email: 'customer@example.com',
+          phone: '8888888888',
+          bankAccount: '1234567890',
+          ifsc: 'HDFC0001234',
+          address1: '1 Road',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          pincode: '400001'
+        }
+      }
+      const res = createMockRes()
+
+      await controller.createBeneficiary(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 201)
+      assert.equal(capturedArgs.payeeId, 'customer-1')
+      assert.equal(res.body.data.beneId, 'CUSTOMER_customer-1')
+    }
+  },
+  {
+    name: 'createBeneficiary allows driver accounts to create their beneficiary',
+    async run() {
+      let capturedArgs = null
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {
+            registerBeneficiary: async (args) => {
+              capturedArgs = args
+              return {
+                payeeSnapshot: {
+                  userId: 'driver-1',
+                  userType: 'DRIVER',
+                  name: 'Driver One',
+                  email: null,
+                  mobile: '9999999999'
+                },
+                beneId: 'DRIVER_driver-1',
+                validation: { verified: true },
+                verificationWarning: null
+              }
+            }
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        user: { id: 'driver-1', userType: 'driver' },
+        body: {
+          payeeId: 'driver-1',
+          name: 'Driver One',
+          email: 'driver@example.com',
+          phone: '9999999999',
+          bankAccount: '1234567890',
+          ifsc: 'HDFC0001234',
+          address1: '1 Road',
+          city: 'Mumbai',
+          state: 'Maharashtra',
+          pincode: '400001'
+        }
+      }
+      const res = createMockRes()
+
+      await controller.createBeneficiary(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 201)
+      assert.equal(capturedArgs.payeeId, 'driver-1')
+      assert.equal(res.body.data.beneId, 'DRIVER_driver-1')
+    }
+  },
   {
     name: 'registerBeneficiary stores Cashfree beneficiary details on the payee',
     async run() {

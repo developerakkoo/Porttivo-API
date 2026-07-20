@@ -67,6 +67,11 @@ const hasBeneficiaryAccess = (req, payee) => {
   return safeObjectIdString(req.user?.id) === safeObjectIdString(payee?._id)
 }
 
+const canManageBeneficiary = (req) =>
+  ['admin', 'driver', 'transporter', 'customer'].includes(
+    req.user?.userType
+  )
+
 const normalizeBeneficiaryPayload = (beneficiary = {}) => {
   const instrumentDetails =
     beneficiary.beneficiaryInstrumentDetails ||
@@ -216,6 +221,10 @@ const createBeneficiary = async (req, res, next) => {
         success: false,
         message: 'name, phone, bankAccount, and ifsc are required'
       })
+    }
+
+    if (!canManageBeneficiary(req)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
     }
 
     if (req.user?.userType !== 'admin' && safeObjectIdString(req.user?.id) !== payeeId) {
