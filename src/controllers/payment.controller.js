@@ -15,7 +15,8 @@ const {
   verifyGatewayWebhook
 } = require('../services/paymentGateway.service')
 const {
-  createAutomaticPayoutForPayment
+  createAutomaticPayoutForPayment,
+  findPayeeRecordById
 } = require('../services/cashfreePayout.service')
 
 const Payout = require('../models/Payout')
@@ -45,6 +46,54 @@ const sanitizePaymentMetadata = (metadata = {}) => {
     ...metadata,
     payout: safePayout
   }
+}
+
+const getPaymentPayoutMetadata = (metadata = {}) => {
+  if (!metadata || typeof metadata !== 'object') {
+    return null
+  }
+
+  return metadata.payout && typeof metadata.payout === 'object'
+    ? metadata.payout
+    : null
+}
+
+const hasActiveBeneficiary = (payee = {}) =>
+  Boolean(
+    (payee.cashfreeBeneficiary?.beneId || payee.cashfreeBeneId) &&
+      String(payee.cashfreeBeneficiary?.status || '').toUpperCase() === 'ACTIVE'
+  )
+
+const assertBeneficiaryExistsForPaymentSession = async (metadata = {}) => {
+  const payoutMetadata = getPaymentPayoutMetadata(metadata)
+  if (!payoutMetadata) {
+    return null
+  }
+
+  const payeeId = String(
+    payoutMetadata.payeeId || metadata.payeeId || ''
+  ).trim()
+
+  if (!payeeId) {
+    return {
+      message: 'metadata.payout.payeeId is required when payout metadata is provided'
+    }
+  }
+
+  const { payee } = await findPayeeRecordById(payeeId)
+  if (!payee) {
+    return {
+      message: 'Payee not found'
+    }
+  }
+
+  if (!hasActiveBeneficiary(payee)) {
+    return {
+      message: 'Beneficiary must be added before creating a payment session'
+    }
+  }
+
+  return null
 }
 
 const serializePaymentSession = payment => {
@@ -289,6 +338,16 @@ const initiatePaymentSession = async (req, res, next) => {
           }
         })
       }
+    }
+
+    const beneficiaryValidation = await assertBeneficiaryExistsForPaymentSession(
+      metadata
+    )
+    if (beneficiaryValidation) {
+      return res.status(400).json({
+        success: false,
+        message: beneficiaryValidation.message
+      })
     }
 
     const session = await mongoose.startSession()
