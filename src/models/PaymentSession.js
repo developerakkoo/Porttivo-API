@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const { nanoid } = require('nanoid')
 
 const paymentSessionSchema = new mongoose.Schema(
   {
@@ -7,6 +8,13 @@ const paymentSessionSchema = new mongoose.Schema(
       trim: true,
       required: true,
       index: true
+    },
+    publicId: {
+      type: String,
+      trim: true,
+      unique: true,
+      index: true,
+      default: () => `pay_${nanoid(12)}`
     },
     referenceId: {
       type: String,
@@ -146,5 +154,6 @@ paymentSessionSchema.index({ referenceType: 1, referenceId: 1, provider: 1, crea
 paymentSessionSchema.index({ provider: 1, merchantTransactionId: 1 })
 paymentSessionSchema.index({ providerTransactionId: 1 })
 paymentSessionSchema.index({ createdAt: -1 })
+paymentSessionSchema.index({ publicId: 1 }, { unique: true, sparse: true })
 
 module.exports = mongoose.model('PaymentSession', paymentSessionSchema)

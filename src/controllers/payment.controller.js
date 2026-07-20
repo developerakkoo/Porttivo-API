@@ -1,5 +1,6 @@
 const crypto = require('crypto')
 const mongoose = require('mongoose')
+const { nanoid } = require('nanoid')
 const PaymentSession = require('../models/PaymentSession')
 const logger = require('../utils/logger')
 const { cashfreeWebhookStrictValidation } = require('../config/env')
@@ -46,6 +47,14 @@ const sanitizePaymentMetadata = (metadata = {}) => {
     ...metadata,
     payout: safePayout
   }
+}
+
+const getPaymentPublicId = payment => {
+  if (!payment) {
+    return null
+  }
+
+  return payment.publicId || (payment._id ? payment._id.toString() : null)
 }
 
 const getPaymentPayoutMetadata = (metadata = {}) => {
@@ -117,7 +126,9 @@ const serializePaymentSession = payment => {
       : null
 
   return {
-    id: payment._id ? payment._id.toString() : null,
+    id: getPaymentPublicId(payment),
+    paymentId: payment._id ? payment._id.toString() : null,
+    publicId: getPaymentPublicId(payment),
     referenceType: payment.referenceType,
     referenceId: payment.referenceId,
     purpose: payment.purpose,
@@ -360,6 +371,7 @@ const initiatePaymentSession = async (req, res, next) => {
       const [payment] = await PaymentSession.create(
         [
           {
+            publicId: `pay_${nanoid(12)}`,
             referenceType,
             referenceId,
             purpose,

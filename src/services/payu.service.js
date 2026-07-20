@@ -1,4 +1,5 @@
 const crypto = require('crypto')
+const { nanoid } = require('nanoid')
 const { payuKey, payuSalt, payuCheckoutUrl, payuMode, payuWebhookUrl } = require('../config/env')
 
 const DEFAULT_PRODUCT_INFO = 'Marketplace Trip Payment'
@@ -14,10 +15,7 @@ const normalizeMoney = (amount) => {
 }
 
 const makeTransactionId = () => {
-  if (typeof crypto.randomUUID === 'function') {
-    return `PTV-${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
-  }
-  return `PTV-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(6).toString('hex').toUpperCase()}`
+  return `PTV-${nanoid(20)}`
 }
 
 const signRequest = ({

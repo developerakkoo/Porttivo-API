@@ -1,4 +1,5 @@
 const crypto = require('crypto')
+const { nanoid } = require('nanoid')
 const {
   payuKey,
   payuSalt,
@@ -37,10 +38,7 @@ const normalizeMoney = (amount) => {
 }
 
 const makeTransactionId = (prefix = 'PTV') => {
-  if (typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`
-  }
-  return `${prefix}-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(6).toString('hex').toUpperCase()}`
+  return `${prefix}-${nanoid(20)}`
 }
 
 const resolvePayerProfile = (payerInput = {}, user = null) => {

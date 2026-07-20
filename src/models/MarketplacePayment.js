@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const { nanoid } = require('nanoid')
 
 const marketplacePaymentSchema = new mongoose.Schema(
   {
@@ -7,6 +8,13 @@ const marketplacePaymentSchema = new mongoose.Schema(
       ref: 'Trip',
       required: true,
       index: true
+    },
+    publicId: {
+      type: String,
+      trim: true,
+      unique: true,
+      index: true,
+      default: () => `mp_${nanoid(12)}`
     },
     bookingId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -121,5 +129,6 @@ marketplacePaymentSchema.index({ bookingId: 1, status: 1 })
 marketplacePaymentSchema.index({ provider: 1, merchantTransactionId: 1 })
 marketplacePaymentSchema.index({ providerTransactionId: 1 })
 marketplacePaymentSchema.index({ createdAt: -1 })
+marketplacePaymentSchema.index({ publicId: 1 }, { unique: true, sparse: true })
 
 module.exports = mongoose.model('MarketplacePayment', marketplacePaymentSchema)

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const { nanoid } = require('nanoid')
 const Trip = require('../models/Trip')
 const VehicleBooking = require('../models/VehicleBooking')
 const MarketplacePayment = require('../models/MarketplacePayment')
@@ -12,6 +13,11 @@ const toObjectIdString = (value) => {
   if (typeof value === 'string') return value
   if (value._id) return value._id.toString()
   return value.toString ? value.toString() : String(value)
+}
+
+const getPaymentPublicId = (payment) => {
+  if (!payment) return null
+  return payment.publicId || (payment._id ? payment._id.toString() : null)
 }
 
 const getMarketplaceTripPaymentContext = async (tripId) => {
@@ -259,6 +265,7 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
       const [payment] = await MarketplacePayment.create(
         [
           {
+            publicId: `mp_${nanoid(12)}`,
             tripId: trip._id,
             bookingId: booking._id,
             payerTransporterId: buyer._id,
@@ -307,7 +314,9 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
         message: 'PayU payment request created successfully',
         data: {
           payment: {
-            id: payment._id,
+            id: getPaymentPublicId(payment),
+            paymentId: payment._id.toString(),
+            publicId: getPaymentPublicId(payment),
             tripId: payment.tripId,
             bookingId: payment.bookingId,
             status: payment.status,
@@ -319,8 +328,11 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
             fields: paymentRequest.fields
           },
           gateway: {
-            name: 'PAYU',
-            mode: paymentRequest.mode
+            provider: 'PAYU',
+            name: 'PayU',
+            mode: paymentRequest.mode,
+            actionUrl: paymentRequest.actionUrl,
+            method: paymentRequest.method
           }
         }
       })
