@@ -7,25 +7,38 @@ const MarketplacePayment = require('../models/MarketplacePayment')
 const Notification = require('../models/Notification')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const logger = require('../utils/logger')
-const { canTransporterPartyViewTripExecution, isMarketplaceBookingTrip } = require('../services/tripAccess.service')
-const { isConfigured, buildMarketplaceTripPaymentRequest, verifyPayuResponseHash, normalizePayuStatus, makeTransactionId } = require('../services/payu.service')
-const { createAutomaticPayoutForPayment } = require('../services/cashfreePayout.service')
-const { createMarketplacePaymentRequestForTrip } = require('../services/marketplacePayment.service')
+const {
+  canTransporterPartyViewTripExecution,
+  isMarketplaceBookingTrip
+} = require('../services/tripAccess.service')
+const {
+  isConfigured,
+  buildMarketplaceTripPaymentRequest,
+  verifyPayuResponseHash,
+  normalizePayuStatus,
+  makeTransactionId
+} = require('../services/payu.service')
+const {
+  createAutomaticPayoutForPayment
+} = require('../services/cashfreePayout.service')
+const {
+  createMarketplacePaymentRequestForTrip
+} = require('../services/marketplacePayment.service')
 const { payuSuccessUrl, payuFailureUrl } = require('../config/env')
 
-const toObjectIdString = (value) => {
+const toObjectIdString = value => {
   if (!value) return null
   if (typeof value === 'string') return value
   if (value._id) return value._id.toString()
   return value.toString ? value.toString() : String(value)
 }
 
-const getPaymentPublicId = (payment) => {
+const getPaymentPublicId = payment => {
   if (!payment) return null
   return payment.publicId || (payment._id ? payment._id.toString() : null)
 }
 
-const getMarketplaceTripPaymentContext = async (tripId) => {
+const getMarketplaceTripPaymentContext = async tripId => {
   const trip = await Trip.findById(tripId)
     .populate('transporterId', 'name company mobile email')
     .populate('customerId', 'name company mobile email')
@@ -45,10 +58,8 @@ const getMarketplaceTripPaymentContext = async (tripId) => {
   return { trip, booking }
 }
 
-const getLatestPaymentForTrip = async (tripId) => {
-  return MarketplacePayment.findOne({ tripId })
-    .sort({ createdAt: -1 })
-    .lean()
+const getLatestPaymentForTrip = async tripId => {
+  return MarketplacePayment.findOne({ tripId }).sort({ createdAt: -1 }).lean()
 }
 
 const assertMarketplacePayableTrip = async (tripId, user) => {
@@ -73,7 +84,7 @@ const assertMarketplacePayableTrip = async (tripId, user) => {
   }
 
   const milestoneOneCompleted = Array.isArray(trip.milestones)
-    ? trip.milestones.some((milestone) => milestone?.milestoneNumber === 1)
+    ? trip.milestones.some(milestone => milestone?.milestoneNumber === 1)
     : false
 
   if (!milestoneOneCompleted) {
@@ -229,7 +240,12 @@ const handlePayuWebhook = async (req, res, next) => {
       ...(req.query || {}),
       ...(req.body || {})
     }
-    const merchantTransactionId = String(body.txnid || body.merchantTransactionId || body.merchant_transaction_id || '').trim()
+    const merchantTransactionId = String(
+      body.txnid ||
+        body.merchantTransactionId ||
+        body.merchant_transaction_id ||
+        ''
+    ).trim()
     const paymentId = String(body.udf1 || '').trim()
 
     logger.info(`[${requestId}] PayU webhook received`, {
@@ -280,9 +296,12 @@ const handlePayuWebhook = async (req, res, next) => {
         !payment.providerTransactionId ||
         payment.providerTransactionId === incomingProviderTxnId)
     ) {
-      logger.info(`[${requestId}] Duplicate PayU success notification ignored`, {
-        paymentId: payment._id.toString()
-      })
+      logger.info(
+        `[${requestId}] Duplicate PayU success notification ignored`,
+        {
+          paymentId: payment._id.toString()
+        }
+      )
       return res.status(200).json({
         success: true,
         message: 'PayU webhook processed successfully'
@@ -317,8 +336,10 @@ const handlePayuWebhook = async (req, res, next) => {
     const previousStatus = payment.status
 
     payment.paymentResponse = { ...body, verified: true }
-    payment.providerTransactionId = incomingProviderTxnId || payment.providerTransactionId
-    payment.providerOrderId = body.bank_ref_num || body.pgTransactionId || payment.providerOrderId
+    payment.providerTransactionId =
+      incomingProviderTxnId || payment.providerTransactionId
+    payment.providerOrderId =
+      body.bank_ref_num || body.pgTransactionId || payment.providerOrderId
 
     if (responseStatus === 'SUCCESS') {
       payment.status = 'SUCCESS'
@@ -327,11 +348,13 @@ const handlePayuWebhook = async (req, res, next) => {
     } else if (responseStatus === 'CANCELLED') {
       payment.status = 'CANCELLED'
       payment.failedAt = new Date()
-      payment.failureReason = body.error_Message || body.error || 'Payment cancelled'
+      payment.failureReason =
+        body.error_Message || body.error || 'Payment cancelled'
     } else if (responseStatus === 'FAILED') {
       payment.status = 'FAILED'
       payment.failedAt = new Date()
-      payment.failureReason = body.error_Message || body.error || 'Payment failed'
+      payment.failureReason =
+        body.error_Message || body.error || 'Payment failed'
     } else {
       payment.status = 'PENDING'
     }
@@ -342,7 +365,10 @@ const handlePayuWebhook = async (req, res, next) => {
     if (booking) {
       if (payment.status === 'SUCCESS') {
         booking.paymentStatus = 'COMPLETED'
-      } else if (payment.status === 'CANCELLED' || payment.status === 'FAILED') {
+      } else if (
+        payment.status === 'CANCELLED' ||
+        payment.status === 'FAILED'
+      ) {
         booking.paymentStatus = 'PENDING'
       }
       await booking.save()
@@ -356,6 +382,10 @@ const handlePayuWebhook = async (req, res, next) => {
       })
 
       try {
+        logger.info('Payment metadata', {
+          paymentId: payment._id.toString(),
+          metadata: payment.metadata
+        })
         const payout = await createAutomaticPayoutForPayment(payment, {
           fetchImpl: req.fetch || global.fetch
         })
@@ -392,7 +422,9 @@ const handlePayuWebhook = async (req, res, next) => {
           userType: 'TRANSPORTER',
           type: 'SYSTEM',
           title: 'Marketplace payment successful',
-          message: `Your payment of ₹${payment.amount.toFixed(2)} for booking ${payment.bookingId} has been received successfully. Final disbursement is now in progress.`,
+          message: `Your payment of ₹${payment.amount.toFixed(2)} for booking ${
+            payment.bookingId
+          } has been received successfully. Final disbursement is now in progress.`,
           data: {
             event: 'MARKETPLACE_PAYMENT_SUCCESS',
             tripId: payment.tripId,
@@ -457,7 +489,10 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
       }
 
       if (req.user.userType === 'company-user') {
-        const allowed = await canTransporterPartyViewTripExecution(req.user, trip)
+        const allowed = await canTransporterPartyViewTripExecution(
+          req.user,
+          trip
+        )
         if (!allowed) {
           return res.status(403).json({
             success: false,
@@ -469,7 +504,7 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
 
     const latestPayment = await getLatestPaymentForTrip(trip._id)
     const milestoneOneCompleted = Array.isArray(trip.milestones)
-      ? trip.milestones.some((milestone) => milestone?.milestoneNumber === 1)
+      ? trip.milestones.some(milestone => milestone?.milestoneNumber === 1)
       : false
 
     return res.status(200).json({
