@@ -1003,12 +1003,15 @@ const createPayoutRecord = async ({
   }
 }
 
-const getPayoutById = async id => {
+const getPayoutById = async input => {
+  const id = input?._id || input;
+
   if (!mongoose.Types.ObjectId.isValid(id)) {
-    return null
+    return null;
   }
-  return Payout.findById(id)
-}
+
+  return Payout.findById(id);
+};
 
 const applyPayoutTransferResponse = async (
   payout,
