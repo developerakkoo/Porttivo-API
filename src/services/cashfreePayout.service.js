@@ -1475,22 +1475,67 @@ const createAutomaticPayoutForPayment = async (
   }
 
   const autoMetadata = ensureAutomaticPayoutMetadata(payment)
+  logger.info('[AUTO_PAYOUT]', {
+    paymentId: payment._id.toString(),
+    paymentStatus: payment.status,
+    autoMetadata
+  })
   if (!autoMetadata) {
+    logger.info('[AUTO_PAYOUT] Exit - no payout metadata')
     return null
   }
 
   const embeddedPayoutId = payment.metadata?.payout?.id || null
-  if (embeddedPayoutId && mongoose.Types.ObjectId.isValid(embeddedPayoutId)) {
-    const embeddedPayout = await Payout.findById(embeddedPayoutId)
-    if (embeddedPayout) {
-      if (
-        embeddedPayout.status === 'CREATED' ||
-        embeddedPayout.status === 'RETRY_PENDING' ||
-        embeddedPayout.status === 'PROCESSING'
-      ) {
-        return startPayoutTransfer(embeddedPayout, { fetchImpl })
+
+  const embeddedPayoutId = payment.metadata?.payout?.id || null
+
+  logger.info('[AUTO_PAYOUT] Embedded payout lookup', {
+    paymentId: payment._id.toString(),
+    embeddedPayoutId
+  })
+
+  if (embeddedPayoutId) {
+    if (!mongoose.Types.ObjectId.isValid(embeddedPayoutId)) {
+      logger.warn('[AUTO_PAYOUT] Invalid embedded payout id', {
+        paymentId: payment._id.toString(),
+        embeddedPayoutId
+      })
+    } else {
+      const embeddedPayout = await Payout.findById(embeddedPayoutId)
+
+      if (embeddedPayout) {
+        logger.info('[AUTO_PAYOUT] Existing embedded payout found', {
+          payoutId: embeddedPayout._id.toString(),
+          status: embeddedPayout.status
+        })
+
+        if (
+          embeddedPayout.status === 'CREATED' ||
+          embeddedPayout.status === 'RETRY_PENDING' ||
+          embeddedPayout.status === 'PROCESSING'
+        ) {
+          logger.info('[AUTO_PAYOUT] Restarting existing payout transfer', {
+            payoutId: embeddedPayout._id.toString()
+          })
+
+          return startPayoutTransfer(embeddedPayout, { fetchImpl })
+        }
+
+        logger.info('[AUTO_PAYOUT] Returning completed payout', {
+          payoutId: embeddedPayout._id.toString(),
+          status: embeddedPayout.status
+        })
+
+        return embeddedPayout
       }
-      return embeddedPayout
+
+      logger.warn(
+        '[AUTO_PAYOUT] Embedded payout id not found in database. Creating a new payout.',
+        {
+          paymentId: payment._id.toString(),
+          embeddedPayoutId
+        }
+      )
     }
   }
 
