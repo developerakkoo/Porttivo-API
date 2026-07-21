@@ -884,12 +884,6 @@ const createPayoutRecord = async ({
   failure = null,
   retry = {}
 }) => {
-  logger.info('[AUTO_PAYOUT] Payout object', {
-    payoutId: payout?._id?.toString(),
-    hasSave: typeof payout?.save,
-    constructor: payout?.constructor?.name,
-    isMongooseDocument: payout instanceof mongoose.Model
-  })
   if (!payerId || !payeeId) {
     const error = new Error(
       'payerId and payeeId are required for payout creation'
@@ -962,6 +956,7 @@ const createPayoutRecord = async ({
           request: cashfree.request || {},
           response: cashfree.response || {}
         },
+
         status,
         failure: failure || buildPayoutFailure({}),
         retry: {
@@ -972,7 +967,13 @@ const createPayoutRecord = async ({
         initiatedAt: new Date(),
         startedAt: cashfree.transferId ? new Date() : null,
         lastAttemptAt: cashfree.transferId ? new Date() : null
-      }
+      },
+      logger.info('[AUTO_PAYOUT] Payout object', {
+        payoutId: payout?._id?.toString(),
+        hasSave: typeof payout?.save,
+        constructor: payout?.constructor?.name,
+        isMongooseDocument: payout instanceof mongoose.Model
+      })
     ])
 
     return payout
