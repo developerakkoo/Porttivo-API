@@ -884,6 +884,12 @@ const createPayoutRecord = async ({
   failure = null,
   retry = {}
 }) => {
+  logger.info('[AUTO_PAYOUT] Payout object', {
+    payoutId: payout?._id?.toString(),
+    hasSave: typeof payout?.save,
+    constructor: payout?.constructor?.name,
+    isMongooseDocument: payout instanceof mongoose.Model
+  })
   if (!payerId || !payeeId) {
     const error = new Error(
       'payerId and payeeId are required for payout creation'
@@ -1191,6 +1197,12 @@ const startPayoutTransfer = async (
   payoutInput,
   { fetchImpl = global.fetch } = {}
 ) => {
+  logger.info('[PAYOUT] Received payoutInput', {
+    type: typeof payoutInput,
+    constructor: payoutInput?.constructor?.name,
+    hasSave: typeof payoutInput?.save,
+    id: payoutInput?._id?.toString?.() || payoutInput
+  })
   let payout =
     payoutInput && payoutInput._id && typeof payoutInput.save === 'function'
       ? payoutInput
@@ -1482,7 +1494,6 @@ const createAutomaticPayoutForPayment = async (
   }
 
   const embeddedPayoutId = payment.metadata?.payout?.id || null
-
 
   logger.info('[AUTO_PAYOUT] Embedded payout lookup', {
     paymentId: payment._id.toString(),
