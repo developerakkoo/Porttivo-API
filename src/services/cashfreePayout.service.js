@@ -975,6 +975,12 @@ const createPayoutRecord = async ({
     instanceOfModel: payout instanceof mongoose.Model,
     payoutId: payout?._id?.toString()
   });
+    logger.info("[DEBUG] Inside createPayoutRecord after create()", {
+    payout,
+    constructor: payout?.constructor?.name,
+    hasSave: typeof payout?.save,
+    hasId: !!payout?._id
+  })
 
     return payout
   } catch (error) {
