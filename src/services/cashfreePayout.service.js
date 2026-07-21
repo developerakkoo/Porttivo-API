@@ -929,7 +929,13 @@ const createPayoutRecord = async ({
   }
 
   try {
+     logger.info("[DEBUG] Payout model", {
+    modelName: Payout.modelName,
+    constructor: Payout.constructor.name,
+    isModel: Payout.prototype instanceof mongoose.Model
+  });
     const [payout] = await Payout.create([
+      
       {
         payerId,
         payeeId,
@@ -962,6 +968,13 @@ const createPayoutRecord = async ({
         lastAttemptAt: cashfree.transferId ? new Date() : null
       }
     ])
+    logger.info("[DEBUG] Created payout", {
+    constructor: payout?.constructor?.name,
+    hasSave: typeof payout?.save,
+    hasId: !!payout?._id,
+    instanceOfModel: payout instanceof mongoose.Model,
+    payoutId: payout?._id?.toString()
+  });
 
     return payout
   } catch (error) {
@@ -1185,14 +1198,15 @@ const startPayoutTransfer = async (
   payoutInput,
   { fetchImpl = global.fetch } = {}
 ) => {
-  logger.info('[DEBUG] startPayoutTransfer input', {
+  
+   logger.info("[DEBUG] startPayoutTransfer input", {
     type: typeof payoutInput,
     constructor: payoutInput?.constructor?.name,
     hasId: !!payoutInput?._id,
     hasSave: typeof payoutInput?.save,
     payoutId: payoutInput?._id?.toString?.(),
     paymentId: payoutInput?.paymentId?.toString?.()
-  })
+  });
   let payout =
     payoutInput && payoutInput._id && typeof payoutInput.save === 'function'
       ? payoutInput
@@ -1534,9 +1548,11 @@ const createAutomaticPayoutForPayment = async (
   logger.info('[DEBUG] createPayoutRecord result', {
     constructor: payout?.constructor?.name,
     hasSave: typeof payout?.save,
-    payoutId: payout?._id?.toString?.(),
-    paymentId: payout?.paymentId?.toString?.(),
-    status: payout?.status
+    hasId: !!payout?._id,
+    instanceOfModel: payout instanceof mongoose.Model,
+    isMongooseDocument: payout?.constructor?.base?.Model === mongoose.Model,
+    keys: Object.keys(payout || {}),
+    payout
   })
 
   if (
