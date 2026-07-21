@@ -1461,10 +1461,6 @@ const createAutomaticPayoutForPayment = async (
   paymentInput,
   { fetchImpl = global.fetch } = {}
 ) => {
-  logger.info('[AUTO_PAYOUT]', {
-    embeddedPayoutId,
-    paymentId: payment._id.toString()
-  })
   const payment =
     paymentInput && paymentInput._id && paymentInput.status
       ? paymentInput
@@ -1487,7 +1483,6 @@ const createAutomaticPayoutForPayment = async (
 
   const embeddedPayoutId = payment.metadata?.payout?.id || null
 
-  const embeddedPayoutId = payment.metadata?.payout?.id || null
 
   logger.info('[AUTO_PAYOUT] Embedded payout lookup', {
     paymentId: payment._id.toString(),
