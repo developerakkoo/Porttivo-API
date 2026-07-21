@@ -156,16 +156,10 @@ const decryptSensitiveValue = value => {
   const authTag = payload.subarray(12, 28)
   const encrypted = payload.subarray(28)
 
-  const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    getEncryptionKey(),
-    iv
-  )
+  const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), iv)
   decipher.setAuthTag(authTag)
 
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString(
-    'utf8'
-  )
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
 }
 
 const summarizePayee = payee => {
@@ -629,9 +623,7 @@ const getCashfreeBeneficiary = async (
   const query = {}
   const resolvedBeneficiaryId = String(beneficiaryId || '').trim()
   const resolvedBankAccountNumber = String(bankAccountNumber || '').trim()
-  const resolvedBankIfsc = String(bankIfsc || '')
-    .trim()
-    .toUpperCase()
+  const resolvedBankIfsc = String(bankIfsc || '').trim().toUpperCase()
 
   if (resolvedBeneficiaryId) {
     query.beneficiary_id = resolvedBeneficiaryId
@@ -640,10 +632,7 @@ const getCashfreeBeneficiary = async (
     query.bank_ifsc = resolvedBankIfsc
   }
 
-  if (
-    !query.beneficiary_id &&
-    (!query.bank_account_number || !query.bank_ifsc)
-  ) {
+  if (!query.beneficiary_id && (!query.bank_account_number || !query.bank_ifsc)) {
     const error = new Error(
       'beneficiaryId or bankAccountNumber with bankIfsc is required'
     )
@@ -665,7 +654,11 @@ const removeCashfreeBeneficiary = async (
     throw error
   }
 
-  return requestCashfreeBeneficiary('DELETE', { beneficiary_id: id }, fetchImpl)
+  return requestCashfreeBeneficiary(
+    'DELETE',
+    { beneficiary_id: id },
+    fetchImpl
+  )
 }
 
 const registerBeneficiary = async (
@@ -929,12 +922,6 @@ const createPayoutRecord = async ({
   }
 
   try {
-    logger.info('[PAYOUT] Creating payout', {
-      paymentId,
-      payerId,
-      payeeId,
-      amount
-    })
     const [payout] = await Payout.create([
       {
         payerId,
@@ -956,7 +943,6 @@ const createPayoutRecord = async ({
           request: cashfree.request || {},
           response: cashfree.response || {}
         },
-
         status,
         failure: failure || buildPayoutFailure({}),
         retry: {
@@ -969,12 +955,6 @@ const createPayoutRecord = async ({
         lastAttemptAt: cashfree.transferId ? new Date() : null
       }
     ])
-    logger.info('[AUTO_PAYOUT] Payout object', {
-      payoutId: payout?._id?.toString(),
-      hasSave: typeof payout?.save,
-      constructor: payout?.constructor?.name,
-      isMongooseDocument: payout instanceof mongoose.Model
-    })
 
     return payout
   } catch (error) {
@@ -1003,15 +983,12 @@ const createPayoutRecord = async ({
   }
 }
 
-const getPayoutById = async input => {
-  const id = input?._id || input;
-
+const getPayoutById = async id => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
-    return null;
+    return null
   }
-
-  return Payout.findById(id);
-};
+  return Payout.findById(id)
+}
 
 const applyPayoutTransferResponse = async (
   payout,
@@ -1201,12 +1178,6 @@ const startPayoutTransfer = async (
   payoutInput,
   { fetchImpl = global.fetch } = {}
 ) => {
-  logger.info('[PAYOUT] Received payoutInput', {
-    type: typeof payoutInput,
-    constructor: payoutInput?.constructor?.name,
-    hasSave: typeof payoutInput?.save,
-    id: payoutInput?._id?.toString?.() || payoutInput
-  })
   let payout =
     payoutInput && payoutInput._id && typeof payoutInput.save === 'function'
       ? payoutInput
@@ -1250,7 +1221,10 @@ const startPayoutTransfer = async (
 
   const beneficiary = payee?.cashfreeBeneficiary
 
-  const beneId = payout.cashfree?.beneId || beneficiary?.beneId || null
+  const beneId =
+    payout.cashfree?.beneId ||
+    beneficiary?.beneId ||
+    null
 
   if (!beneId || beneficiary?.status !== 'ACTIVE') {
     payout.status = 'RETRY_PENDING'
@@ -1487,65 +1461,22 @@ const createAutomaticPayoutForPayment = async (
   }
 
   const autoMetadata = ensureAutomaticPayoutMetadata(payment)
-  logger.info('[AUTO_PAYOUT]', {
-    paymentId: payment._id.toString(),
-    paymentStatus: payment.status,
-    autoMetadata
-  })
   if (!autoMetadata) {
-    logger.info('[AUTO_PAYOUT] Exit - no payout metadata')
     return null
   }
 
   const embeddedPayoutId = payment.metadata?.payout?.id || null
-
-  logger.info('[AUTO_PAYOUT] Embedded payout lookup', {
-    paymentId: payment._id.toString(),
-    embeddedPayoutId
-  })
-
-  if (embeddedPayoutId) {
-    if (!mongoose.Types.ObjectId.isValid(embeddedPayoutId)) {
-      logger.warn('[AUTO_PAYOUT] Invalid embedded payout id', {
-        paymentId: payment._id.toString(),
-        embeddedPayoutId
-      })
-    } else {
-      const embeddedPayout = await Payout.findById(embeddedPayoutId)
-
-      if (embeddedPayout) {
-        logger.info('[AUTO_PAYOUT] Existing embedded payout found', {
-          payoutId: embeddedPayout._id.toString(),
-          status: embeddedPayout.status
-        })
-
-        if (
-          embeddedPayout.status === 'CREATED' ||
-          embeddedPayout.status === 'RETRY_PENDING' ||
-          embeddedPayout.status === 'PROCESSING'
-        ) {
-          logger.info('[AUTO_PAYOUT] Restarting existing payout transfer', {
-            payoutId: embeddedPayout._id.toString()
-          })
-
-          return startPayoutTransfer(embeddedPayout, { fetchImpl })
-        }
-
-        logger.info('[AUTO_PAYOUT] Returning completed payout', {
-          payoutId: embeddedPayout._id.toString(),
-          status: embeddedPayout.status
-        })
-
-        return embeddedPayout
+  if (embeddedPayoutId && mongoose.Types.ObjectId.isValid(embeddedPayoutId)) {
+    const embeddedPayout = await Payout.findById(embeddedPayoutId)
+    if (embeddedPayout) {
+      if (
+        embeddedPayout.status === 'CREATED' ||
+        embeddedPayout.status === 'RETRY_PENDING' ||
+        embeddedPayout.status === 'PROCESSING'
+      ) {
+        return startPayoutTransfer(embeddedPayout, { fetchImpl })
       }
-
-      logger.warn(
-        '[AUTO_PAYOUT] Embedded payout id not found in database. Creating a new payout.',
-        {
-          paymentId: payment._id.toString(),
-          embeddedPayoutId
-        }
-      )
+      return embeddedPayout
     }
   }
 
@@ -1568,9 +1499,7 @@ const createAutomaticPayoutForPayment = async (
 
   const { payee, modelName } = await findPayeeRecordById(autoMetadata.payeeId)
   const payeeSnapshot = getPayeeSnapshot(payee, modelName)
-  logger.info('[AUTO_PAYOUT] Before createPayoutRecord', {
-    paymentId: payment._id.toString()
-  })
+
   const payout = await createPayoutRecord({
     payerId: payment.payer?.userId || payment.initiatedBy?.userId || null,
     payeeId: autoMetadata.payeeId,
@@ -1583,16 +1512,14 @@ const createAutomaticPayoutForPayment = async (
     status: 'CREATED',
     cashfree: {
       beneId:
-        payee?.cashfreeBeneficiary?.beneId || payee?.cashfreeBeneId || null,
+        payee?.cashfreeBeneficiary?.beneId ||
+        payee?.cashfreeBeneId ||
+        null,
       transferMode: autoMetadata.transferMode || 'IMPS',
       beneficiary: payee?.cashfreeBeneficiary || {},
       request: {},
       response: {}
     }
-  })
-  logger.info('[AUTO_PAYOUT] After createPayoutRecord', {
-    payoutId: payout?._id?.toString(),
-    payout
   })
 
   if (
