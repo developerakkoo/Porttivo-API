@@ -967,14 +967,14 @@ const createPayoutRecord = async ({
         initiatedAt: new Date(),
         startedAt: cashfree.transferId ? new Date() : null,
         lastAttemptAt: cashfree.transferId ? new Date() : null
-      },
-      logger.info('[AUTO_PAYOUT] Payout object', {
-        payoutId: payout?._id?.toString(),
-        hasSave: typeof payout?.save,
-        constructor: payout?.constructor?.name,
-        isMongooseDocument: payout instanceof mongoose.Model
-      })
+      }
     ])
+    logger.info('[AUTO_PAYOUT] Payout object', {
+      payoutId: payout?._id?.toString(),
+      hasSave: typeof payout?.save,
+      constructor: payout?.constructor?.name,
+      isMongooseDocument: payout instanceof mongoose.Model
+    })
 
     return payout
   } catch (error) {
