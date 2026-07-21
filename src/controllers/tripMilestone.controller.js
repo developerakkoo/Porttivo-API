@@ -1,11 +1,16 @@
 const Trip = require('../models/Trip')
+const VehicleBooking = require('../models/VehicleBooking')
 const { canTransporterPartyViewTripExecution } = require('../services/tripAccess.service')
-const { fetchMarketplacePaymentSnapshotByTrip } = require('../services/marketplacePayment.service')
+const {
+  fetchMarketplacePaymentSnapshotByTrip,
+  createMarketplacePaymentRequestForTrip
+} = require('../services/marketplacePayment.service')
 const {
   getBackendMeaning,
   getDriverLabel,
   getMilestoneTypeByNumber
 } = require('../utils/milestoneMapping')
+const logger = require('../utils/logger')
 const {
   emitTripMilestoneUpdated,
   emitMarketplacePaymentReady
@@ -223,6 +228,7 @@ const updateMilestone = async (req, res, next) => {
       longitude,
       updatedAt: new Date()
     }
+    trip.audit = trip.audit || {}
     trip.audit.updatedBy = {
       userId,
       userType: toAuditUserType(userType)
@@ -279,13 +285,46 @@ const updateMilestone = async (req, res, next) => {
 
     if (milestoneNum === 1 && trip.isFromBooking && trip.bookingId) {
       try {
+        logger.info('Milestone 1 completed for marketplace trip', {
+          tripId: trip._id?.toString(),
+          bookingId: trip.bookingId?.toString()
+        })
+
+        const bookingId = trip.bookingId._id || trip.bookingId
+        const booking = await VehicleBooking.findById(bookingId)
+          .populate('buyerId', 'name company mobile email')
+          .populate('sellerId', 'name company mobile email')
+
+        if (booking) {
+          const payment = await createMarketplacePaymentRequestForTrip({
+            trip,
+            booking,
+            initiatedBy: {
+              userId: userId || null,
+              userType: toAuditUserType(userType)
+            },
+            payerOverrides: {
+              email: booking.buyerId?.email,
+              name: booking.buyerId?.name || booking.buyerId?.company,
+              mobile: booking.buyerId?.mobile
+            }
+          })
+
+          logger.info('Marketplace payment request auto-created on milestone 1', {
+            tripId: trip._id?.toString(),
+            bookingId: booking._id?.toString(),
+            paymentId: payment._id?.toString(),
+            status: payment.status,
+            amount: payment.amount
+          })
+        }
+
         const paymentSnapshot = await fetchMarketplacePaymentSnapshotByTrip(trip)
         await emitMarketplacePaymentReady(trip, paymentSnapshot)
       } catch (paymentEventError) {
-        console.warn(
-          'Marketplace payment ready broadcast skipped:',
-          paymentEventError.message || paymentEventError
-        )
+        logger.warn('Marketplace payment ready broadcast skipped', {
+          message: paymentEventError.message || paymentEventError
+        })
       }
     }
 

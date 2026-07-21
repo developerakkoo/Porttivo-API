@@ -90,6 +90,22 @@ const marketplacePaymentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: {}
     },
+    metadata: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {}
+    },
+    referenceType: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true
+    },
+    referenceId: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true
+    },
     failureReason: {
       type: String,
       trim: true,
@@ -128,7 +144,15 @@ marketplacePaymentSchema.index({ tripId: 1, status: 1 })
 marketplacePaymentSchema.index({ bookingId: 1, status: 1 })
 marketplacePaymentSchema.index({ provider: 1, merchantTransactionId: 1 })
 marketplacePaymentSchema.index({ providerTransactionId: 1 })
+marketplacePaymentSchema.index({ referenceType: 1, referenceId: 1 })
 marketplacePaymentSchema.index({ createdAt: -1 })
 marketplacePaymentSchema.index({ publicId: 1 }, { unique: true, sparse: true })
+marketplacePaymentSchema.index(
+  { tripId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['CREATED', 'PENDING'] } }
+  }
+)
 
 module.exports = mongoose.model('MarketplacePayment', marketplacePaymentSchema)

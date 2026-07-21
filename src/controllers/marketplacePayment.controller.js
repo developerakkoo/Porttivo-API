@@ -1,11 +1,16 @@
+const crypto = require('crypto')
 const mongoose = require('mongoose')
 const { nanoid } = require('nanoid')
 const Trip = require('../models/Trip')
 const VehicleBooking = require('../models/VehicleBooking')
 const MarketplacePayment = require('../models/MarketplacePayment')
+const Notification = require('../models/Notification')
 const { getTransporterActorId } = require('../utils/transporterActor')
+const logger = require('../utils/logger')
 const { canTransporterPartyViewTripExecution, isMarketplaceBookingTrip } = require('../services/tripAccess.service')
 const { isConfigured, buildMarketplaceTripPaymentRequest, verifyPayuResponseHash, normalizePayuStatus, makeTransactionId } = require('../services/payu.service')
+const { createAutomaticPayoutForPayment } = require('../services/cashfreePayout.service')
+const { createMarketplacePaymentRequestForTrip } = require('../services/marketplacePayment.service')
 const { payuSuccessUrl, payuFailureUrl } = require('../config/env')
 
 const toObjectIdString = (value) => {
@@ -148,205 +153,77 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
       })
     }
 
-    const { trip, booking, finalAmount, existingPayment } = context
+    const { trip, booking } = context
 
-    if (existingPayment?.status === 'SUCCESS') {
+    const payment = await createMarketplacePaymentRequestForTrip({
+      trip,
+      booking,
+      initiatedBy: {
+        userId: req.user.id || null,
+        userType: req.user.userType || null
+      },
+      payerOverrides: {
+        name: payerName,
+        email: payerEmail,
+        mobile: payerPhone
+      },
+      successUrl: payuSuccessUrl,
+      failureUrl: payuFailureUrl
+    })
+
+    if (payment.status === 'SUCCESS') {
       return res.status(200).json({
         success: true,
         message: 'Payment has already been completed for this trip',
         data: {
-          payment: existingPayment
+          payment
         }
       })
     }
 
-    if (
-      existingPayment?.status === 'CREATED' ||
-      existingPayment?.status === 'PENDING'
-    ) {
-      if (
-        existingPayment.paymentRequest?.fields?.txnid &&
-        existingPayment.paymentRequest?.actionUrl
-      ) {
-        return res.status(200).json({
-          success: true,
-          message: 'A payment request already exists for this trip',
-          data: {
-            payment: existingPayment
-          }
-        })
-      }
-
-      const buyerForRecovery = {
-        ...(booking.buyerId?.toObject ? booking.buyerId.toObject() : booking.buyerId),
-        name:
-          payerName ||
-          booking.buyerId?.name ||
-          booking.buyerId?.company ||
-          'Marketplace Buyer',
-        email: payerEmail || booking.buyerId?.email || '',
-        mobile: payerPhone || booking.buyerId?.mobile || ''
-      }
-
-      if (!buyerForRecovery.email) {
-        return res.status(400).json({
-          success: false,
-          message: 'Buyer email is required to initiate PayU payment'
-        })
-      }
-
-      const rebuiltRequest = buildMarketplaceTripPaymentRequest({
-        merchantTransactionId: existingPayment.merchantTransactionId,
-        amount: finalAmount,
-        buyer: buyerForRecovery,
-        trip,
-        booking,
-        paymentId: existingPayment._id,
-        successUrl: payuSuccessUrl,
-        failureUrl: payuFailureUrl
-      })
-
-      existingPayment.paymentGatewayUrl = rebuiltRequest.actionUrl
-      existingPayment.paymentRequest = rebuiltRequest
-      existingPayment.status = 'PENDING'
-      await existingPayment.save()
-
-      booking.paymentStatus = 'HOLD'
-      await booking.save()
-
-      return res.status(200).json({
-        success: true,
-        message: 'A payment request already exists for this trip',
-        data: {
-          payment: {
-            id: existingPayment._id,
-            tripId: existingPayment.tripId,
-            bookingId: existingPayment.bookingId,
-            status: existingPayment.status,
-            amount: existingPayment.amount,
-            currency: existingPayment.currency,
-            merchantTransactionId: existingPayment.merchantTransactionId,
-            actionUrl: rebuiltRequest.actionUrl,
-            method: rebuiltRequest.method,
-            fields: rebuiltRequest.fields
-          },
-          gateway: {
-            name: 'PAYU',
-            mode: rebuiltRequest.mode
-          }
-        }
-      })
-    }
-
-    const buyer = {
-      ...(booking.buyerId?.toObject ? booking.buyerId.toObject() : booking.buyerId),
-      name:
-        payerName ||
-        booking.buyerId?.name ||
-        booking.buyerId?.company ||
-        'Marketplace Buyer',
-      email: payerEmail || booking.buyerId?.email || '',
-      mobile: payerPhone || booking.buyerId?.mobile || ''
-    }
-
-    if (!buyer.email) {
-      return res.status(400).json({
+    const requestFields = payment.paymentRequest?.fields || {}
+    if (!requestFields.txnid || !payment.paymentRequest?.actionUrl) {
+      return res.status(500).json({
         success: false,
-        message: 'Buyer email is required to initiate PayU payment'
+        message: 'Unable to create PayU checkout request'
       })
     }
 
-    const seller = booking.sellerId
-    const merchantTransactionId = makeTransactionId()
-    const session = await mongoose.startSession()
-    session.startTransaction()
-
-    try {
-      const [payment] = await MarketplacePayment.create(
-        [
-          {
-            publicId: `mp_${nanoid(12)}`,
-            tripId: trip._id,
-            bookingId: booking._id,
-            payerTransporterId: buyer._id,
-            beneficiaryTransporterId: seller._id,
-            provider: 'PAYU',
-            status: 'CREATED',
-            amount: finalAmount,
-            currency: 'INR',
-            merchantTransactionId,
-            paymentGatewayUrl: null,
-            paymentRequest: {},
-            initiatedBy: {
-              userId: req.user.id || null,
-              userType: req.user.userType || null
-            },
-            initiatedAt: new Date()
-          }
-        ],
-        { session }
-      )
-
-      const paymentRequest = buildMarketplaceTripPaymentRequest({
-        merchantTransactionId,
-        amount: finalAmount,
-        buyer,
-        trip,
-        booking,
-        paymentId: payment._id,
-        successUrl: payuSuccessUrl,
-        failureUrl: payuFailureUrl
-      })
-
-      payment.paymentGatewayUrl = paymentRequest.actionUrl
-      payment.paymentRequest = paymentRequest
-      payment.status = 'PENDING'
-      await payment.save({ session })
-
-      booking.paymentStatus = 'HOLD'
-      await booking.save({ session })
-
-      await session.commitTransaction()
-      session.endSession()
-
-      return res.status(200).json({
-        success: true,
-        message: 'PayU payment request created successfully',
-        data: {
-          payment: {
-            id: getPaymentPublicId(payment),
-            paymentId: payment._id.toString(),
-            publicId: getPaymentPublicId(payment),
-            tripId: payment.tripId,
-            bookingId: payment.bookingId,
-            status: payment.status,
-            amount: payment.amount,
-            currency: payment.currency,
-            merchantTransactionId: payment.merchantTransactionId,
-            actionUrl: paymentRequest.actionUrl,
-            method: paymentRequest.method,
-            fields: paymentRequest.fields
-          },
-          gateway: {
-            provider: 'PAYU',
-            name: 'PayU',
-            mode: paymentRequest.mode,
-            actionUrl: paymentRequest.actionUrl,
-            method: paymentRequest.method
-          }
+    return res.status(200).json({
+      success: true,
+      message: 'PayU payment request created successfully',
+      data: {
+        payment: {
+          id: getPaymentPublicId(payment),
+          paymentId: payment._id.toString(),
+          publicId: getPaymentPublicId(payment),
+          tripId: payment.tripId,
+          bookingId: payment.bookingId,
+          status: payment.status,
+          amount: payment.amount,
+          currency: payment.currency,
+          merchantTransactionId: payment.merchantTransactionId,
+          actionUrl: payment.paymentRequest.actionUrl,
+          method: payment.paymentRequest.method,
+          fields: payment.paymentRequest.fields
+        },
+        gateway: {
+          provider: 'PAYU',
+          name: 'PayU',
+          mode: payment.paymentRequest.mode,
+          actionUrl: payment.paymentRequest.actionUrl,
+          method: payment.paymentRequest.method
         }
-      })
-    } catch (error) {
-      await session.abortTransaction()
-      session.endSession()
-      throw error
-    }
-    } catch (error) {
-      next(error)
-    }
+      }
+    })
+  } catch (error) {
+    next(error)
   }
+}
 
 const handlePayuWebhook = async (req, res, next) => {
+  const requestId = crypto.randomUUID()
+
   try {
     const body = {
       ...(req.query || {}),
@@ -355,7 +232,14 @@ const handlePayuWebhook = async (req, res, next) => {
     const merchantTransactionId = String(body.txnid || body.merchantTransactionId || body.merchant_transaction_id || '').trim()
     const paymentId = String(body.udf1 || '').trim()
 
+    logger.info(`[${requestId}] PayU webhook received`, {
+      merchantTransactionId,
+      paymentId,
+      bodyKeys: Object.keys(body || {})
+    })
+
     if (!merchantTransactionId && !paymentId) {
+      logger.warn(`[${requestId}] PayU webhook missing transaction reference`)
       return res.status(400).json({
         success: false,
         message: 'Transaction reference is required'
@@ -371,6 +255,10 @@ const handlePayuWebhook = async (req, res, next) => {
     }
 
     if (!payment) {
+      logger.warn(`[${requestId}] Marketplace payment record not found`, {
+        merchantTransactionId,
+        paymentId
+      })
       return res.status(404).json({
         success: false,
         message: 'Payment record not found'
@@ -381,12 +269,20 @@ const handlePayuWebhook = async (req, res, next) => {
       body.mihpayid || body.payuMoneyId || body.bank_ref_num || ''
     ).trim()
 
+    logger.info(`[${requestId}] Marketplace payment found`, {
+      paymentId: payment._id.toString(),
+      currentStatus: payment.status
+    })
+
     if (
       payment.status === 'SUCCESS' &&
       (!incomingProviderTxnId ||
         !payment.providerTransactionId ||
         payment.providerTransactionId === incomingProviderTxnId)
     ) {
+      logger.info(`[${requestId}] Duplicate PayU success notification ignored`, {
+        paymentId: payment._id.toString()
+      })
       return res.status(200).json({
         success: true,
         message: 'PayU webhook processed successfully'
@@ -396,6 +292,11 @@ const handlePayuWebhook = async (req, res, next) => {
     const responseStatus = normalizePayuStatus(body.status)
     const hashOk = verifyPayuResponseHash(body)
 
+    logger.info(`[${requestId}] PayU webhook verification`, {
+      hashOk,
+      status: responseStatus
+    })
+
     if (!hashOk) {
       payment.status = 'FAILED'
       payment.failureReason = 'Invalid PayU response hash'
@@ -403,11 +304,17 @@ const handlePayuWebhook = async (req, res, next) => {
       payment.failedAt = new Date()
       await payment.save()
 
+      logger.error(`[${requestId}] PayU webhook failed verification`, {
+        paymentId: payment._id.toString()
+      })
+
       return res.status(400).json({
         success: false,
         message: 'Invalid PayU response hash'
       })
     }
+
+    const previousStatus = payment.status
 
     payment.paymentResponse = { ...body, verified: true }
     payment.providerTransactionId = incomingProviderTxnId || payment.providerTransactionId
@@ -441,11 +348,77 @@ const handlePayuWebhook = async (req, res, next) => {
       await booking.save()
     }
 
+    if (previousStatus !== 'SUCCESS' && payment.status === 'SUCCESS') {
+      logger.info(`[${requestId}] Marketplace payment success`, {
+        paymentId: payment._id.toString(),
+        merchantTransactionId: payment.merchantTransactionId,
+        amount: payment.amount
+      })
+
+      try {
+        const payout = await createAutomaticPayoutForPayment(payment, {
+          fetchImpl: req.fetch || global.fetch
+        })
+
+        if (payout) {
+          payment.metadata = {
+            ...(payment.metadata || {}),
+            payout: {
+              id: payout._id?.toString() || null,
+              status: payout.status,
+              transferId: payout.cashfree?.transferId || null,
+              referenceId: payout.cashfree?.referenceId || null
+            }
+          }
+          await payment.save()
+
+          logger.info(`[${requestId}] Cashfree payout initiated`, {
+            paymentId: payment._id.toString(),
+            payoutId: payout._id?.toString(),
+            payoutStatus: payout.status
+          })
+        }
+      } catch (payoutError) {
+        logger.error(`[${requestId}] Cashfree payout initiation failed`, {
+          paymentId: payment._id.toString(),
+          message: payoutError.message,
+          stack: payoutError.stack
+        })
+      }
+
+      try {
+        await Notification.create({
+          userId: payment.payerTransporterId,
+          userType: 'TRANSPORTER',
+          type: 'SYSTEM',
+          title: 'Marketplace payment successful',
+          message: `Your payment of ₹${payment.amount.toFixed(2)} for booking ${payment.bookingId} has been received successfully. Final disbursement is now in progress.`,
+          data: {
+            event: 'MARKETPLACE_PAYMENT_SUCCESS',
+            tripId: payment.tripId,
+            bookingId: payment.bookingId,
+            paymentId: payment._id.toString(),
+            amount: payment.amount
+          },
+          priority: 'high'
+        })
+      } catch (notificationError) {
+        logger.warn(`[${requestId}] Notification save failed`, {
+          paymentId: payment._id.toString(),
+          message: notificationError.message
+        })
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: 'PayU webhook processed successfully'
     })
   } catch (error) {
+    logger.error(`[${crypto.randomUUID()}] PayU webhook error`, {
+      message: error.message,
+      stack: error.stack
+    })
     next(error)
   }
 }

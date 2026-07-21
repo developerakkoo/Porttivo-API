@@ -546,6 +546,227 @@ const paymentTests = [
       assert.equal(paymentDoc.status, 'PENDING')
       assert.equal(paymentDoc.failureReason, undefined)
     }
+  },
+  {
+    name: 'Marketplace milestone 1 auto-creates a PayU payment request',
+    async run() {
+      let created = false
+      let broadcasted = false
+
+      const trip = {
+        _id: 'trip-1',
+        status: 'ACTIVE',
+        milestones: [],
+        isFromBooking: true,
+        bookingId: 'booking-1',
+        driverId: 'driver-1',
+        customerId: 'customer-1',
+        populate: async function () {
+          return this
+        },
+        save: async function () {
+          return this
+        },
+        getCurrentMilestone() {
+          return this.milestones.length ? this.milestones[this.milestones.length - 1] : null
+        }
+      }
+
+      const booking = {
+        _id: 'booking-1',
+        agreedPrice: 7500,
+        status: 'CONFIRMED',
+        buyerId: {
+          _id: 'buyer-1',
+          name: 'Buyer A',
+          company: 'Buyer A Co',
+          email: 'buyer@example.com',
+          mobile: '9999999999'
+        },
+        sellerId: {
+          _id: 'seller-1'
+        },
+        save: async function () {
+          return this
+        }
+      }
+
+      const payment = {
+        _id: 'payment-1',
+        status: 'PENDING',
+        amount: 7500,
+        paymentRequest: {
+          fields: {
+            txnid: 'PAYU-TRIP-1'
+          },
+          actionUrl: 'https://test.payu.in/_payment',
+          method: 'POST',
+          mode: 'sandbox'
+        }
+      }
+
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/tripMilestone.controller.js'),
+        {
+          '../models/Trip': {
+            findById: async () => trip
+          },
+          '../models/VehicleBooking': {
+            findById: () => ({
+              ...booking,
+              populate: function () {
+                return this
+              }
+            })
+          },
+          '../services/marketplacePayment.service': {
+            createMarketplacePaymentRequestForTrip: async () => {
+              created = true
+              return payment
+            },
+            fetchMarketplacePaymentSnapshotByTrip: async () => ({
+              marketplaceTrip: true
+            })
+          },
+          '../services/socket.service': {
+            emitTripMilestoneUpdated: () => {},
+            emitMarketplacePaymentReady: async () => {
+              broadcasted = true
+            }
+          },
+          '../services/tripAccess.service': {
+            canTransporterPartyViewTripExecution: async () => true
+          },
+          '../services/wati.service': {
+            sendVehicleReachedPickupTemplate: async () => {},
+            sendContainerPickedTemplate: async () => {}
+          },
+          '../utils/milestoneMapping': {
+            getBackendMeaning: () => 'REACHED_LOCATION',
+            getDriverLabel: () => 'Reached pickup',
+            getMilestoneTypeByNumber: () => 'REACHED_LOCATION'
+          },
+          '../services/tripLifecycle.service': {
+            ensureMilestonePhoto: () => null,
+            toAuditUserType: () => 'DRIVER'
+          }
+        }
+      )
+
+      const req = {
+        params: {
+          id: 'trip-1',
+          milestoneNumber: '1'
+        },
+        user: {
+          id: 'driver-1',
+          userType: 'driver'
+        },
+        body: {
+          latitude: 12.9716,
+          longitude: 77.5946
+        }
+      }
+      const res = createMockRes()
+
+      await controller.updateMilestone(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(created, true)
+      assert.equal(broadcasted, true)
+      assert.equal(payment.paymentRequest.fields.txnid, 'PAYU-TRIP-1')
+    }
+  },
+  {
+    name: 'PayU webhook success triggers Cashfree payout',
+    async run() {
+      let payoutCalled = false
+
+      const paymentDoc = {
+        _id: '507f1f77bcf86cd799439011',
+        provider: 'PAYU',
+        status: 'PENDING',
+        merchantTransactionId: 'PAYU-ABC',
+        payerTransporterId: 'buyer-1',
+        amount: 8200,
+        paymentResponse: {},
+        callbackPayload: {},
+        metadata: {},
+        save: async function () {
+          return this
+        }
+      }
+
+      const bookingDoc = {
+        _id: 'booking-1',
+        paymentStatus: 'HOLD',
+        save: async function () {
+          return this
+        }
+      }
+
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/marketplacePayment.controller.js'),
+        {
+          '../models/MarketplacePayment': {
+            findById: async () => null,
+            findOne: async () => paymentDoc
+          },
+          '../models/VehicleBooking': {
+            findById: async () => bookingDoc
+          },
+          '../services/payu.service': {
+            verifyPayuResponseHash: () => true,
+            normalizePayuStatus: () => 'SUCCESS'
+          },
+          '../services/cashfreePayout.service': {
+            createAutomaticPayoutForPayment: async () => {
+              payoutCalled = true
+              return {
+                _id: 'payout-1',
+                status: 'SUCCESS',
+                cashfree: {
+                  transferId: 'TRF-123',
+                  referenceId: 'REF-123'
+                }
+              }
+            }
+          },
+          '../models/Notification': {
+            create: async () => ({})
+          }
+        }
+      )
+
+      const req = {
+        query: {},
+        body: {
+          status: 'success',
+          txnid: 'PAYU-ABC',
+          mihpayid: 'MIH-123',
+          udf1: '',
+          email: 'buyer@example.com',
+          firstname: 'Buyer A',
+          productinfo: 'Marketplace payment',
+          amount: '8200.00',
+          hash: 'ignored'
+        },
+        headers: {},
+        rawBody: ''
+      }
+      const res = createMockRes()
+
+      await controller.handlePayuWebhook(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(paymentDoc.status, 'SUCCESS')
+      assert.equal(bookingDoc.paymentStatus, 'COMPLETED')
+      assert.equal(payoutCalled, true)
+    }
   }
 ]
 
