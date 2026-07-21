@@ -929,6 +929,12 @@ const createPayoutRecord = async ({
   }
 
   try {
+    logger.info('[PAYOUT] Creating payout', {
+      paymentId,
+      payerId,
+      payeeId,
+      amount
+    })
     const [payout] = await Payout.create([
       {
         payerId,
@@ -1507,7 +1513,9 @@ const createAutomaticPayoutForPayment = async (
 
   const { payee, modelName } = await findPayeeRecordById(autoMetadata.payeeId)
   const payeeSnapshot = getPayeeSnapshot(payee, modelName)
-
+  logger.info('[AUTO_PAYOUT] Before createPayoutRecord', {
+    paymentId: payment._id.toString()
+  })
   const payout = await createPayoutRecord({
     payerId: payment.payer?.userId || payment.initiatedBy?.userId || null,
     payeeId: autoMetadata.payeeId,
@@ -1526,6 +1534,10 @@ const createAutomaticPayoutForPayment = async (
       request: {},
       response: {}
     }
+  })
+  logger.info('[AUTO_PAYOUT] After createPayoutRecord', {
+    payoutId: payout?._id?.toString(),
+    payout
   })
 
   if (
