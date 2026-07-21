@@ -156,10 +156,16 @@ const decryptSensitiveValue = value => {
   const authTag = payload.subarray(12, 28)
   const encrypted = payload.subarray(28)
 
-  const decipher = crypto.createDecipheriv('aes-256-gcm', getEncryptionKey(), iv)
+  const decipher = crypto.createDecipheriv(
+    'aes-256-gcm',
+    getEncryptionKey(),
+    iv
+  )
   decipher.setAuthTag(authTag)
 
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString(
+    'utf8'
+  )
 }
 
 const summarizePayee = payee => {
@@ -623,7 +629,9 @@ const getCashfreeBeneficiary = async (
   const query = {}
   const resolvedBeneficiaryId = String(beneficiaryId || '').trim()
   const resolvedBankAccountNumber = String(bankAccountNumber || '').trim()
-  const resolvedBankIfsc = String(bankIfsc || '').trim().toUpperCase()
+  const resolvedBankIfsc = String(bankIfsc || '')
+    .trim()
+    .toUpperCase()
 
   if (resolvedBeneficiaryId) {
     query.beneficiary_id = resolvedBeneficiaryId
@@ -632,7 +640,10 @@ const getCashfreeBeneficiary = async (
     query.bank_ifsc = resolvedBankIfsc
   }
 
-  if (!query.beneficiary_id && (!query.bank_account_number || !query.bank_ifsc)) {
+  if (
+    !query.beneficiary_id &&
+    (!query.bank_account_number || !query.bank_ifsc)
+  ) {
     const error = new Error(
       'beneficiaryId or bankAccountNumber with bankIfsc is required'
     )
@@ -654,11 +665,7 @@ const removeCashfreeBeneficiary = async (
     throw error
   }
 
-  return requestCashfreeBeneficiary(
-    'DELETE',
-    { beneficiary_id: id },
-    fetchImpl
-  )
+  return requestCashfreeBeneficiary('DELETE', { beneficiary_id: id }, fetchImpl)
 }
 
 const registerBeneficiary = async (
@@ -1178,6 +1185,14 @@ const startPayoutTransfer = async (
   payoutInput,
   { fetchImpl = global.fetch } = {}
 ) => {
+  logger.info('[DEBUG] startPayoutTransfer input', {
+    type: typeof payoutInput,
+    constructor: payoutInput?.constructor?.name,
+    hasId: !!payoutInput?._id,
+    hasSave: typeof payoutInput?.save,
+    payoutId: payoutInput?._id?.toString?.(),
+    paymentId: payoutInput?.paymentId?.toString?.()
+  })
   let payout =
     payoutInput && payoutInput._id && typeof payoutInput.save === 'function'
       ? payoutInput
@@ -1221,10 +1236,7 @@ const startPayoutTransfer = async (
 
   const beneficiary = payee?.cashfreeBeneficiary
 
-  const beneId =
-    payout.cashfree?.beneId ||
-    beneficiary?.beneId ||
-    null
+  const beneId = payout.cashfree?.beneId || beneficiary?.beneId || null
 
   if (!beneId || beneficiary?.status !== 'ACTIVE') {
     payout.status = 'RETRY_PENDING'
@@ -1512,14 +1524,19 @@ const createAutomaticPayoutForPayment = async (
     status: 'CREATED',
     cashfree: {
       beneId:
-        payee?.cashfreeBeneficiary?.beneId ||
-        payee?.cashfreeBeneId ||
-        null,
+        payee?.cashfreeBeneficiary?.beneId || payee?.cashfreeBeneId || null,
       transferMode: autoMetadata.transferMode || 'IMPS',
       beneficiary: payee?.cashfreeBeneficiary || {},
       request: {},
       response: {}
     }
+  })
+  logger.info('[DEBUG] createPayoutRecord result', {
+    constructor: payout?.constructor?.name,
+    hasSave: typeof payout?.save,
+    payoutId: payout?._id?.toString?.(),
+    paymentId: payout?.paymentId?.toString?.(),
+    status: payout?.status
   })
 
   if (
