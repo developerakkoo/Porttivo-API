@@ -960,6 +960,15 @@ const createPayoutRecord = async ({
       versionKey: false,
       transform: false
     })
+
+    if (insertPayload.paymentId == null) {
+      delete insertPayload.paymentId
+    }
+
+    if (insertPayload.cashfree && insertPayload.cashfree.transferId == null) {
+      delete insertPayload.cashfree.transferId
+    }
+
     const insertResult = await Payout.collection.insertOne(insertPayload)
     const savedPayout = await Payout.findById(insertResult.insertedId)
     logger.info("[DEBUG] Created payout", {
@@ -988,6 +997,14 @@ const createPayoutRecord = async ({
     if (!isDuplicateKey) {
       throw error
     }
+
+    logger.warn('[PAYOUT] Duplicate payout insert detected', {
+      paymentId: paymentId || null,
+      referenceType: referenceType || null,
+      referenceId: referenceId || null,
+      provider,
+      message: error?.message || null
+    })
 
     const fallbackQuery = {}
     if (paymentId) {
