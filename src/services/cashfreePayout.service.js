@@ -965,22 +965,32 @@ const createPayoutRecord = async ({
       startedAt: cashfree.transferId ? new Date() : null,
       lastAttemptAt: cashfree.transferId ? new Date() : null
     })
-    await payout.save()
+    const insertPayload = payout.toObject({
+      depopulate: true,
+      versionKey: false,
+      transform: false
+    })
+    const insertResult = await Payout.collection.insertOne(insertPayload)
+    const savedPayout = await Payout.findById(insertResult.insertedId)
     logger.info("[DEBUG] Created payout", {
-    constructor: payout?.constructor?.name,
-    hasSave: typeof payout?.save,
-    hasId: !!payout?._id,
-    instanceOfModel: payout instanceof mongoose.Model,
-    payoutId: payout?._id?.toString()
+    constructor: savedPayout?.constructor?.name,
+    hasSave: typeof savedPayout?.save,
+    hasId: !!savedPayout?._id,
+    instanceOfModel: savedPayout instanceof mongoose.Model,
+    payoutId: savedPayout?._id?.toString()
   });
     logger.info("[DEBUG] Inside createPayoutRecord after create()", {
-    payout,
-    constructor: payout?.constructor?.name,
-    hasSave: typeof payout?.save,
-    hasId: !!payout?._id
+    payout: savedPayout,
+    constructor: savedPayout?.constructor?.name,
+    hasSave: typeof savedPayout?.save,
+    hasId: !!savedPayout?._id
   })
 
-    return payout
+    if (!savedPayout) {
+      throw new Error('Payout insert completed but reload failed')
+    }
+
+    return savedPayout
   } catch (error) {
     const isDuplicateKey =
       error?.code === 11000 ||
