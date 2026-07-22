@@ -894,24 +894,14 @@ const createPayoutRecord = async ({
 
   const [existingByPayment, existingByReference] = await Promise.all([
     paymentId
-      ? (() => {
-          const result = Payout.findOne({ paymentId })
-          return typeof result?.sort === 'function'
-            ? result.sort({ createdAt: -1 })
-            : result
-        })()
+      ? Payout.findOne({ paymentId }).sort({ createdAt: -1 })
       : Promise.resolve(null),
     !paymentId && referenceId
-      ? (() => {
-          const result = Payout.findOne({
-            referenceType,
-            referenceId,
-            provider
-          })
-          return typeof result?.sort === 'function'
-            ? result.sort({ createdAt: -1 })
-            : result
-        })()
+      ? Payout.findOne({
+          referenceType,
+          referenceId,
+          provider
+        }).sort({ createdAt: -1 })
       : Promise.resolve(null)
   ])
 
@@ -1009,11 +999,9 @@ const createPayoutRecord = async ({
     }
 
     const result = Object.keys(fallbackQuery).length
-      ? Payout.findOne(fallbackQuery)
+      ? await Payout.findOne(fallbackQuery).sort({ createdAt: -1 })
       : null
-    return typeof result?.sort === 'function'
-      ? await result.sort({ createdAt: -1 })
-      : await result
+    return result
   }
 }
 
