@@ -916,7 +916,7 @@ const createPayoutRecord = async ({
   ])
 
   if (existingByPayment) {
-    return existingByPayment
+    return await existingByPayment
   }
 
   if (
@@ -925,7 +925,7 @@ const createPayoutRecord = async ({
       existingByReference.status
     )
   ) {
-    return existingByReference
+    return await existingByReference
   }
 
   try {
