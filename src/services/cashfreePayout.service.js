@@ -892,18 +892,18 @@ const createPayoutRecord = async ({
     throw error
   }
 
-  const [existingByPayment, existingByReference] = await Promise.all([
-    paymentId
-      ? Payout.findOne({ paymentId }).sort({ createdAt: -1 })
-      : Promise.resolve(null),
+  const existingByPayment = paymentId
+    ? await Payout.findOne({ paymentId }).sort({ createdAt: -1 })
+    : null
+
+  const existingByReference =
     !paymentId && referenceId
-      ? Payout.findOne({
+      ? await Payout.findOne({
           referenceType,
           referenceId,
           provider
         }).sort({ createdAt: -1 })
-      : Promise.resolve(null)
-  ])
+      : null
 
   if (existingByPayment) {
     return await existingByPayment
@@ -998,10 +998,9 @@ const createPayoutRecord = async ({
       fallbackQuery.provider = provider
     }
 
-    const result = Object.keys(fallbackQuery).length
+    return Object.keys(fallbackQuery).length
       ? await Payout.findOne(fallbackQuery).sort({ createdAt: -1 })
       : null
-    return result
   }
 }
 
