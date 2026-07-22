@@ -829,8 +829,8 @@ const findExistingPayout = async ({
 
   const result = Payout.findOne(query)
   return typeof result?.sort === 'function'
-    ? result.sort({ createdAt: -1 })
-    : result
+    ? await result.sort({ createdAt: -1 })
+    : await result
 }
 
 const deriveRetrySchedule = retryCount => {
@@ -1002,8 +1002,8 @@ const createPayoutRecord = async ({
       ? Payout.findOne(fallbackQuery)
       : null
     return typeof result?.sort === 'function'
-      ? result.sort({ createdAt: -1 })
-      : result
+      ? await result.sort({ createdAt: -1 })
+      : await result
   }
 }
 
@@ -1578,22 +1578,35 @@ const createAutomaticPayoutForPayment = async (
     payout
   })
 
+  const hydratedPayout =
+    payout && payout._id && typeof payout.save === 'function'
+      ? payout
+      : await findExistingPayout({
+          paymentId: payment._id,
+          referenceType: autoMetadata.referenceType || payment.referenceType || null,
+          referenceId: autoMetadata.referenceId || payment.referenceId || null
+        })
+
+  if (!hydratedPayout) {
+    throw new Error('Automatic payout could not be reloaded after creation')
+  }
+
   if (
     (!payee?.cashfreeBeneficiary?.beneId && !payee?.cashfreeBeneId) ||
     payee?.cashfreeBeneficiary?.status !== 'ACTIVE'
   ) {
-    payout.status = 'RETRY_PENDING'
-    payout.failure = buildPayoutFailure({
+    hydratedPayout.status = 'RETRY_PENDING'
+    hydratedPayout.failure = buildPayoutFailure({
       code: 'BENEFICIARY_NOT_FOUND',
       message: 'Payment safe. Transfer pending.',
       reason: 'Payee beneficiary is not active',
       isRetryable: false
     })
-    await payout.save()
-    return payout
+    await hydratedPayout.save()
+    return hydratedPayout
   }
 
-  return startPayoutTransfer(payout, { fetchImpl })
+  return startPayoutTransfer(hydratedPayout, { fetchImpl })
 }
 
 const isPayoutRetryDue = payout => {
