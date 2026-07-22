@@ -934,40 +934,38 @@ const createPayoutRecord = async ({
     constructor: Payout.constructor.name,
     isModel: Payout.prototype instanceof mongoose.Model
   });
-    const [payout] = await Payout.create([
-      
-      {
-        payerId,
-        payeeId,
-        payeeType,
-        paymentId: paymentId || null,
-        referenceType: referenceType || null,
-        referenceId: referenceId || null,
-        amount: Number(normalizeMoney(amount)),
-        currency,
-        provider,
-        cashfree: {
-          beneId: cashfree.beneId || null,
-          transferId: cashfree.transferId || null,
-          referenceId: cashfree.referenceId || null,
-          transferMode: cashfree.transferMode || 'IMPS',
-          utr: cashfree.utr || null,
-          beneficiary: cashfree.beneficiary || {},
-          request: cashfree.request || {},
-          response: cashfree.response || {}
-        },
-        status,
-        failure: failure || buildPayoutFailure({}),
-        retry: {
-          count: retry.count || 0,
-          maxRetry: retry.maxRetry || 3,
-          nextRetryAt: retry.nextRetryAt || null
-        },
-        initiatedAt: new Date(),
-        startedAt: cashfree.transferId ? new Date() : null,
-        lastAttemptAt: cashfree.transferId ? new Date() : null
-      }
-    ])
+    const payout = new Payout({
+      payerId,
+      payeeId,
+      payeeType,
+      paymentId: paymentId || null,
+      referenceType: referenceType || null,
+      referenceId: referenceId || null,
+      amount: Number(normalizeMoney(amount)),
+      currency,
+      provider,
+      cashfree: {
+        beneId: cashfree.beneId || null,
+        transferId: cashfree.transferId || null,
+        referenceId: cashfree.referenceId || null,
+        transferMode: cashfree.transferMode || 'IMPS',
+        utr: cashfree.utr || null,
+        beneficiary: cashfree.beneficiary || {},
+        request: cashfree.request || {},
+        response: cashfree.response || {}
+      },
+      status,
+      failure: failure || buildPayoutFailure({}),
+      retry: {
+        count: retry.count || 0,
+        maxRetry: retry.maxRetry || 3,
+        nextRetryAt: retry.nextRetryAt || null
+      },
+      initiatedAt: new Date(),
+      startedAt: cashfree.transferId ? new Date() : null,
+      lastAttemptAt: cashfree.transferId ? new Date() : null
+    })
+    await payout.save()
     logger.info("[DEBUG] Created payout", {
     constructor: payout?.constructor?.name,
     hasSave: typeof payout?.save,
@@ -1213,10 +1211,29 @@ const startPayoutTransfer = async (
     payoutId: payoutInput?._id?.toString?.(),
     paymentId: payoutInput?.paymentId?.toString?.()
   });
-  let payout =
-    payoutInput && payoutInput._id && typeof payoutInput.save === 'function'
-      ? payoutInput
-      : await getPayoutById(payoutInput)
+  let payout = null
+
+  if (payoutInput && payoutInput._id && typeof payoutInput.save === 'function') {
+    payout = payoutInput
+  } else if (payoutInput && mongoose.Types.ObjectId.isValid(payoutInput)) {
+    payout = await getPayoutById(payoutInput)
+  } else if (payoutInput && typeof payoutInput === 'object') {
+    if (payoutInput._id && mongoose.Types.ObjectId.isValid(payoutInput._id)) {
+      payout = await getPayoutById(payoutInput._id)
+    } else {
+      const lookup = {}
+      if (payoutInput.paymentId) {
+        lookup.paymentId = payoutInput.paymentId
+      } else if (payoutInput.referenceType || payoutInput.referenceId) {
+        if (payoutInput.referenceType) lookup.referenceType = payoutInput.referenceType
+        if (payoutInput.referenceId) lookup.referenceId = payoutInput.referenceId
+      }
+
+      if (Object.keys(lookup).length) {
+        payout = await findExistingPayout(lookup)
+      }
+    }
+  }
 
   if (!payout) {
     const error = new Error('Payout record not found')
