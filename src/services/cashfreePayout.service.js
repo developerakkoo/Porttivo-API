@@ -897,7 +897,7 @@ const createPayoutRecord = async ({
     : null
 
   const existingByReference =
-    !paymentId && referenceId
+    referenceType || referenceId
       ? await Payout.findOne({
           referenceType,
           referenceId,
@@ -992,7 +992,9 @@ const createPayoutRecord = async ({
     const fallbackQuery = {}
     if (paymentId) {
       fallbackQuery.paymentId = paymentId
-    } else if (referenceType || referenceId) {
+    }
+
+    if (referenceType || referenceId) {
       if (referenceType) fallbackQuery.referenceType = referenceType
       if (referenceId) fallbackQuery.referenceId = referenceId
       fallbackQuery.provider = provider
