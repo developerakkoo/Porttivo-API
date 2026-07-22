@@ -29,6 +29,8 @@ const toObjectIdString = value => {
   return value.toString ? value.toString() : String(value)
 }
 
+const makePaymentReferenceId = () => `PAY-${Date.now()}-${nanoid(10)}`
+
 const sanitizePaymentMetadata = (metadata = {}) => {
   if (!metadata || typeof metadata !== 'object') {
     return {}
@@ -242,14 +244,14 @@ const initiatePaymentSession = async (req, res, next) => {
   try {
     const body = req.body || {}
     const provider = normalizeProvider(body.provider)
-    const referenceType = String(body.referenceType || '').trim()
-    const referenceId = String(body.referenceId || '').trim()
+    const referenceType = 'PAYMENT_SESSION'
+    const referenceId = makePaymentReferenceId()
     const purpose = String(body.purpose || '').trim()
     const currency = String(body.currency || 'INR')
       .trim()
       .toUpperCase()
     const amount = normalizeMoney(body.amount)
-    const payer = resolvePayerProfile(body.payer || {}, req.user)
+    const payer = resolvePayerProfile({}, req.user)
     const metadata =
       body.metadata && typeof body.metadata === 'object' ? body.metadata : {}
     const successUrl = body.successUrl || null
@@ -267,20 +269,6 @@ const initiatePaymentSession = async (req, res, next) => {
       return res.status(500).json({
         success: false,
         message: `${gatewayConfig?.displayName || provider} is not configured`
-      })
-    }
-
-    if (!referenceType) {
-      return res.status(400).json({
-        success: false,
-        message: 'referenceType is required'
-      })
-    }
-
-    if (!referenceId) {
-      return res.status(400).json({
-        success: false,
-        message: 'referenceId is required'
       })
     }
 

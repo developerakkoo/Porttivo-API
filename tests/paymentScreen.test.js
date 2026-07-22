@@ -119,9 +119,7 @@ const paymentTests = [
           provider: 'PAYU',
           amount: 1250,
           currency: 'INR',
-          purpose: 'Invoice payment',
-          referenceType: 'INVOICE',
-          referenceId: 'INV-1001'
+          purpose: 'Invoice payment'
         }
       }
       const res = createMockRes()
@@ -133,6 +131,9 @@ const paymentTests = [
       assert.equal(res.statusCode, 200)
       assert.equal(res.body.data.payment.provider, 'PAYU')
       assert.equal(res.body.data.payment.status, 'PENDING')
+      assert.equal(res.body.data.payment.referenceType, 'PAYMENT_SESSION')
+      assert.equal(res.body.data.payment.referenceId.startsWith('PAY-'), true)
+      assert.equal(res.body.data.payment.payer.userId, 'payer-1')
       assert.equal(res.body.data.payment.paymentRequest.method, 'POST')
       assert.equal(res.body.data.payment.paymentRequest.fields.txnid.startsWith('PAYU-'), true)
       assert.ok(res.body.data.payment.paymentRequest.fields.hash)
@@ -209,9 +210,7 @@ const paymentTests = [
           provider: 'CASHFREE',
           amount: 1500,
           currency: 'INR',
-          purpose: 'Invoice payment',
-          referenceType: 'INVOICE',
-          referenceId: 'INV-2001'
+          purpose: 'Invoice payment'
         }
       }
       const res = createMockRes()
@@ -223,6 +222,8 @@ const paymentTests = [
 
         assert.equal(res.statusCode, 200)
         assert.equal(res.body.data.payment.provider, 'CASHFREE')
+        assert.equal(res.body.data.payment.referenceType, 'PAYMENT_SESSION')
+        assert.equal(res.body.data.payment.referenceId.startsWith('PAY-'), true)
         assert.equal(res.body.data.payment.cashfree.order_id, 'CF-ORDER-2')
         assert.equal(res.body.data.payment.cashfree.payment_session_id, 'CF-SESSION-2')
         assert.equal(res.body.data.payment.paymentRequest.fields.payment_session_id, 'CF-SESSION-2')
