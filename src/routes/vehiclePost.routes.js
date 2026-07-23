@@ -7,6 +7,8 @@ const {
   getMyPosts,
   getById,
   cancelPost,
+  pausePost,
+  resumePost,
   updateAvailability,
   addVehicleToPost,
 } = require('../controllers/vehiclePost.controller');
@@ -19,6 +21,18 @@ router.use(authenticate);
  * Create a vehicle availability post (transporter)
  */
 router.post('/', createAvailability);
+/**
+ * PUT /api/vehicle-posts/:id/pause
+ * Pause an active post (owner only) — hidden from marketplace search
+ */
+router.put('/:id/pause', pausePost);
+
+/**
+ * PUT /api/vehicle-posts/:id/resume
+ * Resume a paused post (owner only)
+ */
+router.put('/:id/resume', resumePost);
+
 /**
  * PUT /api/vehicle-posts/:id
  * Update an availability post (owner only)

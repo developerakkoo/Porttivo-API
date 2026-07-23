@@ -276,6 +276,23 @@ const createAvailability = async (req, res, next) => {
     }
     const validatedVehicleType = typeCheck.name
 
+    // One post per vehicle type: a transporter manages a single live listing
+    // (draft/active/paused) per type and edits it instead of stacking posts.
+    const existingForType = await VehicleRouteAvailability.findOne({
+      transporterId,
+      vehicleType: validatedVehicleType,
+      status: { $in: ['draft', 'active', 'paused'] }
+    })
+      .select('_id status')
+      .lean()
+    if (existingForType) {
+      return res.status(409).json({
+        success: false,
+        message: `You already have a ${existingForType.status} availability post for ${validatedVehicleType}. Edit that post instead of creating a new one.`,
+        data: { existingPostId: existingForType._id }
+      })
+    }
+
     // Parse dates
     if (!availableFrom) {
       return res
@@ -1228,6 +1245,131 @@ const cancelPost = async (req, res, next) => {
   }
 }
 
+/** Owner-facing serialized post (shared by pause/resume). */
+function buildOwnerPostResponse(populated) {
+  return {
+    id: populated._id,
+    transporter: populated.transporterId
+      ? {
+          id: populated.transporterId._id || populated.transporterId,
+          name: populated.transporterId.name || null,
+          company: populated.transporterId.company || null,
+          mobile: populated.transporterId.mobile || null,
+          status: populated.transporterId.status || null
+        }
+      : null,
+    vehicle: populated.vehicleId
+      ? {
+          id: populated.vehicleId._id,
+          vehicleNumber: populated.vehicleId.vehicleNumber || null,
+          vehicleType:
+            populated.vehicleId.vehicleType || populated.vehicleType,
+          trailerType: populated.vehicleId.trailerType || null
+        }
+      : null,
+    vehicleType: populated.vehicleType,
+    origin: populated.origin,
+    ...postDestinationApiFields(populated),
+    quantity: populated.quantity,
+    slotsLeft: populated.slotsLeft,
+    pricePerVehicle: populated.pricePerVehicle || null,
+    availableFrom: populated.availableFrom,
+    availableTo: populated.availableTo,
+    note: populated.note,
+    status: populated.status,
+    createdAt: populated.createdAt,
+    updatedAt: populated.updatedAt,
+    lastEdited: populated.updatedAt
+  }
+}
+
+/**
+ * Transition an owner's post between paused <-> active and emit the update.
+ * Shared implementation for PUT /:id/pause and PUT /:id/resume.
+ */
+const setPostPausedState = async (req, res, next, { pause }) => {
+  try {
+    const transporterId = getTransporterId(req.user)
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message:
+          'Only transporters and authorized company users can manage posts'
+      })
+    }
+    const { id } = req.params
+
+    const post = await VehicleRouteAvailability.findById(id)
+    if (!post) {
+      return res.status(404).json({ success: false, message: 'Post not found' })
+    }
+    if (post.transporterId.toString() !== transporterId) {
+      return res.status(403).json({ success: false, message: 'Not authorized' })
+    }
+
+    if (pause) {
+      if (post.status !== 'active') {
+        return res.status(400).json({
+          success: false,
+          message: `Only active posts can be paused (current status: ${post.status})`
+        })
+      }
+      post.status = 'paused'
+    } else {
+      if (post.status !== 'paused') {
+        return res.status(400).json({
+          success: false,
+          message: `Only paused posts can be resumed (current status: ${post.status})`
+        })
+      }
+      if (post.availableTo && post.availableTo < new Date()) {
+        post.status = 'expired'
+        await post.save()
+        return res.status(400).json({
+          success: false,
+          message: 'This post has expired and cannot be resumed. Edit the dates to relist it.'
+        })
+      }
+      post.status =
+        (await countLiveAssignments(post._id)) > 0 ? 'active' : 'draft'
+    }
+    await post.save()
+
+    const populated = await VehicleRouteAvailability.findById(post._id)
+      .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
+      .populate('transporterId', 'name company mobile status')
+      .lean()
+
+    const response = buildOwnerPostResponse(populated)
+
+    try {
+      const io = getIO()
+      io.emit('vehiclePost:updated', { post: response })
+    } catch (err) {
+      console.warn(
+        'Socket emit failed (vehiclePost:updated):',
+        err.message || err
+      )
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: pause ? 'Post paused' : 'Post resumed',
+      data: { post: response }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
+// Pause an active post (owner only): hidden from marketplace search
+const pausePost = (req, res, next) =>
+  setPostPausedState(req, res, next, { pause: true })
+
+// Resume a paused post (owner only): back to active (or draft if no vehicles)
+const resumePost = (req, res, next) =>
+  setPostPausedState(req, res, next, { pause: false })
+
 // Add one or more vehicles to a post (listing owner only; batch in a transaction)
 const addVehicleToPost = async (req, res, next) => {
   try {
@@ -1262,7 +1404,7 @@ const addVehicleToPost = async (req, res, next) => {
     }
 
     const post = await VehicleRouteAvailability.findById(id)
-    if (!post || !['draft', 'active'].includes(post.status)) {
+    if (!post || !['draft', 'active', 'paused'].includes(post.status)) {
       return res.status(400).json({
         success: false,
         message: 'Post not found or cannot accept vehicles in its current state'
@@ -1473,6 +1615,8 @@ module.exports = {
   getMyPosts,
   getById,
   cancelPost,
+  pausePost,
+  resumePost,
   updateAvailability,
   addVehicleToPost
 }
