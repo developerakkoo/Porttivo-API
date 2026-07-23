@@ -18,8 +18,7 @@ const {
   cashfreePayoutWebhookSecret,
   cashfreePayoutApiBaseUrl,
   cashfreePayoutWebhookUrl,
-  cashfreePayoutWebhookStrictValidation,
-  cashfreePayoutBankEncryptionSecret
+  cashfreePayoutWebhookStrictValidation
 } = require('../config/env')
 
 const PAYEE_MODELS = [
@@ -121,51 +120,29 @@ const buildTransferRemarks = ({
   return sanitizeTransferRemarks(parts.join(' '), fallback)
 }
 
-const getEncryptionKey = () => {
-  const rawKey = String(
-    cashfreePayoutBankEncryptionSecret || cashfreePayoutClientSecret || ''
-  ).trim()
-  if (!rawKey) {
-    throw new Error('Payout encryption key is not configured')
-  }
-  return crypto.createHash('sha256').update(rawKey).digest()
-}
-
-const encryptSensitiveValue = value => {
-  const text = String(value || '').trim()
-  if (!text) return null
-
-  const iv = crypto.randomBytes(12)
-  const cipher = crypto.createCipheriv('aes-256-gcm', getEncryptionKey(), iv)
-  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
-
-  return Buffer.concat([iv, tag, encrypted]).toString('base64')
-}
-
-const decryptSensitiveValue = value => {
-  const text = String(value || '').trim()
-  if (!text) return null
-
-  const payload = Buffer.from(text, 'base64')
-  if (payload.length <= 28) {
-    return null
+// Bank account details are intentionally never persisted in our database.
+// They are sent to Cashfree only, and Cashfree remains the source of truth.
+// Cashfree responses echo the full bank account number, so strip instrument
+// details before storing any provider response on the payee.
+const sanitizeBeneficiaryProviderResponse = payload => {
+  if (!payload || typeof payload !== 'object') {
+    return payload || {}
   }
 
-  const iv = payload.subarray(0, 12)
-  const authTag = payload.subarray(12, 28)
-  const encrypted = payload.subarray(28)
+  const sanitized = Array.isArray(payload) ? [...payload] : { ...payload }
+  delete sanitized.beneficiary_instrument_details
+  delete sanitized.bank_account_number
+  delete sanitized.bank_ifsc
+  delete sanitized.bankAccount
+  delete sanitized.ifsc
 
-  const decipher = crypto.createDecipheriv(
-    'aes-256-gcm',
-    getEncryptionKey(),
-    iv
-  )
-  decipher.setAuthTag(authTag)
+  for (const key of ['data', 'raw']) {
+    if (sanitized[key] && typeof sanitized[key] === 'object') {
+      sanitized[key] = sanitizeBeneficiaryProviderResponse(sanitized[key])
+    }
+  }
 
-  return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString(
-    'utf8'
-  )
+  return sanitized
 }
 
 const summarizePayee = payee => {
@@ -176,31 +153,6 @@ const summarizePayee = payee => {
     name: payee.name || payee.company || payee.pumpName || null,
     email: payee.email || null,
     mobile: payee.mobile || null
-  }
-}
-
-const getLocalBeneficiaryRecord = payee => {
-  if (!payee?.cashfreeBeneficiary) {
-    return null
-  }
-
-  return payee.cashfreeBeneficiary
-}
-
-const resolveStoredBankDetails = (payee = {}) => {
-  const beneficiary = getLocalBeneficiaryRecord(payee) || {}
-  const bankAccount =
-    decryptSensitiveValue(beneficiary.bankAccountEncrypted) ||
-    decryptSensitiveValue(payee.bankAccountEncrypted) ||
-    null
-  const ifsc =
-    decryptSensitiveValue(beneficiary.ifscEncrypted) ||
-    decryptSensitiveValue(payee.ifscEncrypted) ||
-    null
-
-  return {
-    bankAccount,
-    ifsc
   }
 }
 
@@ -557,11 +509,11 @@ const setPayeeBeneficiaryOnModel = async ({
     email: bankDetails.email || payee.email || null,
     phone: bankDetails.phone || payee.mobile || null,
     status: 'ACTIVE',
-    bankAccountEncrypted: encryptSensitiveValue(bankDetails.bankAccount),
-    ifscEncrypted: encryptSensitiveValue(bankDetails.ifsc),
     bankAccountLast4: extractAccountLast4(bankDetails.bankAccount),
     address: address || {},
-    providerResponse: beneficiaryResponse || {},
+    providerResponse: sanitizeBeneficiaryProviderResponse(
+      beneficiaryResponse || {}
+    ),
     removalResponse: null,
     verifiedAt: now,
     deletedAt: null,
@@ -586,7 +538,9 @@ const setPayeeBeneficiaryDeletedOnModel = async ({
     ...currentBeneficiary,
     beneId: currentBeneficiary.beneId || null,
     status: 'DELETED',
-    removalResponse: beneficiaryResponse || {},
+    removalResponse: sanitizeBeneficiaryProviderResponse(
+      beneficiaryResponse || {}
+    ),
     deletedAt: now,
     updatedAt: now
   }
@@ -693,10 +647,15 @@ const registerBeneficiary = async (
     throw error
   }
 
-  const beneId =
-    payee.cashfreeBeneficiary?.beneId ||
-    payee.cashfreeBeneId ||
-    buildBeneficiaryId()
+  // Cashfree does not allow reusing a deleted beneficiary id, so only reuse
+  // the stored id while the beneficiary is still active.
+  const previousBeneficiaryDeleted =
+    payee.cashfreeBeneficiary?.status === 'DELETED'
+  const beneId = previousBeneficiaryDeleted
+    ? buildBeneficiaryId()
+    : payee.cashfreeBeneficiary?.beneId ||
+      payee.cashfreeBeneId ||
+      buildBeneficiaryId()
   const beneficiaryResponse = await addCashfreeBeneficiary(
     { beneId, name, email, phone, bankAccount, ifsc, address: resolvedAddress },
     fetchImpl
@@ -748,16 +707,13 @@ const getRegisteredBeneficiary = async (
     resolvedPayee = await findPayeeRecordByBeneficiaryId(resolvedBeneficiaryId)
   }
 
-  const storedBankDetails =
-    resolvedPayee.payee && !resolvedBeneficiaryId
-      ? resolveStoredBankDetails(resolvedPayee.payee)
-      : { bankAccount: bankAccountNumber, ifsc: bankIfsc }
-
+  // Bank details are not stored locally; the beneficiary is always looked up
+  // at Cashfree by beneficiary id (or explicit account details, if provided).
   const remoteBeneficiary = await getCashfreeBeneficiary(
     {
       beneficiaryId: resolvedBeneficiaryId || beneficiaryId,
-      bankAccountNumber: storedBankDetails.bankAccount || bankAccountNumber,
-      bankIfsc: storedBankDetails.ifsc || bankIfsc
+      bankAccountNumber,
+      bankIfsc
     },
     fetchImpl
   )
@@ -1964,8 +1920,6 @@ module.exports = {
   buildPayoutStatusMessage,
   createAutomaticPayoutForPayment,
   createPayoutRecord,
-  encryptSensitiveValue,
-  decryptSensitiveValue,
   findExistingPayout,
   findPayeeRecordById,
   findPayeeRecordByBeneficiaryId,

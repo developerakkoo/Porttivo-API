@@ -1,11 +1,6 @@
-const crypto = require('node:crypto')
 const mongoose = require('mongoose')
 const Payout = require('../models/Payout')
 const PaymentSession = require('../models/PaymentSession')
-const {
-  cashfreePayoutBankEncryptionSecret,
-  cashfreePayoutClientSecret
-} = require('../config/env')
 const {
   buildPayoutStatusMessage,
   createAutomaticPayoutForPayment,
@@ -30,41 +25,6 @@ const safeObjectIdString = (value) => {
   if (typeof value === 'string') return value
   if (value._id) return value._id.toString()
   return value.toString ? value.toString() : String(value)
-}
-
-const getBeneficiaryEncryptionKey = () => {
-  const rawKey = String(
-    cashfreePayoutBankEncryptionSecret || cashfreePayoutClientSecret || ''
-  ).trim()
-  if (!rawKey) {
-    return null
-  }
-
-  return crypto.createHash('sha256').update(rawKey).digest()
-}
-
-const decryptSensitiveValue = (value) => {
-  const text = String(value || '').trim()
-  if (!text) return null
-
-  const key = getBeneficiaryEncryptionKey()
-  if (!key) return null
-
-  const payload = Buffer.from(text, 'base64')
-  if (payload.length <= 28) {
-    return null
-  }
-
-  try {
-    const iv = payload.subarray(0, 12)
-    const authTag = payload.subarray(12, 28)
-    const encrypted = payload.subarray(28)
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv)
-    decipher.setAuthTag(authTag)
-    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8')
-  } catch (error) {
-    return null
-  }
 }
 
 const extractAccountLast4 = (value) => {
@@ -161,29 +121,54 @@ const resolveSelfManagedPayeeId = (req, requestedPayeeId) => {
   return actorId
 }
 
-const serializeBeneficiaryForFrontend = (payee = {}) => {
+// Bank details are never stored in our database; they live at Cashfree only.
+// Cashfree responses come in different envelopes ({data: {...}} or flat).
+const unwrapRemoteBeneficiary = (payload) => {
+  if (!payload || typeof payload !== 'object') {
+    return {}
+  }
+
+  if (
+    payload.data &&
+    typeof payload.data === 'object' &&
+    (payload.data.beneficiary_id ||
+      payload.data.beneficiary_name ||
+      payload.data.beneficiary_status ||
+      payload.data.beneficiary_instrument_details)
+  ) {
+    return payload.data
+  }
+
+  return payload
+}
+
+const serializeBeneficiaryForFrontend = (payee = {}, remoteBeneficiary = null) => {
   const beneficiary = payee.cashfreeBeneficiary || {}
-  const decryptedBankAccount =
-    decryptSensitiveValue(beneficiary.bankAccountEncrypted) || null
+  const remote = unwrapRemoteBeneficiary(remoteBeneficiary)
+  const instrument = remote.beneficiary_instrument_details || {}
+  const contact = remote.beneficiary_contact_details || {}
   const last4 =
+    extractAccountLast4(instrument.bank_account_number) ||
     beneficiary.bankAccountLast4 ||
-    extractAccountLast4(decryptedBankAccount)
-  const ifsc =
-    decryptSensitiveValue(beneficiary.ifscEncrypted) ||
     null
+  const ifsc = String(instrument.bank_ifsc || '').trim().toUpperCase() || null
 
   return {
     name:
+      remote.beneficiary_name ||
       beneficiary.name ||
       payee.name ||
       payee.company ||
       payee.pumpName ||
       null,
-    verificationStatus: beneficiary.status || null,
+    verificationStatus:
+      remote.beneficiary_status || beneficiary.status || null,
     maskedAccountNumber: formatMaskedAccountNumber(last4),
     ifsc,
-    phone: beneficiary.phone || payee.mobile || null,
-    createdAt: beneficiary.createdAt || payee.createdAt || null,
+    phone:
+      contact.beneficiary_phone || beneficiary.phone || payee.mobile || null,
+    createdAt:
+      remote.added_on || beneficiary.createdAt || payee.createdAt || null,
     updatedAt: beneficiary.updatedAt || payee.updatedAt || null,
     verifiedAt: beneficiary.verifiedAt || null,
     deletedAt: beneficiary.deletedAt || null
@@ -227,11 +212,26 @@ const createBeneficiary = async (req, res, next) => {
       req.fetch || global.fetch
     )
 
+    // Build the response from the Cashfree result plus the submitted values
+    // (Cashfree is the only place the full bank details exist).
+    const remoteBeneficiary = {
+      ...unwrapRemoteBeneficiary(
+        result.beneficiaryResponse?.data || result.beneficiaryResponse?.raw
+      ),
+      beneficiary_instrument_details: {
+        bank_account_number: bankAccount,
+        bank_ifsc: ifsc
+      }
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Beneficiary created successfully',
       data: {
-        beneficiary: serializeBeneficiaryForFrontend(result.payee),
+        beneficiary: serializeBeneficiaryForFrontend(
+          result.payee,
+          remoteBeneficiary
+        ),
         validation: result.validation,
         verificationWarning: result.verificationWarning
       }
@@ -280,12 +280,29 @@ const getBeneficiary = async (req, res, next) => {
     const resolvedPayeeId =
       safeObjectIdString(localLookup.payee?._id) || payeeId
 
+    // No beneficiary registered yet (nothing to look up at Cashfree).
+    const localBeneId =
+      localLookup.payee?.cashfreeBeneficiary?.beneId ||
+      localLookup.payee?.cashfreeBeneId ||
+      null
+    if (
+      localLookup.payee &&
+      !localBeneId &&
+      !payload.beneficiaryId &&
+      !(payload.bankAccountNumber && payload.bankIfsc)
+    ) {
+      return res
+        .status(404)
+        .json({ success: false, message: 'Beneficiary not found' })
+    }
+
     const result = await getRegisteredBeneficiary(
       { ...payload, payeeId: resolvedPayeeId },
       req.fetch || global.fetch
     )
     const normalizedBeneficiary = serializeBeneficiaryForFrontend(
-      result.payee || localLookup.payee || {}
+      result.payee || localLookup.payee || {},
+      result.beneficiary
     )
 
     return res.status(200).json({
@@ -343,7 +360,8 @@ const removeBeneficiary = async (req, res, next) => {
       req.fetch || global.fetch
     )
     const normalizedBeneficiary = serializeBeneficiaryForFrontend(
-      result.payee || localLookup.payee || {}
+      result.payee || localLookup.payee || {},
+      result.beneficiary
     )
 
     return res.status(200).json({

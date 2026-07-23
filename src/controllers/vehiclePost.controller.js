@@ -3,6 +3,10 @@ const Vehicle = require('../models/Vehicle')
 const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
 const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
 const VehicleBooking = require('../models/VehicleBooking')
+const {
+  VehiclePostActivity,
+  POST_ACTIVITY_ACTIONS
+} = require('../models/VehiclePostActivity')
 const { getTransporterId } = require('../middleware/permission.middleware')
 const { getIO } = require('../services/socket.service')
 const {
@@ -400,6 +404,15 @@ const createAvailability = async (req, res, next) => {
       availableTo: toDate,
       note: note || null,
       status: 'draft'
+    })
+
+    // 🧾 Activity: listing created
+    await VehiclePostActivity.logAction({
+      postId: post._id,
+      action: POST_ACTIVITY_ACTIONS.CREATED,
+      performedBy: transporterId,
+      details: { vehicleType: validatedVehicleType, quantity: totalQty },
+      notes: 'Listing created'
     })
 
     // Populate transporter and vehicle for frontend-friendly response
@@ -891,6 +904,15 @@ const updateAvailability = async (req, res, next) => {
     if (post.transporterId.toString() !== transporterId)
       return res.status(403).json({ success: false, message: 'Not authorized' })
 
+    // 🧾 Snapshot before-state for activity diffing
+    const beforeQuantity = post.quantity
+    const beforeStatus = post.status
+    const beforeRoutes = (post.routes || []).map(r => ({
+      destination: String(r?.destination?.formattedAddress || '').trim(),
+      exportRate: r?.exportRate ?? null,
+      importRate: r?.importRate ?? null
+    }))
+
     // Update fields if provided
     if (vehicleType !== undefined) {
       const typeCheck = await assertVehicleTypeAllowed(vehicleType, {
@@ -1103,6 +1125,95 @@ const updateAvailability = async (req, res, next) => {
       // non-fatal
     }
 
+    // 🧾 Activity: diff before/after and record granular events
+    try {
+      const events = []
+      if (beforeQuantity !== post.quantity) {
+        events.push({
+          action: POST_ACTIVITY_ACTIONS.QUANTITY_CHANGED,
+          details: { from: beforeQuantity, to: post.quantity },
+          notes: `Quantity changed: ${beforeQuantity} → ${post.quantity}`
+        })
+      }
+
+      const afterRoutes = (post.routes || []).map(r => ({
+        destination: String(r?.destination?.formattedAddress || '').trim(),
+        exportRate: r?.exportRate ?? null,
+        importRate: r?.importRate ?? null
+      }))
+      const beforeByDest = new Map(
+        beforeRoutes.map(r => [r.destination.toLowerCase(), r])
+      )
+      const afterByDest = new Map(
+        afterRoutes.map(r => [r.destination.toLowerCase(), r])
+      )
+      let ratesChanged = 0
+      for (const [key, after] of afterByDest) {
+        const before = beforeByDest.get(key)
+        if (!before) {
+          events.push({
+            action: POST_ACTIVITY_ACTIONS.ROUTE_ADDED,
+            details: { destination: after.destination },
+            notes: `Route added: ${after.destination}`
+          })
+        } else if (
+          before.exportRate !== after.exportRate ||
+          before.importRate !== after.importRate
+        ) {
+          ratesChanged += 1
+        }
+      }
+      for (const [key, before] of beforeByDest) {
+        if (!afterByDest.has(key)) {
+          events.push({
+            action: POST_ACTIVITY_ACTIONS.ROUTE_REMOVED,
+            details: { destination: before.destination },
+            notes: `Route removed: ${before.destination}`
+          })
+        }
+      }
+      if (ratesChanged > 0) {
+        events.push({
+          action: POST_ACTIVITY_ACTIONS.RATES_UPDATED,
+          details: { count: ratesChanged },
+          notes: `${ratesChanged} route${ratesChanged === 1 ? '' : 's'} updated`
+        })
+      }
+
+      if (beforeStatus !== post.status) {
+        if (post.status === 'active') {
+          events.push({
+            action: POST_ACTIVITY_ACTIONS.ACTIVATED,
+            notes: 'Listing activated'
+          })
+        } else if (post.status === 'fulfilled') {
+          events.push({
+            action: POST_ACTIVITY_ACTIONS.FULFILLED,
+            notes: 'Listing fully booked'
+          })
+        }
+      }
+
+      if (events.length === 0) {
+        events.push({
+          action: POST_ACTIVITY_ACTIONS.UPDATED,
+          notes: 'Listing updated'
+        })
+      }
+
+      for (const ev of events) {
+        await VehiclePostActivity.logAction({
+          postId: post._id,
+          action: ev.action,
+          performedBy: transporterId,
+          details: ev.details || {},
+          notes: ev.notes || null
+        })
+      }
+    } catch (e) {
+      // non-fatal: activity logging must not break updates
+    }
+
     const populated = await VehicleRouteAvailability.findById(post._id)
       .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
       .populate('transporterId', 'name company mobile status')
@@ -1183,6 +1294,14 @@ const cancelPost = async (req, res, next) => {
 
     post.status = 'cancelled'
     await post.save()
+
+    // 🧾 Activity: listing cancelled
+    await VehiclePostActivity.logAction({
+      postId: post._id,
+      action: POST_ACTIVITY_ACTIONS.CANCELLED,
+      performedBy: transporterId,
+      notes: 'Listing cancelled'
+    })
 
     // Populate for response & emit socket event
     const populated = await VehicleRouteAvailability.findById(post._id)
@@ -1334,6 +1453,16 @@ const setPostPausedState = async (req, res, next, { pause }) => {
         (await countLiveAssignments(post._id)) > 0 ? 'active' : 'draft'
     }
     await post.save()
+
+    // 🧾 Activity: pause / resume
+    await VehiclePostActivity.logAction({
+      postId: post._id,
+      action: pause
+        ? POST_ACTIVITY_ACTIONS.PAUSED
+        : POST_ACTIVITY_ACTIONS.RESUMED,
+      performedBy: transporterId,
+      notes: pause ? 'Listing paused' : 'Listing resumed'
+    })
 
     const populated = await VehicleRouteAvailability.findById(post._id)
       .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
@@ -1550,6 +1679,25 @@ const addVehicleToPost = async (req, res, next) => {
         justPublished = true
       }
 
+      // 🧾 Activity: vehicle(s) added (+ activation if it just went live)
+      await VehiclePostActivity.logAction({
+        postId: post._id,
+        action: POST_ACTIVITY_ACTIONS.VEHICLE_ADDED,
+        performedBy: viewerId,
+        details: { count: uniqueIds.length },
+        notes: `${uniqueIds.length} vehicle${
+          uniqueIds.length === 1 ? '' : 's'
+        } added`
+      })
+      if (justPublished) {
+        await VehiclePostActivity.logAction({
+          postId: post._id,
+          action: POST_ACTIVITY_ACTIONS.ACTIVATED,
+          performedBy: viewerId,
+          notes: 'Listing activated'
+        })
+      }
+
       const populated = await VehicleRouteAvailability.findById(post._id)
         .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
         .populate('transporterId', 'name company mobile status')
@@ -1609,6 +1757,61 @@ const addVehicleToPost = async (req, res, next) => {
   }
 }
 
+// Get the activity timeline for a listing (owner only)
+const getPostActivity = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user)
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporters and authorized company users can view activity'
+      })
+    }
+    const { id } = req.params
+
+    const post = await VehicleRouteAvailability.findById(id).select(
+      'transporterId'
+    )
+    if (!post) {
+      return res.status(404).json({ success: false, message: 'Post not found' })
+    }
+    if (post.transporterId.toString() !== transporterId) {
+      return res.status(403).json({ success: false, message: 'Not authorized' })
+    }
+
+    const activities = await VehiclePostActivity.find({ postId: id })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .populate('performedBy', 'name company')
+      .lean()
+
+    const data = activities.map(a => ({
+      id: a._id,
+      action: a.action,
+      performedBy: a.performedBy
+        ? {
+            id: a.performedBy._id || a.performedBy,
+            name: a.performedBy.name || null,
+            company: a.performedBy.company || null
+          }
+        : null,
+      details: a.details || {},
+      beforeValue: a.beforeValue ?? null,
+      afterValue: a.afterValue ?? null,
+      notes: a.notes || null,
+      source: a.source || 'API',
+      createdAt: a.createdAt
+    }))
+
+    return res.status(200).json({
+      success: true,
+      data: { activities: data }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   createAvailability,
   searchAvailability,
@@ -1618,5 +1821,6 @@ module.exports = {
   pausePost,
   resumePost,
   updateAvailability,
-  addVehicleToPost
+  addVehicleToPost,
+  getPostActivity
 }

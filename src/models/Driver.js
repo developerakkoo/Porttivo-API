@@ -79,14 +79,7 @@ const driverSchema = new mongoose.Schema(
         trim: true,
         default: null,
       },
-      bankAccountEncrypted: {
-        type: String,
-        default: null,
-      },
-      ifscEncrypted: {
-        type: String,
-        default: null,
-      },
+      // Full bank account and IFSC are stored at Cashfree only, never here.
       bankAccountLast4: {
         type: String,
         trim: true,

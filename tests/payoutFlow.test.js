@@ -306,7 +306,11 @@ const payoutTests = [
           payeeDoc.cashfreeBeneficiary.providerResponse.data.beneficiary_id,
           result.beneId
         )
-        assert.ok(payeeDoc.cashfreeBeneficiary.bankAccountEncrypted)
+        // Bank details must never be persisted locally; only the last 4
+        // digits are kept for masked display. Cashfree holds the full data.
+        assert.equal(payeeDoc.cashfreeBeneficiary.bankAccountEncrypted, undefined)
+        assert.equal(payeeDoc.cashfreeBeneficiary.ifscEncrypted, undefined)
+        assert.equal(payeeDoc.cashfreeBeneficiary.bankAccountLast4, '7890')
       } finally {
         global.fetch = originalFetch
       }

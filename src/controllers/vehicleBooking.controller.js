@@ -13,6 +13,10 @@ const {
   VehicleBookingAudit,
   BOOKING_AUDIT_ACTIONS
 } = require('../models/VehicleBookingAudit')
+const {
+  VehiclePostActivity,
+  POST_ACTIVITY_ACTIONS
+} = require('../models/VehiclePostActivity')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const { buildChatMessageSocketPayload } = require('../utils/marketplaceChatPayload')
 const {
@@ -78,6 +82,14 @@ async function markPostFulfilledIfInventoryExhausted(postId, session) {
     if (post.status !== 'fulfilled') {
       post.status = 'fulfilled'
       await post.save(session ? { session } : undefined)
+      // 🧾 Activity: listing fully booked (system-driven by a confirmed booking)
+      await VehiclePostActivity.logAction({
+        postId: post._id,
+        action: POST_ACTIVITY_ACTIONS.FULFILLED,
+        performedBy: null,
+        source: 'SYSTEM',
+        notes: 'Listing fully booked'
+      })
     }
   } else if (post.slotsLeft > 0 && post.status === 'fulfilled') {
     post.status = 'active'

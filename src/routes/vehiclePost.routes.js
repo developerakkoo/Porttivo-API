@@ -11,6 +11,7 @@ const {
   resumePost,
   updateAvailability,
   addVehicleToPost,
+  getPostActivity,
 } = require('../controllers/vehiclePost.controller');
 
 // All endpoints require authentication
@@ -50,6 +51,12 @@ router.get('/', searchAvailability);
  * Get posts created by the authenticated transporter
  */
 router.get('/mine', getMyPosts);
+
+/**
+ * GET /api/vehicle-posts/:id/activity
+ * Activity timeline for a listing (owner only)
+ */
+router.get('/:id/activity', getPostActivity);
 
 /**
  * GET /api/vehicle-posts/:id
