@@ -68,6 +68,18 @@ const transporterSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Aggregate rating shown on marketplace quote cards. Null until rated.
+    rating: {
+      type: Number,
+      default: null,
+      min: 0,
+      max: 5,
+    },
+    ratingCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     cashfreeBeneId: {
       type: String,
       trim: true,

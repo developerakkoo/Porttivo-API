@@ -5,6 +5,7 @@ const {
   createTrip,
   createTripBatch,
   getTrips,
+  getMarketplaceAwardedTrips,
   getTripGroup,
   getTripById,
   updateTrip,
@@ -72,6 +73,7 @@ router.post('/batch', createTripBatch);
 router.get('/', getTrips);
 router.get('/search', searchTrips);
 router.get('/active', getActiveTrips);
+router.get('/marketplace-awarded', getMarketplaceAwardedTrips);
 router.get('/pending-pod', getPendingPODTrips);
 router.get('/status/:status', getTripsByStatus);
 router.get('/group/:groupId', getTripGroup);

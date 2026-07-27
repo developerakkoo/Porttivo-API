@@ -36,6 +36,9 @@ const marketplacePaymentRoutes = require('./src/routes/marketplacePayment.routes
 const paymentRoutes = require('./src/routes/payment.routes');
 const payoutRoutes = require('./src/routes/payout.routes');
 const messageRoutes = require('./src/routes/message.routes');
+const requirementRoutes = require('./src/routes/requirement.routes');
+const quoteRoutes = require('./src/routes/quote.routes');
+const deviceRoutes = require('./src/routes/device.routes');
 const supportTransporterRoutes = require('./src/routes/supportTransporter.routes');
 const supportCustomerRoutes = require('./src/routes/supportCustomer.routes');
 const { getCustomerDetails, listAllCustomers, getDuplicateCustomers, listCustomersWithTripsAndActivities } = require('./src/controllers/admin.controller');
@@ -142,6 +145,9 @@ app.use('/api/marketplace-payments', marketplacePaymentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/payouts', payoutRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/requirements', requirementRoutes);
+app.use('/api/quotes', quoteRoutes);
+app.use('/api/devices', deviceRoutes);
 
 // 404 handler
 app.use(notFound);

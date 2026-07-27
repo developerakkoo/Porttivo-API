@@ -25,7 +25,11 @@ const MARKETPLACE_CAPABILITIES_BUYER = {
   closeWithoutPod: false,
 };
 
-const isMarketplaceBookingTrip = (trip) => Boolean(trip?.isFromBooking && trip?.bookingId);
+const isMarketplaceBookingTrip = (trip) =>
+  Boolean(
+    (trip?.isFromBooking && trip?.bookingId) ||
+    (trip?.isFromInquiry && trip?.requirementId)
+  );
 
 const isTripSeller = (trip, user) => {
   if (!isMarketplaceBookingTrip(trip)) return false;
@@ -80,6 +84,7 @@ const transporterPartyScopeCondition = (viewerTransporterId) => ({
   $or: [
     { transporterId: viewerTransporterId },
     { isFromBooking: true, customerId: viewerTransporterId },
+    { isFromInquiry: true, customerId: viewerTransporterId },
   ],
 });
 

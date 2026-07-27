@@ -4555,8 +4555,70 @@ const deleteTripDraft = async (req, res, next) => {
   }
 }
 
+/**
+ * Marketplace trips the viewer must execute and start: awarded inquiries and
+ * confirmed bookings still in PLANNED (Ready to Start).
+ * GET /api/trips/marketplace-awarded
+ */
+const getMarketplaceAwardedTrips = async (req, res, next) => {
+  try {
+    const transporterId = getTransporterId(req.user)
+    if (!transporterId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Only transporters can view marketplace trips.'
+      })
+    }
+    if (
+      req.user.userType === 'company-user' &&
+      !hasPermission(req.user, 'viewTrips')
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. You do not have permission to view trips.'
+      })
+    }
+
+    const { page = 1, limit = 20 } = req.query
+    const pageNum = parseInt(page)
+    const limitNum = parseInt(limit)
+    const skip = (pageNum - 1) * limitNum
+
+    const query = {
+      transporterId,
+      status: TRIP_STATUS.PLANNED,
+      $or: [{ isFromInquiry: true }, { isFromBooking: true }]
+    }
+
+    const trips = await Trip.find(query)
+      .populate('vehicleId', 'vehicleNumber trailerType')
+      .populate('driverId', 'name mobile')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+
+    const total = await Trip.countDocuments(query)
+
+    res.json({
+      success: true,
+      data: await serializeTripsWithQueue(trips, {
+        viewerTransporterId: transporterId
+      }),
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   bookCustomerTrip,
+  getMarketplaceAwardedTrips,
   getCustomerTrips,
   getCustomerTripsByCustomer,
   getActiveCustomerTrips,

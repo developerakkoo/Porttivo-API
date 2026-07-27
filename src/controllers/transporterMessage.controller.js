@@ -547,6 +547,215 @@ const searchMessages = async (req, res, next) => {
   }
 };
 
+/* ------------------------------------------------------------------ *
+ * Quote-scoped chat ("Chat with Requester"). Parallel to booking chat *
+ * but threaded by quoteId. Participants = quote.transporterId +       *
+ * requirement.requesterId.                                            *
+ * ------------------------------------------------------------------ */
+
+const Quote = require('../models/Quote');
+const Requirement = require('../models/Requirement');
+const { notifyUser } = require('../services/pushNotification.service');
+
+/** Resolve a quote thread's two participants, or null if the user isn't one. */
+async function resolveQuoteParticipants(quoteId, userId) {
+  const quote = await Quote.findById(quoteId).lean();
+  if (!quote) return { error: 'notfound' };
+  const requirement = await Requirement.findById(quote.requirementId)
+    .select('requesterId ref')
+    .lean();
+  if (!requirement) return { error: 'notfound' };
+
+  const transporterId = quote.transporterId.toString();
+  const requesterId = requirement.requesterId.toString();
+  const uid = String(userId);
+  if (uid !== transporterId && uid !== requesterId) {
+    return { error: 'forbidden' };
+  }
+  const otherPartyId = uid === transporterId ? requesterId : transporterId;
+  return { quote, requirement, otherPartyId };
+}
+
+// POST /api/quotes/:quoteId/messages
+const sendQuoteMessage = async (req, res, next) => {
+  try {
+    const senderId = getTransporterActorId(req.user);
+    if (!senderId) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Only transporter accounts can send messages' });
+    }
+    const { quoteId } = req.params;
+    const { content, messageType, proposedPrice, attachments: attachmentsRaw } = req.body;
+
+    const parts = await resolveQuoteParticipants(quoteId, senderId);
+    if (parts.error === 'notfound') {
+      return res.status(404).json({ success: false, message: 'Quote not found' });
+    }
+    if (parts.error === 'forbidden') {
+      return res.status(403).json({ success: false, message: 'You do not have access to this quote' });
+    }
+
+    const attachments = normalizeAttachmentsInput(attachmentsRaw);
+    if (attachments.length > MAX_CHAT_ATTACHMENTS) {
+      return res.status(400).json({
+        success: false,
+        message: `At most ${MAX_CHAT_ATTACHMENTS} attachments per message`,
+      });
+    }
+    const contentTrim = content != null ? String(content).trim() : '';
+    if (!contentTrim && attachments.length === 0) {
+      return res.status(400).json({ success: false, message: 'content or attachments required' });
+    }
+    if (contentTrim.length > 2000) {
+      return res.status(400).json({ success: false, message: 'Message too long' });
+    }
+
+    const receiverId = parts.otherPartyId;
+    const effectiveType = effectiveChatMessageType(
+      contentTrim,
+      attachments,
+      messageType,
+      proposedPrice
+    );
+
+    const message = await TransporterMessage.create({
+      quoteId,
+      senderId,
+      receiverId,
+      content: contentTrim,
+      messageType: effectiveType,
+      proposedPrice: proposedPrice != null && proposedPrice !== '' ? proposedPrice : null,
+      status: 'DELIVERED',
+      attachments,
+    });
+
+    const populatedMessage = await TransporterMessage.findById(message._id)
+      .populate('senderId', 'name mobile company')
+      .populate('receiverId', 'name mobile')
+      .lean();
+
+    try {
+      const io = getIO();
+      const payload = {
+        quoteId: String(quoteId),
+        message: populatedMessage,
+        senderId: String(senderId),
+        timestamp: new Date(),
+      };
+      io.to(`chat:quote:${quoteId}`).emit('chat:message:new', payload);
+      io.to(`transporter:${receiverId}`).emit('chat:message:new', payload);
+      io.to(`transporter:${receiverId}`).emit('message:new', payload);
+    } catch (err) {
+      console.warn('Socket emit failed (quote chat):', err.message || err);
+    }
+
+    notifyUser({
+      userId: receiverId,
+      userType: 'TRANSPORTER',
+      type: 'QUOTE_MESSAGE',
+      title: populatedMessage?.senderId?.company || populatedMessage?.senderId?.name || 'New message',
+      message: contentTrim || 'Sent an attachment',
+      data: {
+        kind: 'QUOTE_MESSAGE',
+        quoteId: String(quoteId),
+        requirementId: String(parts.requirement._id),
+        ref: parts.requirement.ref || '',
+      },
+    }).catch((e) => console.warn('Quote chat push failed:', e.message || e));
+
+    return res.status(201).json({
+      success: true,
+      message: 'Message sent successfully',
+      data: { message: populatedMessage },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// GET /api/quotes/:quoteId/messages
+const getQuoteConversation = async (req, res, next) => {
+  try {
+    const userId = getTransporterActorId(req.user);
+    if (!userId) {
+      return res
+        .status(403)
+        .json({ success: false, message: 'Only transporter accounts can view messages' });
+    }
+    const { quoteId } = req.params;
+    const { page = 1, limit = 50, afterCreatedAt, afterMessageId } = req.query;
+
+    const parts = await resolveQuoteParticipants(quoteId, userId);
+    if (parts.error === 'notfound') {
+      return res.status(404).json({ success: false, message: 'Quote not found' });
+    }
+    if (parts.error === 'forbidden') {
+      return res.status(403).json({ success: false, message: 'You do not have access to this quote' });
+    }
+
+    await TransporterMessage.updateMany(
+      { quoteId, receiverId: userId, status: { $ne: 'READ' } },
+      { status: 'READ', readAt: new Date() }
+    );
+
+    const messageFilter = { quoteId };
+    let incremental = false;
+    const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
+
+    if (afterMessageId && mongoose.Types.ObjectId.isValid(afterMessageId)) {
+      const anchor = await TransporterMessage.findById(afterMessageId)
+        .select('quoteId createdAt')
+        .lean();
+      if (!anchor || anchor.quoteId?.toString() !== quoteId) {
+        return res.status(400).json({
+          success: false,
+          message: 'afterMessageId does not belong to this quote',
+        });
+      }
+      messageFilter.createdAt = { $gt: anchor.createdAt };
+      incremental = true;
+    } else if (afterCreatedAt) {
+      const d = new Date(afterCreatedAt);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ success: false, message: 'Invalid afterCreatedAt' });
+      }
+      messageFilter.createdAt = { $gt: d };
+      incremental = true;
+    }
+
+    const skip = incremental ? 0 : (Number(page) - 1) * lim;
+    const messages = await TransporterMessage.find(messageFilter)
+      .populate('senderId', 'name mobile company')
+      .populate('receiverId', 'name mobile')
+      .sort({ createdAt: 1 })
+      .skip(skip)
+      .limit(lim)
+      .lean();
+
+    const total = await TransporterMessage.countDocuments({ quoteId });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        messages,
+        incremental,
+        pagination: incremental
+          ? null
+          : {
+              page: Number(page),
+              limit: lim,
+              total,
+              pages: Math.ceil(total / lim),
+            },
+        otherParty: { id: parts.otherPartyId },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   sendMessage,
   uploadChatAttachments,
@@ -556,4 +765,6 @@ module.exports = {
   getUnreadCount,
   deleteMessage,
   searchMessages,
+  sendQuoteMessage,
+  getQuoteConversation,
 };

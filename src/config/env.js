@@ -125,4 +125,12 @@ module.exports = {
   cashfreeWebhookUrl:
     process.env.CASHFREE_WEBHOOK_URL ||
     buildApiUrl('/api/payments/cashfree/webhook'),
+  // Firebase Cloud Messaging (push). Provide EITHER a path to the service
+  // account JSON, OR the raw JSON string. If neither is set, push is disabled
+  // (the server still boots and notifications fall back to in-app + socket).
+  firebaseServiceAccountPath:
+    process.env.FIREBASE_SERVICE_ACCOUNT ||
+    process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
+    './firebase-service-account.json',
+  firebaseServiceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
 };

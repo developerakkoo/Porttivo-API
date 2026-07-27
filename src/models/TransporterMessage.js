@@ -2,11 +2,17 @@ const mongoose = require('mongoose');
 
 const transporterMessageSchema = new mongoose.Schema(
   {
-    // Context
+    // Context: a message belongs to EXACTLY ONE thread — a booking OR a quote.
     bookingId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'VehicleBooking',
-      required: true,
+      default: null,
+      index: true,
+    },
+    quoteId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Quote',
+      default: null,
       index: true,
     },
 
@@ -71,7 +77,20 @@ const transporterMessageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// Exactly one thread reference must be set.
+transporterMessageSchema.pre('validate', function (next) {
+  const hasBooking = Boolean(this.bookingId);
+  const hasQuote = Boolean(this.quoteId);
+  if (hasBooking === hasQuote) {
+    return next(
+      new Error('Exactly one of bookingId or quoteId must be set on a message')
+    );
+  }
+  next();
+});
+
 // Indexes for performance
+transporterMessageSchema.index({ quoteId: 1, createdAt: -1 });
 transporterMessageSchema.index({ bookingId: 1, createdAt: -1 });
 transporterMessageSchema.index({ senderId: 1, receiverId: 1, bookingId: 1 });
 transporterMessageSchema.index({ status: 1, createdAt: -1 });

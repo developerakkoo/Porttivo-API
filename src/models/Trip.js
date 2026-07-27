@@ -330,6 +330,23 @@ const tripSchema = new mongoose.Schema(
       type: Boolean,
       default: false
     },
+    // Marketplace inquiry (Post Inquiry -> Quote -> Award) origin.
+    isFromInquiry: {
+      type: Boolean,
+      default: false
+    },
+    requirementId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Requirement',
+      default: null,
+      index: true
+    },
+    quoteId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Quote',
+      default: null,
+      index: true
+    },
     tripGroupId: {
       type: String,
       default: null,
