@@ -131,6 +131,6 @@ module.exports = {
   firebaseServiceAccountPath:
     process.env.FIREBASE_SERVICE_ACCOUNT ||
     process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
-    '/src/config/firebase-service-account.json',
+    './src/config/firebase-service-account.json',
   firebaseServiceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
 };
