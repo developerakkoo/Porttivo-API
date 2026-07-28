@@ -46,9 +46,7 @@ function serializeRequirement(r, extra = {}) {
 function canViewRequirement(requirement, viewerId) {
   if (!requirement || !viewerId) return false
   if (requirement.requesterId?.toString() === String(viewerId)) return true
-  return Array.isArray(requirement.broadcastTo)
-    ? requirement.broadcastTo.some((id) => String(id) === String(viewerId))
-    : false
+  return requirement.status === 'OPEN'
 }
 
 // POST /api/requirements
@@ -211,8 +209,7 @@ const getIncomingRequirements = async (req, res, next) => {
     }
 
     const list = await Requirement.find({
-      status: 'OPEN',
-      broadcastTo: transporterId
+      status: 'OPEN'
     })
       .sort({ createdAt: -1 })
       .populate('requesterId', 'name company mobile')

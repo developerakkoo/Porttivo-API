@@ -54,10 +54,10 @@ function serializeQuote(q, requirement) {
 
 function canTransporterQuote(requirement, transporterId) {
   if (!requirement || !transporterId) return false
-  const visibleTo = Array.isArray(requirement.broadcastTo)
-    ? requirement.broadcastTo.map((id) => String(id))
-    : []
-  return visibleTo.includes(String(transporterId))
+  if (requirement.requesterId?.toString?.() === String(transporterId)) {
+    return false
+  }
+  return requirement.status === 'OPEN'
 }
 
 // POST /api/requirements/:id/quotes  (transporter submits/updates a quote)
