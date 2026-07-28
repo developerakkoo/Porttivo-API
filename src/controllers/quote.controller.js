@@ -52,6 +52,14 @@ function serializeQuote(q, requirement) {
   }
 }
 
+function canTransporterQuote(requirement, transporterId) {
+  if (!requirement || !transporterId) return false
+  const visibleTo = Array.isArray(requirement.broadcastTo)
+    ? requirement.broadcastTo.map((id) => String(id))
+    : []
+  return visibleTo.includes(String(transporterId))
+}
+
 // POST /api/requirements/:id/quotes  (transporter submits/updates a quote)
 const submitQuote = async (req, res, next) => {
   try {
@@ -76,6 +84,12 @@ const submitQuote = async (req, res, next) => {
       return res
         .status(404)
         .json({ success: false, message: 'Requirement not found' })
+    }
+    if (!canTransporterQuote(requirement, transporterId)) {
+      return res.status(403).json({
+        success: false,
+        message: 'This inquiry is not visible to your transporter account'
+      })
     }
     if (requirement.requesterId.toString() === String(transporterId)) {
       return res.status(400).json({

@@ -1,12 +1,8 @@
 const Requirement = require('../models/Requirement')
 const Quote = require('../models/Quote')
-const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
-const Transporter = require('../models/Transporter')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const { validateLocationInput } = require('../utils/location')
-const { notifyUsers } = require('../services/pushNotification.service')
-
-const escapeRegex = (s) => (s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const { notifyUser } = require('../services/pushNotification.service')
 
 function locationLabel(loc) {
   if (!loc) return ''
@@ -44,54 +40,6 @@ function serializeRequirement(r, extra = {}) {
     updatedAt: r.updatedAt,
     ...extra
   }
-}
-
-/**
- * Transporters with an ACTIVE listing whose vehicleType matches and whose
- * origin/destination/routes overlap the inquiry route. Excludes the requester.
- */
-async function findMatchingTransporterIds(requirement, excludeId) {
-  const tokens = []
-  const originLabel = locationLabel(requirement.origin)
-  const destLabel = locationLabel(requirement.destination)
-  if (originLabel) tokens.push(originLabel)
-  if (destLabel) tokens.push(destLabel)
-
-  const orClauses = []
-  for (const t of tokens) {
-    const p = escapeRegex(String(t).trim())
-    if (!p) continue
-    orClauses.push(
-      { 'origin.formattedAddress': { $regex: p, $options: 'i' } },
-      { 'destination.formattedAddress': { $regex: p, $options: 'i' } },
-      {
-        destinations: {
-          $elemMatch: { formattedAddress: { $regex: p, $options: 'i' } }
-        }
-      },
-      {
-        routes: {
-          $elemMatch: {
-            'destination.formattedAddress': { $regex: p, $options: 'i' }
-          }
-        }
-      }
-    )
-  }
-
-  const query = { status: 'active', vehicleType: requirement.vehicleType }
-  if (orClauses.length) query.$or = orClauses
-
-  const posts = await VehicleRouteAvailability.find(query)
-    .select('transporterId')
-    .lean()
-
-  const ids = new Set()
-  for (const p of posts) {
-    const id = p.transporterId?.toString()
-    if (id && id !== String(excludeId)) ids.add(id)
-  }
-  return [...ids]
 }
 
 // POST /api/requirements
@@ -154,35 +102,29 @@ const createRequirement = async (req, res, next) => {
       remarks: remarks ? String(remarks).trim() : null
     })
 
-    // Assign human-readable ref now that we have an _id.
     requirement.ref = Requirement.buildRef(requirement._id)
-
-    // Match + broadcast (best-effort; never blocks the create).
-    let matchedIds = []
-    try {
-      matchedIds = await findMatchingTransporterIds(requirement, requesterId)
-      requirement.broadcastTo = matchedIds
-    } catch (matchErr) {
-      console.warn('Requirement matching failed:', matchErr.message || matchErr)
-    }
+    requirement.broadcastTo = []
     await requirement.save()
 
-    const routeLabel = `${locationLabel(requirement.origin)} → ${locationLabel(
+    const routeLabel = `${locationLabel(requirement.origin)} -> ${locationLabel(
       requirement.destination
     )}`
-    notifyUsers(matchedIds, {
+
+    notifyUser({
+      userId: requesterId,
       userType: 'TRANSPORTER',
-      type: 'INQUIRY_BROADCAST',
-      title: 'New Transport Inquiry',
-      message: `${routeLabel} · ${requirement.vehicleType} · ${requirement.direction}`,
+      type: 'INQUIRY_CREATED',
+      title: 'Inquiry posted',
+      message: `${routeLabel} | ${requirement.vehicleType} | ${requirement.direction}`,
       data: {
-        kind: 'INQUIRY_BROADCAST',
+        kind: 'INQUIRY_CREATED',
         requirementId: String(requirement._id),
-        ref: requirement.ref
+        ref: requirement.ref,
+        visibility: 'PRIVATE'
       },
       priority: 'high'
     }).catch((e) =>
-      console.warn('Inquiry broadcast push failed:', e.message || e)
+      console.warn('Inquiry notification failed:', e.message || e)
     )
 
     return res.status(201).json({
@@ -191,7 +133,7 @@ const createRequirement = async (req, res, next) => {
       data: {
         requirement: serializeRequirement(requirement, {
           quoteCount: 0,
-          matchedCount: matchedIds.length
+          matchedCount: 0
         })
       }
     })
@@ -238,7 +180,7 @@ const getMyRequirements = async (req, res, next) => {
   }
 }
 
-// GET /api/requirements/incoming  (transporter feed of matched OPEN inquiries)
+// GET /api/requirements/incoming
 const getIncomingRequirements = async (req, res, next) => {
   try {
     const transporterId = getTransporterActorId(req.user)
@@ -256,7 +198,6 @@ const getIncomingRequirements = async (req, res, next) => {
       .populate('requesterId', 'name company mobile')
       .lean()
 
-    // Which of these has the caller already quoted?
     const ids = list.map((r) => r._id)
     const myQuotes = await Quote.find({
       requirementId: { $in: ids },
@@ -307,15 +248,18 @@ const getRequirementById = async (req, res, next) => {
     }
 
     const isOwner = r.requesterId?._id?.toString() === String(viewerId)
-    const quoteCount = await Quote.countDocuments({ requirementId: id })
-
-    let myQuote = null
     if (!isOwner) {
-      myQuote = await Quote.findOne({
-        requirementId: id,
-        transporterId: viewerId
-      }).lean()
+      return res.status(403).json({
+        success: false,
+        message: 'Only the requester can view this inquiry'
+      })
     }
+
+    const quoteCount = await Quote.countDocuments({ requirementId: id })
+    const myQuote = await Quote.findOne({
+      requirementId: id,
+      transporterId: viewerId
+    }).lean()
 
     return res.status(200).json({
       success: true,
