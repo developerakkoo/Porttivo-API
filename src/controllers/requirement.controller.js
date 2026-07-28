@@ -45,7 +45,11 @@ function serializeRequirement(r, extra = {}) {
 
 function canViewRequirement(requirement, viewerId) {
   if (!requirement || !viewerId) return false
-  if (requirement.requesterId?.toString() === String(viewerId)) return true
+  const requesterId =
+    requirement.requesterId?._id?.toString?.() ||
+    requirement.requesterId?.toString?.() ||
+    requirement.requesterId
+  if (String(requesterId) === String(viewerId)) return true
   return requirement.status === 'OPEN'
 }
 
