@@ -4,3 +4,7 @@ node_modules/
 *.log
 dist/
 build/
+
+# Firebase Admin credentials (never commit)
+firebase-service-account.json
+*firebase-adminsdk*.json
