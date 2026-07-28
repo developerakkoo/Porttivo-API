@@ -1,8 +1,9 @@
 const Requirement = require('../models/Requirement')
 const Quote = require('../models/Quote')
+const Transporter = require('../models/Transporter')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const { validateLocationInput } = require('../utils/location')
-const { notifyUser } = require('../services/pushNotification.service')
+const { notifyUsers } = require('../services/pushNotification.service')
 
 function locationLabel(loc) {
   if (!loc) return ''
@@ -40,6 +41,14 @@ function serializeRequirement(r, extra = {}) {
     updatedAt: r.updatedAt,
     ...extra
   }
+}
+
+function canViewRequirement(requirement, viewerId) {
+  if (!requirement || !viewerId) return false
+  if (requirement.requesterId?.toString() === String(viewerId)) return true
+  return Array.isArray(requirement.broadcastTo)
+    ? requirement.broadcastTo.some((id) => String(id) === String(viewerId))
+    : false
 }
 
 // POST /api/requirements
@@ -103,24 +112,35 @@ const createRequirement = async (req, res, next) => {
     })
 
     requirement.ref = Requirement.buildRef(requirement._id)
-    requirement.broadcastTo = []
+
+    const transporters = await Transporter.find({
+      status: 'active',
+      hasAccess: true
+    })
+      .select('_id')
+      .lean()
+
+    const broadcastTo = transporters
+      .map((t) => t._id?.toString())
+      .filter(Boolean)
+
+    requirement.broadcastTo = broadcastTo
     await requirement.save()
 
     const routeLabel = `${locationLabel(requirement.origin)} -> ${locationLabel(
       requirement.destination
     )}`
 
-    notifyUser({
-      userId: requesterId,
+    notifyUsers(broadcastTo, {
       userType: 'TRANSPORTER',
-      type: 'INQUIRY_CREATED',
-      title: 'Inquiry posted',
+      type: 'INQUIRY_BROADCAST',
+      title: 'New Transport Inquiry',
       message: `${routeLabel} | ${requirement.vehicleType} | ${requirement.direction}`,
       data: {
-        kind: 'INQUIRY_CREATED',
+        kind: 'INQUIRY_BROADCAST',
         requirementId: String(requirement._id),
         ref: requirement.ref,
-        visibility: 'PRIVATE'
+        visibility: 'PUBLIC'
       },
       priority: 'high'
     }).catch((e) =>
@@ -133,7 +153,7 @@ const createRequirement = async (req, res, next) => {
       data: {
         requirement: serializeRequirement(requirement, {
           quoteCount: 0,
-          matchedCount: 0
+          matchedCount: broadcastTo.length
         })
       }
     })
@@ -247,11 +267,11 @@ const getRequirementById = async (req, res, next) => {
         .json({ success: false, message: 'Requirement not found' })
     }
 
-    const isOwner = r.requesterId?._id?.toString() === String(viewerId)
-    if (!isOwner) {
+    const canView = canViewRequirement(r, viewerId)
+    if (!canView) {
       return res.status(403).json({
         success: false,
-        message: 'Only the requester can view this inquiry'
+        message: 'Not authorized to view this inquiry'
       })
     }
 
