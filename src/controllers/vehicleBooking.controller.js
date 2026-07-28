@@ -38,6 +38,14 @@ function geoFieldToLabel(v) {
   return null
 }
 
+function forwardControllerError(next, error) {
+  if (typeof next === 'function') {
+    return next(error)
+  }
+
+  throw error
+}
+
 /**
  * Release the marketplace assignment when a booking ends without confirmation.
  * Slot capacity is only consumed on confirmed bookings, so we do not adjust
@@ -270,7 +278,7 @@ const createBooking = async (req, res, next) => {
       }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -347,7 +355,7 @@ const getBooking = async (req, res, next) => {
       }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -428,7 +436,7 @@ const getMyBookings = async (req, res, next) => {
       }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -574,7 +582,7 @@ const proposePriceOffer = async (req, res, next) => {
       data: { booking: populatedBooking, message }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -712,7 +720,7 @@ const acceptProposal = async (req, res, next) => {
       data: { booking: populatedBooking }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -812,7 +820,7 @@ const declineProposal = async (req, res, next) => {
       data: { booking: populatedBooking }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -1005,7 +1013,7 @@ const acceptBooking = async (req, res, next) => {
       data: { booking: populatedBooking }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -1097,7 +1105,7 @@ const rejectBooking = async (req, res, next) => {
       data: { booking: populatedBooking }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -1186,7 +1194,7 @@ const cancelBooking = async (req, res, next) => {
       data: { booking: populatedBooking }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -1235,7 +1243,7 @@ const getBookingStats = async (req, res, next) => {
       }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -1329,7 +1337,7 @@ const submitBooking = async (req, res, next) => {
       data: { booking: populatedBooking }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -1455,7 +1463,7 @@ const getConversations = async (req, res, next) => {
       data: { conversations, total: conversations.length }
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 
@@ -1503,7 +1511,7 @@ const hideBookingFromInbox = async (req, res, next) => {
       message: 'Conversation removed from your inbox'
     })
   } catch (error) {
-    next(error)
+    return forwardControllerError(next, error)
   }
 }
 

@@ -78,15 +78,12 @@ const transporterMessageSchema = new mongoose.Schema(
 );
 
 // Exactly one thread reference must be set.
-transporterMessageSchema.pre('validate', function (next) {
+transporterMessageSchema.pre('validate', function () {
   const hasBooking = Boolean(this.bookingId);
   const hasQuote = Boolean(this.quoteId);
   if (hasBooking === hasQuote) {
-    return next(
-      new Error('Exactly one of bookingId or quoteId must be set on a message')
-    );
+    throw new Error('Exactly one of bookingId or quoteId must be set on a message');
   }
-  next();
 });
 
 // Indexes for performance
