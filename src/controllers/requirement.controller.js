@@ -111,10 +111,7 @@ const createRequirement = async (req, res, next) => {
 
     requirement.ref = Requirement.buildRef(requirement._id)
 
-    const transporters = await Transporter.find({
-      status: 'active',
-      hasAccess: true
-    })
+    const transporters = await Transporter.find({})
       .select('_id')
       .lean()
 
