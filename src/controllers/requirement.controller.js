@@ -271,6 +271,7 @@ const getRequirementById = async (req, res, next) => {
         message: 'Not authorized to view this inquiry'
       })
     }
+    const isOwner = r.requesterId?._id?.toString() === String(viewerId)
 
     const quoteCount = await Quote.countDocuments({ requirementId: id })
     const myQuote = await Quote.findOne({
