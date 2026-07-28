@@ -1,4 +1,5 @@
 const Trip = require('../models/Trip')
+const Transporter = require('../models/Transporter')
 const { TRIP_STATUS, TRIP_TYPE_VALUES } = require('../utils/tripState')
 
 /**
@@ -45,9 +46,21 @@ const createTripFromQuote = async (requirement, quote, options = {}) => {
   const pickupLocation = tripType === 'IMPORT' ? destLoc : originLoc
   const dropLocation = tripType === 'IMPORT' ? originLoc : destLoc
 
+  const requesterTransporter = await Transporter.findById(requirement.requesterId)
+    .select('name company mobile')
+    .lean()
+    .catch(() => null)
+
+  const buyerLabel =
+    requesterTransporter?.company ||
+    requesterTransporter?.name ||
+    `Transporter ${String(requirement.requesterId).slice(-6)}`
+
   const tripPayload = {
     transporterId: quote.transporterId, // winner executes trip
     customerId: requirement.requesterId, // requester is customer
+    customerName: buyerLabel,
+    customerMobile: requesterTransporter?.mobile || null,
     vehicleId: null,
     driverId: null,
 
