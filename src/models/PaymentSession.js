@@ -30,7 +30,7 @@ const paymentSessionSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['PAYU', 'CASHFREE'],
+      enum: ['PAYU', 'CASHFREE', 'RAZORPAY'],
       required: true,
       index: true
     },

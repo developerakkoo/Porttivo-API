@@ -10,6 +10,7 @@ const {
   getPayoutByPayment,
   getPayoutStatus,
   handleCashfreeWebhook,
+  handleRazorpayWebhook,
   listPayouts,
   retryPayout,
   runRetryCronNow,
@@ -19,6 +20,8 @@ const {
 
 router.post('/cashfree/webhook', handleCashfreeWebhook)
 router.get('/cashfree/webhook', handleCashfreeWebhook)
+router.post('/razorpay/webhook', handleRazorpayWebhook)
+router.get('/razorpay/webhook', handleRazorpayWebhook)
 
 router.use(authenticate)
 

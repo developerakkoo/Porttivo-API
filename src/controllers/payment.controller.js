@@ -69,8 +69,16 @@ const getPaymentPayoutMetadata = (metadata = {}) => {
 
 const hasActiveBeneficiary = (payee = {}) =>
   Boolean(
-    (payee.cashfreeBeneficiary?.beneId || payee.cashfreeBeneId) &&
-      String(payee.cashfreeBeneficiary?.status || '').toUpperCase() === 'ACTIVE'
+    (
+      (
+        (payee.razorpayBeneficiary?.contactId || payee.razorpayBeneficiary?.fundAccountId) &&
+        String(payee.razorpayBeneficiary?.status || '').toUpperCase() === 'ACTIVE'
+      ) ||
+      (
+        (payee.cashfreeBeneficiary?.beneId || payee.cashfreeBeneId) &&
+        String(payee.cashfreeBeneficiary?.status || '').toUpperCase() === 'ACTIVE'
+      )
+    )
   )
 
 const assertBeneficiaryExistsForPaymentSession = async (metadata = {}) => {
@@ -111,6 +119,19 @@ const serializePaymentSession = payment => {
   }
 
   const paymentRequestFields = payment.paymentRequest?.fields || {}
+  const razorpayOrderId =
+    payment.provider === 'RAZORPAY'
+      ? payment.providerOrderId ||
+        paymentRequestFields.order_id ||
+        payment.paymentResponse?.razorpay_order_id ||
+        null
+      : null
+  const razorpayPaymentId =
+    payment.provider === 'RAZORPAY'
+      ? payment.providerTransactionId ||
+        payment.paymentResponse?.razorpay_payment_id ||
+        null
+      : null
   const cashfreeOrderId =
     payment.provider === 'CASHFREE'
       ? payment.providerOrderId ||
@@ -142,6 +163,13 @@ const serializePaymentSession = payment => {
     paymentGatewayUrl: payment.paymentGatewayUrl || null,
     paymentRequest: payment.paymentRequest || {},
     paymentResponse: payment.paymentResponse || {},
+    razorpay:
+      payment.provider === 'RAZORPAY'
+        ? {
+            order_id: razorpayOrderId,
+            payment_id: razorpayPaymentId
+          }
+        : null,
     cashfree:
       payment.provider === 'CASHFREE'
         ? {
@@ -605,6 +633,17 @@ const handleGatewayWebhook = async (req, res, next) => {
       })
     }
 
+    if (
+      !payment &&
+      provider === 'RAZORPAY' &&
+      gatewayMetadata.providerOrderId
+    ) {
+      payment = await PaymentSession.findOne({
+        provider,
+        providerOrderId: gatewayMetadata.providerOrderId
+      })
+    }
+
     if (!payment) {
       logger.warn(`[${requestId}] Payment session not found`, {
         provider,
@@ -687,7 +726,17 @@ const handleGatewayWebhook = async (req, res, next) => {
 
     const gatewayMetadata = getGatewayPayloadMetadata(provider, body)
 
-    const responseStatus = gatewayMetadata.status
+    let responseStatus = gatewayMetadata.status
+
+    if (
+      provider === 'RAZORPAY' &&
+      responseStatus === 'PENDING' &&
+      body.razorpay_order_id &&
+      body.razorpay_payment_id &&
+      body.razorpay_signature
+    ) {
+      responseStatus = 'SUCCESS'
+    }
 
     logger.info(`[${requestId}] Gateway status`, {
       paymentId: payment._id.toString(),

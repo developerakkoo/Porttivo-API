@@ -47,8 +47,8 @@ const payoutSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['CASHFREE'],
-      default: 'CASHFREE',
+      enum: ['CASHFREE', 'RAZORPAY'],
+      default: 'RAZORPAY',
       index: true
     },
     cashfree: {
@@ -78,6 +78,50 @@ const payoutSchema = new mongoose.Schema(
         trim: true,
         default: null,
         index: true
+      },
+      beneficiary: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+      },
+      request: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+      },
+      response: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
+      }
+    },
+    razorpay: {
+      contactId: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      fundAccountId: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      payoutId: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      referenceId: {
+        type: String,
+        trim: true,
+        default: null,
+        index: true
+      },
+      transferMode: {
+        type: String,
+        trim: true,
+        default: 'IMPS'
+      },
+      statusDetails: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {}
       },
       beneficiary: {
         type: mongoose.Schema.Types.Mixed,
@@ -170,6 +214,8 @@ payoutSchema.index({ paymentId: 1 }, { unique: true, sparse: true })
 payoutSchema.index({ referenceType: 1, referenceId: 1, provider: 1 })
 payoutSchema.index({ 'cashfree.transferId': 1 }, { unique: true, sparse: true })
 payoutSchema.index({ 'cashfree.beneId': 1 })
+payoutSchema.index({ 'razorpay.payoutId': 1 }, { unique: true, sparse: true })
+payoutSchema.index({ 'razorpay.fundAccountId': 1 })
 payoutSchema.index({ status: 1, 'retry.nextRetryAt': 1, updatedAt: -1 })
 
 module.exports = mongoose.model('Payout', payoutSchema)

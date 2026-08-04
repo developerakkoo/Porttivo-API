@@ -2,6 +2,14 @@ const createMockRes = () => {
   const res = {
     statusCode: 200,
     body: null,
+    type(value) {
+      this.contentType = value;
+      return this;
+    },
+    send(payload) {
+      this.body = payload;
+      return this;
+    },
     status(code) {
       this.statusCode = code;
       return this;

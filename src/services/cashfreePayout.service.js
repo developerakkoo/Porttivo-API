@@ -11,6 +11,7 @@ const Driver = require('../models/Driver')
 const Customer = require('../models/Customer')
 const PumpOwner = require('../models/PumpOwner')
 const CompanyUser = require('../models/CompanyUser')
+const razorpayPayoutService = require('./razorpayPayout.service')
 const {
   cashfreePayoutMode,
   cashfreePayoutClientId,
@@ -162,6 +163,8 @@ const serializePayout = (payout, { includeSensitive = false } = {}) => {
   const beneficiary = payout.cashfree?.beneficiary || {}
   const request = payout.cashfree?.request || {}
   const response = payout.cashfree?.response || {}
+  const razorpay = payout.razorpay || {}
+  const razorpayBeneficiary = razorpay.beneficiary || {}
   const {
     beneId,
     bankAccountEncrypted,
@@ -197,6 +200,24 @@ const serializePayout = (payout, { includeSensitive = false } = {}) => {
       request,
       response
     },
+    razorpay: payout.provider === 'RAZORPAY'
+      ? {
+          contactId: razorpay.contactId || null,
+          fundAccountId: razorpay.fundAccountId || null,
+          payoutId: razorpay.payoutId || null,
+          referenceId: razorpay.referenceId || null,
+          transferMode: razorpay.transferMode || null,
+          statusDetails: razorpay.statusDetails || {},
+          beneficiary: {
+            ...razorpayBeneficiary,
+            bankAccountLast4:
+              razorpayBeneficiary.bankAccountLast4 ||
+              extractAccountLast4(razorpayBeneficiary.bankAccount)
+          },
+          request: razorpay.request || {},
+          response: razorpay.response || {}
+        }
+      : null,
     status: payout.status,
     failure: payout.failure || null,
     retry: payout.retry || null,
@@ -1472,113 +1493,9 @@ const createAutomaticPayoutForPayment = async (
   paymentInput,
   { fetchImpl = global.fetch } = {}
 ) => {
-  const payment =
-    paymentInput && paymentInput._id && paymentInput.status
-      ? paymentInput
-      : await PaymentSession.findById(paymentInput)
-
-  if (!payment || payment.status !== 'SUCCESS') {
-    return null
-  }
-
-  const autoMetadata = ensureAutomaticPayoutMetadata(payment)
-  if (!autoMetadata) {
-    return null
-  }
-
-  const embeddedPayoutId = payment.metadata?.payout?.id || null
-  if (embeddedPayoutId && mongoose.Types.ObjectId.isValid(embeddedPayoutId)) {
-    const embeddedPayout = await Payout.findById(embeddedPayoutId)
-    if (embeddedPayout) {
-      if (
-        embeddedPayout.status === 'CREATED' ||
-        embeddedPayout.status === 'RETRY_PENDING' ||
-        embeddedPayout.status === 'PROCESSING'
-      ) {
-        return startPayoutTransfer(embeddedPayout, { fetchImpl })
-      }
-      return embeddedPayout
-    }
-  }
-
-  const existing = await findExistingPayout({
-    paymentId: payment._id,
-    referenceType: autoMetadata.referenceType,
-    referenceId: autoMetadata.referenceId
+  return razorpayPayoutService.createAutomaticPayoutForPayment(paymentInput, {
+    fetchImpl
   })
-
-  if (existing) {
-    if (
-      existing.status === 'CREATED' ||
-      existing.status === 'RETRY_PENDING' ||
-      existing.status === 'PROCESSING'
-    ) {
-      return startPayoutTransfer(existing, { fetchImpl })
-    }
-    return existing
-  }
-
-  const { payee, modelName } = await findPayeeRecordById(autoMetadata.payeeId)
-  const payeeSnapshot = getPayeeSnapshot(payee, modelName)
-
-  const payout = await createPayoutRecord({
-    payerId: payment.payer?.userId || payment.initiatedBy?.userId || null,
-    payeeId: autoMetadata.payeeId,
-    payeeType: autoMetadata.payeeType || payeeSnapshot?.userType || null,
-    paymentId: payment._id,
-    referenceType: autoMetadata.referenceType || payment.referenceType || null,
-    referenceId: autoMetadata.referenceId || payment.referenceId || null,
-    amount: autoMetadata.amount,
-    currency: autoMetadata.currency || payment.currency || 'INR',
-    status: 'CREATED',
-    cashfree: {
-      beneId:
-        payee?.cashfreeBeneficiary?.beneId || payee?.cashfreeBeneId || null,
-      transferMode: autoMetadata.transferMode || 'IMPS',
-      beneficiary: payee?.cashfreeBeneficiary || {},
-      request: {},
-      response: {}
-    }
-  })
-  logger.info('[DEBUG] createPayoutRecord result', {
-    constructor: payout?.constructor?.name,
-    hasSave: typeof payout?.save,
-    hasId: !!payout?._id,
-    instanceOfModel: payout instanceof mongoose.Model,
-    isMongooseDocument: payout?.constructor?.base?.Model === mongoose.Model,
-    keys: Object.keys(payout || {}),
-    payout
-  })
-
-  const hydratedPayout =
-    payout && payout._id && typeof payout.save === 'function'
-      ? payout
-      : await findExistingPayout({
-          paymentId: payment._id,
-          referenceType: autoMetadata.referenceType || payment.referenceType || null,
-          referenceId: autoMetadata.referenceId || payment.referenceId || null
-        })
-
-  if (!hydratedPayout) {
-    throw new Error('Automatic payout could not be reloaded after creation')
-  }
-
-  if (
-    (!payee?.cashfreeBeneficiary?.beneId && !payee?.cashfreeBeneId) ||
-    payee?.cashfreeBeneficiary?.status !== 'ACTIVE'
-  ) {
-    hydratedPayout.status = 'RETRY_PENDING'
-    hydratedPayout.failure = buildPayoutFailure({
-      code: 'BENEFICIARY_NOT_FOUND',
-      message: 'Payment safe. Transfer pending.',
-      reason: 'Payee beneficiary is not active',
-      isRetryable: false
-    })
-    await hydratedPayout.save()
-    return hydratedPayout
-  }
-
-  return startPayoutTransfer(hydratedPayout, { fetchImpl })
 }
 
 const isPayoutRetryDue = payout => {

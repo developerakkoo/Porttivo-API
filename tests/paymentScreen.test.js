@@ -57,7 +57,7 @@ const paymentTests = [
     run() {
       const service = require('../src/services/paymentGateway.service')
       const providers = service.getAvailableGatewayOptions().map((gateway) => gateway.provider)
-      assert.deepEqual(providers, ['PAYU', 'CASHFREE'])
+      assert.deepEqual(providers, ['PAYU', 'CASHFREE', 'RAZORPAY'])
     }
   },
   {
@@ -298,6 +298,95 @@ const paymentTests = [
     }
   },
   {
+    name: 'buildPaymentInitiationRequest creates a Razorpay order payload',
+    async run() {
+      const originalFetch = global.fetch
+      let capturedBody = null
+      global.fetch = async (_url, options = {}) => {
+        capturedBody = JSON.parse(options.body || '{}')
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'order_RZP_1',
+              amount: 125000,
+              currency: 'INR'
+            })
+        }
+      }
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/paymentGateway.service.js'),
+        {
+          '../config/env': {
+            payuMode: 'sandbox',
+            payuKey: 'test-key',
+            payuSalt: 'test-salt',
+            payuCheckoutUrl: 'https://payu.example/checkout',
+            payuWebhookUrl: 'https://payu.example/webhook',
+            cashfreeMode: 'sandbox',
+            cashfreeClientId: 'cf-client',
+            cashfreeClientSecret: 'cf-secret',
+            cashfreeWebhookSecret: 'cf-secret',
+            cashfreeApiVersion: '2023-08-01',
+            cashfreeApiBaseUrl: 'https://sandbox.cashfree.com/pg',
+            cashfreeCheckoutUrl: 'https://sandbox.cashfree.com/checkout',
+            cashfreeReturnUrl: 'https://app.example/success',
+            cashfreeWebhookUrl: 'https://app.example/webhook',
+            razorpayMode: 'sandbox',
+            razorpayKeyId: 'rzp_key_id',
+            razorpayKeySecret: 'rzp_key_secret',
+            razorpayWebhookSecret: 'rzp_webhook_secret',
+            razorpayApiBaseUrl: 'https://api.razorpay.com/v1',
+            razorpayCheckoutUrl: 'https://checkout.razorpay.com/v1/checkout.js',
+            razorpayWebhookUrl: 'https://app.example/razorpay/webhook'
+          }
+        }
+      )
+
+      try {
+        const request = await service.buildPaymentInitiationRequest({
+          provider: 'RAZORPAY',
+          merchantTransactionId: 'RZP-ABC',
+          amount: 1250,
+          payer: {
+            userId: 'payer-1',
+            name: 'Alpha Logistics',
+            email: 'alpha@example.com',
+            mobile: '9999999999'
+          },
+          reference: {
+            referenceType: 'INVOICE',
+            referenceId: 'INV-1001',
+            purpose: 'Invoice payment'
+          }
+        })
+
+        assert.equal(request.provider, 'RAZORPAY')
+        assert.equal(request.fields.order_id, 'order_RZP_1')
+        assert.equal(request.fields.key, 'rzp_key_id')
+        assert.equal(request.fields.amount, 125000)
+        assert.equal(request.fields.callback_url, 'https://app.example/razorpay/webhook')
+        assert.deepEqual(capturedBody, {
+          amount: 125000,
+          currency: 'INR',
+          receipt: 'RZP-ABC',
+          notes: {
+            referenceType: 'INVOICE',
+            referenceId: 'INV-1001',
+            purpose: 'Invoice payment',
+            paymentSessionId: '',
+            payerId: 'payer-1'
+          }
+        })
+        assert.ok(!Object.prototype.hasOwnProperty.call(capturedBody, 'checkout'))
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
     name: 'PayU webhook marks the payment as successful',
     async run() {
       const paymentDoc = {
@@ -490,6 +579,101 @@ const paymentTests = [
       assert.equal(paymentDoc.status, 'SUCCESS')
       assert.equal(paymentDoc.providerTransactionId, 'CF-PAY-1')
       assert.ok(paymentDoc.completedAt instanceof Date)
+    }
+  },
+  {
+    name: 'Razorpay webhook marks the payment as successful',
+    async run() {
+      const paymentDoc = {
+        _id: '507f1f77bcf86cd799439014',
+        provider: 'RAZORPAY',
+        providerOrderId: 'order_RZP_1',
+        status: 'PENDING',
+        merchantTransactionId: 'RZP-ABC',
+        payer: {
+          userId: 'payer-1',
+          userType: 'transporter',
+          name: 'Alpha Logistics',
+          email: 'alpha@example.com',
+          mobile: '9999999999'
+        },
+        paymentResponse: {},
+        callbackPayload: {},
+        metadata: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payment.controller.js'),
+        {
+          '../services/paymentGateway.service.js': {
+            buildPaymentInitiationRequest: async () => ({}),
+            getAvailableGatewayOptions: () => [],
+            getGatewayPayloadMetadata: () => ({
+              provider: 'RAZORPAY',
+              status: 'SUCCESS',
+              providerTransactionId: 'pay_RZP_1',
+              providerOrderId: 'order_RZP_1'
+            }),
+            getProviderConfig: () => ({
+              provider: 'RAZORPAY',
+              displayName: 'Razorpay',
+              configured: true,
+              mode: 'sandbox'
+            }),
+            makeTransactionId: () => 'RZP-TEST',
+            normalizeMoney: (value) => Number(value).toFixed(2),
+            normalizeProvider: (value) => String(value).toUpperCase(),
+            resolvePayerProfile: () => ({
+              userId: 'payer-1',
+              userType: 'transporter',
+              name: 'Alpha Logistics',
+              email: 'alpha@example.com',
+              mobile: '9999999999'
+            }),
+            verifyGatewayWebhook: () => true
+          },
+          '../services/cashfreePayout.service': {
+            createAutomaticPayoutForPayment: async () => ({
+              _id: 'payout-1',
+              status: 'PROCESSING',
+              razorpay: {
+                payoutId: 'pout_1'
+              }
+            })
+          },
+          '../models/PaymentSession': {
+            findById: async () => paymentDoc,
+            findOne: async () => paymentDoc
+          }
+        }
+      )
+
+      const body = {
+        razorpay_order_id: 'order_RZP_1',
+        razorpay_payment_id: 'pay_RZP_1',
+        razorpay_signature: 'ignored',
+        status: 'captured'
+      }
+      const req = {
+        params: { provider: 'RAZORPAY' },
+        query: {},
+        body,
+        headers: {},
+        rawBody: JSON.stringify(body)
+      }
+      const res = createMockRes()
+
+      await controller.handleGatewayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(paymentDoc.status, 'SUCCESS')
+      assert.equal(paymentDoc.providerTransactionId, 'pay_RZP_1')
+      assert.equal(paymentDoc.providerOrderId, 'order_RZP_1')
     }
   },
   {

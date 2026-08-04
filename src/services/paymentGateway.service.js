@@ -18,10 +18,17 @@ const {
   cashfreeApiBaseUrl,
   cashfreeCheckoutUrl,
   cashfreeReturnUrl,
-  cashfreeWebhookUrl
+  cashfreeWebhookUrl,
+  razorpayMode,
+  razorpayKeyId,
+  razorpayKeySecret,
+  razorpayWebhookSecret,
+  razorpayApiBaseUrl,
+  razorpayCheckoutUrl,
+  razorpayWebhookUrl
 } = require('../config/env')
 
-const SUPPORTED_PAYMENT_PROVIDERS = ['PAYU', 'CASHFREE']
+const SUPPORTED_PAYMENT_PROVIDERS = ['PAYU', 'CASHFREE', 'RAZORPAY']
 const DEFAULT_CURRENCY = 'INR'
 
 const normalizeProvider = (provider) => {
@@ -64,6 +71,7 @@ const resolvePayerProfile = (payerInput = {}, user = null) => {
 const buildGatewayDisplayName = (provider) => {
   if (provider === 'PAYU') return 'PayU'
   if (provider === 'CASHFREE') return 'Cashfree'
+  if (provider === 'RAZORPAY') return 'Razorpay'
   return provider
 }
 
@@ -141,6 +149,93 @@ const buildPayuCheckoutRequest = ({
   }
 }
 
+const buildRazorpayOrderPayload = ({
+  merchantTransactionId,
+  amount,
+  currency = DEFAULT_CURRENCY,
+  payer,
+  reference,
+  paymentSessionId
+}) => {
+  if (!razorpayKeyId || !razorpayKeySecret || !razorpayApiBaseUrl) {
+    throw new Error('Razorpay is not configured')
+  }
+
+  const normalizedAmount = Number(normalizeMoney(amount))
+  const amountInPaise = Math.round(normalizedAmount * 100)
+  const receipt = merchantTransactionId || makeTransactionId('RZP')
+  const name = payer?.name || 'Payment Customer'
+  const description = reference?.purpose
+    ? `${reference.purpose}${reference.referenceId ? ` (${reference.referenceId})` : ''}`
+    : 'Payment'
+
+  return {
+    requestBody: {
+      amount: amountInPaise,
+      currency: currency || DEFAULT_CURRENCY,
+      receipt,
+      notes: {
+        referenceType: reference?.referenceType ? String(reference.referenceType) : '',
+        referenceId: reference?.referenceId ? String(reference.referenceId) : '',
+        purpose: reference?.purpose ? String(reference.purpose) : '',
+        paymentSessionId: paymentSessionId ? String(paymentSessionId) : '',
+        payerId: payer?.userId ? String(payer.userId) : ''
+      }
+    },
+    checkout: {
+      name,
+      description,
+      prefill: {
+        name,
+        email: payer?.email || '',
+        contact: payer?.mobile || ''
+      },
+      theme: {
+        color: '#0f172a'
+      },
+      readonly: {
+        email: false,
+        contact: false
+      }
+    }
+  }
+}
+
+const createRazorpayOrder = async (payload, fetchImpl = global.fetch) => {
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('Fetch is not available for Razorpay order creation')
+  }
+
+  const auth = Buffer.from(`${razorpayKeyId}:${razorpayKeySecret}`).toString('base64')
+  const response = await fetchImpl(`${razorpayApiBaseUrl}/orders`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${auth}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  })
+
+  const responseText = await response.text()
+  let data = null
+  try {
+    data = responseText ? JSON.parse(responseText) : {}
+  } catch (error) {
+    data = { raw: responseText }
+  }
+
+  if (!response.ok) {
+    const message =
+      data?.error?.description ||
+      data?.error?.message ||
+      data?.message ||
+      `Razorpay order creation failed with status ${response.status}`
+    throw new Error(message)
+  }
+
+  return data || {}
+}
+
 const verifyPayuWebhook = (body) => {
   if (!body || typeof body !== 'object') {
     return false
@@ -176,12 +271,52 @@ const verifyPayuWebhook = (body) => {
   return receivedHash === computedHash.toLowerCase()
 }
 
+const verifyRazorpayPaymentSignature = (body = {}) => {
+  const orderId = String(
+    body.razorpay_order_id || body.order_id || body.orderId || ''
+  ).trim()
+  const paymentId = String(
+    body.razorpay_payment_id || body.payment_id || body.paymentId || ''
+  ).trim()
+  const receivedSignature = String(
+    body.razorpay_signature || body.signature || ''
+  ).trim()
+
+  if (!orderId || !paymentId || !receivedSignature || !razorpayKeySecret) {
+    return false
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', razorpayKeySecret)
+    .update(`${orderId}|${paymentId}`)
+    .digest('hex')
+
+  return expectedSignature.toLowerCase() === receivedSignature.toLowerCase()
+}
+
 const normalizePayuStatus = (status) => {
   const normalized = String(status || '').trim().toLowerCase()
   if (normalized === 'success') return 'SUCCESS'
   if (normalized === 'failure') return 'FAILED'
   if (normalized === 'cancel' || normalized === 'cancelled') return 'CANCELLED'
   if (normalized === 'pending') return 'PENDING'
+  return 'PENDING'
+}
+
+const normalizeRazorpayStatus = (status) => {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (['captured', 'paid', 'processed', 'success', 'completed'].includes(normalized)) {
+    return 'SUCCESS'
+  }
+  if (['failed', 'failure', 'reversed', 'rejected', 'cancelled', 'canceled'].includes(normalized)) {
+    return 'FAILED'
+  }
+  if (['refunded', 'refund'].includes(normalized)) {
+    return 'REFUNDED'
+  }
+  if (['authorized', 'queued', 'pending', 'processing', 'created', 'initiated', 'attempted'].includes(normalized)) {
+    return 'PENDING'
+  }
   return 'PENDING'
 }
 
@@ -449,6 +584,36 @@ const extractGatewayIdentifiers = (provider, payload = {}) => {
     }
   }
 
+  if (provider === 'RAZORPAY') {
+    const paymentEntity =
+      payload.payload?.payment?.entity ||
+      payload.payment?.entity ||
+      payload.payment ||
+      {}
+    const orderEntity =
+      payload.payload?.order?.entity ||
+      payload.order?.entity ||
+      payload.order ||
+      {}
+
+    return {
+      transactionId:
+        paymentEntity.id ||
+        paymentEntity.payment_id ||
+        paymentEntity.paymentId ||
+        payload.razorpay_payment_id ||
+        null,
+      orderId:
+        orderEntity.id ||
+        orderEntity.order_id ||
+        orderEntity.orderId ||
+        paymentEntity.order_id ||
+        paymentEntity.orderId ||
+        payload.razorpay_order_id ||
+        null
+    }
+  }
+
   return {
     transactionId: null,
     orderId: null
@@ -472,6 +637,15 @@ const getProviderConfig = (provider) => {
       displayName: buildGatewayDisplayName('CASHFREE'),
       configured: Boolean(cashfreeClientId && cashfreeClientSecret),
       mode: cashfreeMode || 'sandbox'
+    }
+  }
+
+  if (normalized === 'RAZORPAY') {
+    return {
+      provider: 'RAZORPAY',
+      displayName: buildGatewayDisplayName('RAZORPAY'),
+      configured: Boolean(razorpayKeyId && razorpayKeySecret),
+      mode: razorpayMode || 'sandbox'
     }
   }
 
@@ -512,6 +686,50 @@ const buildPaymentInitiationRequest = async ({
       successUrl,
       failureUrl
     })
+  }
+
+  if (normalizedProvider === 'RAZORPAY') {
+    const orderPayload = buildRazorpayOrderPayload({
+      merchantTransactionId,
+      amount,
+      payer,
+      reference,
+      paymentSessionId
+    })
+
+    const orderResponse = await createRazorpayOrder(orderPayload.requestBody, fetchImpl)
+    const orderId =
+      orderResponse.id ||
+      orderResponse.order_id ||
+      orderResponse.orderId ||
+      orderPayload.requestBody.receipt ||
+      merchantTransactionId ||
+      makeTransactionId('RZP')
+
+    return {
+      actionUrl: razorpayCheckoutUrl,
+      method: 'GET',
+      provider: 'RAZORPAY',
+      mode: razorpayMode || 'sandbox',
+      fields: {
+        key: razorpayKeyId,
+        order_id: orderId,
+        amount: orderResponse.amount || orderPayload.requestBody.amount,
+        currency: orderResponse.currency || orderPayload.requestBody.currency,
+        name: orderPayload.checkout.name,
+        description: orderPayload.checkout.description,
+        prefill: orderPayload.checkout.prefill,
+        notes: {
+          ...orderPayload.requestBody.notes,
+          razorpay_order_id: orderId
+        },
+        theme: orderPayload.checkout.theme,
+        readonly: orderPayload.checkout.readonly,
+        callback_url: razorpayWebhookUrl,
+        redirect: false
+      },
+      rawResponse: orderResponse
+    }
   }
 
   const payload = buildCashfreeOrderPayload({
@@ -572,6 +790,9 @@ const normalizeGatewayStatus = (provider, status) => {
   if (normalizedProvider === 'CASHFREE') {
     return normalizeCashfreeStatus(status)
   }
+  if (normalizedProvider === 'RAZORPAY') {
+    return normalizeRazorpayStatus(status)
+  }
   return 'PENDING'
 }
 
@@ -588,6 +809,25 @@ const verifyGatewayWebhook = ({
   if (normalizedProvider === 'CASHFREE') {
     return verifyCashfreeWebhook(body, headers, rawBody)
   }
+  if (normalizedProvider === 'RAZORPAY') {
+    const webhookSignature = String(
+      headers['x-razorpay-signature'] ||
+        headers['X-Razorpay-Signature'] ||
+        headers.signature ||
+        ''
+    ).trim()
+
+    if (webhookSignature) {
+      return verifyWebhookSignature({
+        signature: webhookSignature,
+        body,
+        rawBody,
+        secrets: [razorpayWebhookSecret, razorpayKeySecret]
+      })
+    }
+
+    return verifyRazorpayPaymentSignature(body)
+  }
   return false
 }
 
@@ -597,6 +837,17 @@ const getGatewayPayloadMetadata = (provider, payload = {}) => {
   const statusValue =
     normalizedProvider === 'CASHFREE'
       ? extractCashfreeStatusValue(payload)
+      : normalizedProvider === 'RAZORPAY'
+      ? payload.status ||
+        payload.event ||
+        payload.payload?.payment?.entity?.status ||
+        payload.payload?.order?.entity?.status ||
+        payload.payment?.entity?.status ||
+        payload.order?.entity?.status ||
+        payload.razorpay_payment_status ||
+        payload.razorpay_status ||
+        payload.payment_status ||
+        ''
       : payload.status
 
   return {
@@ -613,6 +864,7 @@ module.exports = {
   buildGatewayDisplayName,
   buildPaymentInitiationRequest,
   createCashfreeOrder,
+  createRazorpayOrder,
   extractGatewayIdentifiers,
   getAvailableGatewayOptions,
   getGatewayPayloadMetadata,
@@ -625,5 +877,6 @@ module.exports = {
   resolvePayerProfile,
   verifyGatewayWebhook,
   verifyCashfreeWebhook,
-  verifyPayuWebhook
+  verifyPayuWebhook,
+  verifyRazorpayPaymentSignature
 }

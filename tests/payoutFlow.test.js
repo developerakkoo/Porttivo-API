@@ -13,6 +13,9 @@ const payoutTests = [
           '../services/cashfreePayout.service': {
             registerBeneficiary: async () => ({})
           },
+          '../services/razorpayPayout.service': {
+            syncRazorpayBeneficiaryForPayee: async () => ({})
+          },
           '../models/Payout': {},
           '../models/PaymentSession': {}
         }
@@ -69,6 +72,9 @@ const payoutTests = [
                 verificationWarning: null
               }
             }
+          },
+          '../services/razorpayPayout.service': {
+            syncRazorpayBeneficiaryForPayee: async () => ({})
           },
           '../models/Payout': {},
           '../models/PaymentSession': {}
@@ -130,6 +136,9 @@ const payoutTests = [
               }
             }
           },
+          '../services/razorpayPayout.service': {
+            syncRazorpayBeneficiaryForPayee: async () => ({})
+          },
           '../models/Payout': {},
           '../models/PaymentSession': {}
         }
@@ -189,6 +198,9 @@ const payoutTests = [
                 verificationWarning: null
               }
             }
+          },
+          '../services/razorpayPayout.service': {
+            syncRazorpayBeneficiaryForPayee: async () => ({})
           },
           '../models/Payout': {},
           '../models/PaymentSession': {}
@@ -542,6 +554,17 @@ const payoutTests = [
           '../models/PaymentSession': {
             findById: async (id) => (id === 'payment-1' ? paymentDoc : null)
           },
+          '../services/razorpayPayout.service': {
+            createAutomaticPayoutForPayment: async () => ({
+              ...payoutDoc,
+              status: 'SUCCESS',
+              cashfree: {
+                ...(payoutDoc.cashfree || {}),
+                transferId: 'TRF-1',
+                utr: 'UTR-123456'
+              }
+            })
+          },
           '../models/Payout': {
             findOne: async () => null,
             findOneAndUpdate: async (_query, update) => {
@@ -733,6 +756,16 @@ const payoutTests = [
           '../models/PaymentSession': {
             findById: async (id) => (id === 'payment-403' ? paymentDoc : null)
           },
+          '../services/razorpayPayout.service': {
+            createAutomaticPayoutForPayment: async () => ({
+              ...payoutDoc,
+              status: 'FAILED',
+              failure: {
+                code: '403',
+                message: 'The payout v1 and v1.2 APIs have been deprecated. Please use v2 APIs.'
+              }
+            })
+          },
           '../models/Payout': {
             findOne: async () => null,
             findOneAndUpdate: async (_query, update) => {
@@ -780,6 +813,208 @@ const payoutTests = [
 
         assert.equal(payout.status, 'FAILED')
         assert.equal(payout.failure.code, '403')
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
+    name: 'syncRazorpayBeneficiaryForPayee stores Razorpay beneficiary details on the payee',
+    async run() {
+      const payeeDoc = {
+        _id: 'payee-1',
+        name: 'Alpha Logistics',
+        email: 'alpha@example.com',
+        mobile: '9999999999',
+        razorpayBeneficiary: null,
+        async save() {
+          return this
+        }
+      }
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutMode: 'sandbox',
+            razorpayPayoutKeyId: 'rzp_key_id',
+            razorpayPayoutKeySecret: 'rzp_key_secret',
+            razorpayPayoutWebhookSecret: 'rzp_webhook_secret',
+            razorpayPayoutApiBaseUrl: 'https://api.razorpay.com/v1',
+            razorpayPayoutAccountNumber: '1234567890'
+          },
+          '../models/Transporter': {
+            findById: async (id) => (id === 'payee-1' ? payeeDoc : null)
+          },
+          '../models/Driver': { findById: async () => null },
+          '../models/Customer': { findById: async () => null },
+          '../models/PumpOwner': { findById: async () => null },
+          '../models/CompanyUser': { findById: async () => null },
+          '../models/PaymentSession': {},
+          '../models/Payout': {}
+        }
+      )
+
+      const calls = []
+      const originalFetch = global.fetch
+      global.fetch = async (url, options = {}) => {
+        calls.push({
+          url: String(url),
+          body: JSON.parse(options.body || '{}')
+        })
+
+        if (String(url).includes('/contacts')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ id: 'cont_1' })
+          }
+        }
+
+        if (String(url).includes('/fund_accounts')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({ id: 'fa_1' })
+          }
+        }
+
+        throw new Error(`Unexpected fetch URL: ${url}`)
+      }
+
+      try {
+        const result = await service.syncRazorpayBeneficiaryForPayee({
+          payeeId: 'payee-1',
+          name: 'Alpha Logistics',
+          email: 'alpha@example.com',
+          phone: '9999999999',
+          bankAccount: '1234567890',
+          ifsc: 'HDFC0001234'
+        })
+
+        assert.equal(result.contactId, 'cont_1')
+        assert.equal(result.fundAccountId, 'fa_1')
+        assert.equal(payeeDoc.razorpayBeneficiary.contactId, 'cont_1')
+        assert.equal(payeeDoc.razorpayBeneficiary.fundAccountId, 'fa_1')
+        assert.equal(calls[0].body.contact, '9999999999')
+        assert.equal(calls[1].body.bank_account.ifsc, 'HDFC0001234')
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
+    name: 'automatic payout transitions to success when RazorpayX accepts the transfer',
+    async run() {
+      let payoutDoc = null
+      const payeeDoc = {
+        _id: 'payee-1',
+        razorpayBeneficiary: {
+          contactId: 'cont_1',
+          fundAccountId: 'fa_1',
+          status: 'ACTIVE'
+        }
+      }
+
+      const paymentDoc = {
+        _id: 'payment-razorpay-1',
+        status: 'SUCCESS',
+        amount: 5000,
+        currency: 'INR',
+        payer: { userId: 'payer-1' },
+        metadata: {
+          payout: {
+            payeeId: 'payee-1',
+            payeeType: 'TRANSPORTER',
+            transferMode: 'IMPS'
+          }
+        }
+      }
+
+      class MockPayout {
+        constructor(doc) {
+          this._id = doc._id || 'payout-1'
+          Object.assign(this, doc)
+        }
+        async save() {
+          payoutDoc = this
+          return this
+        }
+      }
+      MockPayout.findOne = (query = {}) => {
+        if (query.status === 'SUCCESS' || query._id) {
+          return null
+        }
+
+        return {
+          sort: async () => null
+        }
+      }
+      MockPayout.findOneAndUpdate = async (_query, update) => {
+        payoutDoc = new MockPayout({
+          ...(payoutDoc || {}),
+          ...(update?.$set || {})
+        })
+        return payoutDoc
+      }
+      MockPayout.findById = async () => payoutDoc
+      MockPayout.countDocuments = async () => 0
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutMode: 'sandbox',
+            razorpayPayoutKeyId: 'rzp_key_id',
+            razorpayPayoutKeySecret: 'rzp_key_secret',
+            razorpayPayoutWebhookSecret: 'rzp_webhook_secret',
+            razorpayPayoutApiBaseUrl: 'https://api.razorpay.com/v1',
+            razorpayPayoutAccountNumber: '1234567890'
+          },
+          '../models/Transporter': {
+            findById: async (id) => (id === 'payee-1' ? payeeDoc : null)
+          },
+          '../models/Driver': { findById: async () => null },
+          '../models/Customer': { findById: async () => null },
+          '../models/PumpOwner': { findById: async () => null },
+          '../models/CompanyUser': { findById: async () => null },
+          '../models/PaymentSession': {
+            findById: async (id) => (id === paymentDoc._id ? paymentDoc : null)
+          },
+          '../models/Payout': MockPayout
+        }
+      )
+
+      const originalFetch = global.fetch
+      global.fetch = async (url, options = {}) => {
+        if (String(url).includes('/payouts')) {
+          const requestBody = JSON.parse(options.body || '{}')
+          assert.equal(requestBody.fund_account_id, 'fa_1')
+          assert.equal(requestBody.reference_id, 'payout-1')
+          assert.equal(requestBody.narration, 'Porttivo payout')
+          assert.equal(options.headers['X-Payout-Idempotency'], 'RZP-payout-1')
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({
+              id: 'pout_1',
+              status: 'processed',
+              fund_account_id: 'fa_1',
+              reference_id: 'payout-1'
+            })
+          }
+        }
+
+        throw new Error(`Unexpected fetch URL: ${url}`)
+      }
+
+      try {
+        const payout = await service.createAutomaticPayoutForPayment(paymentDoc)
+
+        assert.equal(payout.provider, 'RAZORPAY')
+        assert.equal(payout.status, 'SUCCESS')
+        assert.equal(payout.razorpay.payoutId, 'pout_1')
+        assert.equal(payout.razorpay.fundAccountId, 'fa_1')
       } finally {
         global.fetch = originalFetch
       }

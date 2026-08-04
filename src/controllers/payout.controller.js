@@ -1,6 +1,7 @@
 const mongoose = require('mongoose')
 const Payout = require('../models/Payout')
 const PaymentSession = require('../models/PaymentSession')
+const logger = require('../utils/logger')
 const {
   buildPayoutStatusMessage,
   createAutomaticPayoutForPayment,
@@ -19,6 +20,10 @@ const {
   startPayoutTransfer,
   normalizeMoney
 } = require('../services/cashfreePayout.service')
+const {
+  handleRazorpayPayoutWebhook,
+  syncRazorpayBeneficiaryForPayee
+} = require('../services/razorpayPayout.service')
 
 const safeObjectIdString = (value) => {
   if (!value) return null
@@ -211,6 +216,26 @@ const createBeneficiary = async (req, res, next) => {
       { payeeId, name, email, phone, bankAccount, ifsc, address },
       req.fetch || global.fetch
     )
+
+    try {
+      await syncRazorpayBeneficiaryForPayee(
+        {
+          payeeId,
+          name,
+          email,
+          phone,
+          bankAccount,
+          ifsc
+        },
+        req.fetch || global.fetch
+      )
+    } catch (syncError) {
+      logger.warn('Razorpay beneficiary sync skipped', {
+        payeeId,
+        message: syncError.message,
+        stack: syncError.stack
+      })
+    }
 
     // Build the response from the Cashfree result plus the submitted values
     // (Cashfree is the only place the full bank details exist).
@@ -545,6 +570,40 @@ const handleCashfreeWebhook = async (req, res, next) => {
   }
 }
 
+const handleRazorpayWebhook = async (req, res, next) => {
+  try {
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        success: true,
+        message: 'Razorpay payout webhook endpoint reachable'
+      })
+    }
+
+    const payout = await handleRazorpayPayoutWebhook({
+      body: { ...(req.query || {}), ...(req.body || {}) },
+      headers: req.headers,
+      rawBody: req.rawBody || '',
+      fetchImpl: req.fetch || global.fetch
+    })
+
+    return res.status(200).json({
+      success: true,
+      message: 'Razorpay payout webhook processed successfully',
+      data: {
+        payout: serializePayout(payout)
+      }
+    })
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        message: error.message
+      })
+    }
+    next(error)
+  }
+}
+
 const retryPayout = async (req, res, next) => {
   try {
     if (req.user?.userType !== 'admin') {
@@ -703,6 +762,7 @@ module.exports = {
   getPayoutByPayment,
   getPayoutStatus,
   handleCashfreeWebhook,
+  handleRazorpayWebhook,
   listPayouts,
   retryPayout,
   runRetryCronNow,

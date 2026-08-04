@@ -118,6 +118,54 @@ const driverSchema = new mongoose.Schema(
         default: null,
       },
     },
+    razorpayBeneficiary: {
+      contactId: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      fundAccountId: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      status: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      bankAccountLast4: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      accountType: {
+        type: String,
+        trim: true,
+        default: 'bank_account',
+      },
+      referenceId: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+      providerResponse: {
+        type: mongoose.Schema.Types.Mixed,
+        default: {},
+      },
+      verifiedAt: {
+        type: Date,
+        default: null,
+      },
+      createdAt: {
+        type: Date,
+        default: null,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+    },
     appInstalled: {
       type: Boolean,
       default: false,

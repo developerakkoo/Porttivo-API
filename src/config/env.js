@@ -125,6 +125,40 @@ module.exports = {
   cashfreeWebhookUrl:
     process.env.CASHFREE_WEBHOOK_URL ||
     buildApiUrl('/api/payments/cashfree/webhook'),
+  razorpayMode: process.env.RAZORPAY_MODE || 'sandbox',
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_TK5zgPNM47awfl',
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || 'uVo53PY9kWFXJ9tAOHnUVqQd',
+  razorpayWebhookSecret:
+    process.env.RAZORPAY_WEBHOOK_SECRET ||
+    process.env.RAZORPAY_KEY_SECRET ||
+    'uVo53PY9kWFXJ9tAOHnUVqQd',
+  razorpayApiBaseUrl:
+    process.env.RAZORPAY_API_BASE_URL || 'https://api.razorpay.com/v1',
+  razorpayCheckoutUrl:
+    process.env.RAZORPAY_CHECKOUT_URL ||
+    'https://checkout.razorpay.com/v1/checkout.js',
+  razorpayWebhookUrl:
+    process.env.RAZORPAY_WEBHOOK_URL ||
+    buildApiUrl('/api/payments/razorpay/webhook'),
+  razorpayPayoutMode: process.env.RAZORPAY_PAYOUT_MODE || process.env.RAZORPAY_MODE || 'sandbox',
+  razorpayPayoutKeyId:
+    process.env.RAZORPAY_PAYOUT_KEY_ID || process.env.RAZORPAY_KEY_ID || 'rzp_test_TK5zgPNM47awfl',
+  razorpayPayoutKeySecret:
+    process.env.RAZORPAY_PAYOUT_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET || 'uVo53PY9kWFXJ9tAOHnUVqQd',
+  razorpayPayoutWebhookSecret:
+    process.env.RAZORPAY_PAYOUT_WEBHOOK_SECRET ||
+    process.env.RAZORPAY_WEBHOOK_SECRET ||
+    process.env.RAZORPAY_KEY_SECRET ||
+    'uVo53PY9kWFXJ9tAOHnUVqQd',
+  razorpayPayoutApiBaseUrl:
+    process.env.RAZORPAY_PAYOUT_API_BASE_URL || 'https://api.razorpay.com/v1',
+  razorpayPayoutAccountNumber:
+    process.env.RAZORPAY_PAYOUT_ACCOUNT_NUMBER ||
+    process.env.RAZORPAY_ACCOUNT_NUMBER ||
+    '2052114711',
+  razorpayPayoutWebhookUrl:
+    process.env.RAZORPAY_PAYOUT_WEBHOOK_URL ||
+    buildApiUrl('/api/payouts/razorpay/webhook'),
   // Firebase Cloud Messaging (push). Provide EITHER a path to the service
   // account JSON, OR the raw JSON string. If neither is set, push is disabled
   // (the server still boots and notifications fall back to in-app + socket).
