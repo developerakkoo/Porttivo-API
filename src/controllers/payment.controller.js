@@ -270,6 +270,7 @@ const initiatePaymentSession = async (req, res, next) => {
   try {
     const body = req.body || {}
     const provider = normalizeProvider(body.provider)
+    const gatewayMetadata = getGatewayPayloadMetadata(provider, body)
     const referenceType = String(body.referenceType || '').trim()
     const referenceId = String(body.referenceId || '').trim()
     const purpose = String(body.purpose || '').trim()
@@ -442,6 +443,14 @@ const initiatePaymentSession = async (req, res, next) => {
         metadata
       })
 
+      if (provider === 'RAZORPAY') {
+        payment.providerOrderId =
+          paymentRequest.rawResponse?.id ||
+          paymentRequest.fields?.order_id ||
+          payment.providerOrderId ||
+          null
+      }
+
       payment.paymentGatewayUrl = paymentRequest.actionUrl
       payment.paymentRequest = paymentRequest
       payment.status = 'PENDING'
@@ -602,6 +611,7 @@ const handleGatewayWebhook = async (req, res, next) => {
     const metadata = getGatewayPayloadMetadata(provider, body)
 
     const merchantTransactionId = String(
+      gatewayMetadata.providerOrderId ||
       metadata.providerOrderId ||
         body.txnid ||
         body.order_id ||
@@ -723,9 +733,6 @@ const handleGatewayWebhook = async (req, res, next) => {
     }
 
     const previousStatus = payment.status
-
-    const gatewayMetadata = getGatewayPayloadMetadata(provider, body)
-
     let responseStatus = gatewayMetadata.status
 
     if (

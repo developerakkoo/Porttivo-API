@@ -387,6 +387,101 @@ const paymentTests = [
     }
   },
   {
+    name: 'initiatePaymentSession stores the Razorpay order id for webhook matching',
+    async run() {
+      const paymentDoc = {
+        _id: 'payment-rzp-1',
+        status: 'CREATED',
+        provider: 'RAZORPAY',
+        referenceType: 'INVOICE',
+        referenceId: 'INV-3001',
+        purpose: 'Invoice payment',
+        amount: 1750,
+        currency: 'INR',
+        merchantTransactionId: 'RZP-ABC',
+        payer: {
+          userId: 'payer-1',
+          userType: 'transporter',
+          name: 'Alpha Logistics',
+          email: 'alpha@example.com',
+          mobile: '9999999999'
+        },
+        metadata: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      const originalFetch = global.fetch
+      global.fetch = async (_url, options = {}) => {
+        const body = JSON.parse(options.body || '{}')
+        assert.equal(body.receipt, 'RZP-ABC')
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              id: 'order_RZP_1',
+              amount: 175000,
+              currency: 'INR'
+            })
+        }
+      }
+
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payment.controller.js'),
+        {
+          mongoose: {
+            ...mongoose,
+            startSession: async () => makeSession()
+          },
+          '../models/PaymentSession': {
+            findOne: () => ({
+              sort: async () => null
+            }),
+            create: async ([doc]) => {
+              Object.assign(paymentDoc, doc)
+              return [paymentDoc]
+            }
+          }
+        }
+      )
+
+      const req = {
+        user: {
+          id: 'payer-1',
+          userType: 'transporter',
+          userData: {
+            name: 'Alpha Logistics',
+            email: 'alpha@example.com',
+            mobile: '9999999999'
+          }
+        },
+        body: {
+          provider: 'RAZORPAY',
+          amount: 1750,
+          currency: 'INR',
+          purpose: 'Invoice payment',
+          referenceType: 'INVOICE',
+          referenceId: 'INV-3001'
+        }
+      }
+      const res = createMockRes()
+
+      try {
+        await controller.initiatePaymentSession(req, res, (error) => {
+          throw error
+        })
+
+        assert.equal(res.statusCode, 200)
+        assert.equal(paymentDoc.providerOrderId, 'order_RZP_1')
+        assert.equal(res.body.data.payment.razorpay.order_id, 'order_RZP_1')
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
     name: 'PayU webhook marks the payment as successful',
     async run() {
       const paymentDoc = {
@@ -645,8 +740,13 @@ const paymentTests = [
             })
           },
           '../models/PaymentSession': {
-            findById: async () => paymentDoc,
-            findOne: async () => paymentDoc
+            findById: async () => null,
+            findOne: async (query) => {
+              if (query?.providerOrderId === 'order_RZP_1') {
+                return paymentDoc
+              }
+              return null
+            }
           }
         }
       )
