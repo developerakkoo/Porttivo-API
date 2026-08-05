@@ -20,10 +20,7 @@ const {
   startPayoutTransfer,
   normalizeMoney
 } = require('../services/cashfreePayout.service')
-const {
-  handleRazorpayPayoutWebhook,
-  syncRazorpayBeneficiaryForPayee
-} = require('../services/razorpayPayout.service')
+const razorpayService = require('../services/razorpayPayout.service')
 
 const safeObjectIdString = (value) => {
   if (!value) return null
@@ -218,7 +215,7 @@ const createBeneficiary = async (req, res, next) => {
     )
 
     try {
-      await syncRazorpayBeneficiaryForPayee(
+      await razorpayService.syncRazorpayBeneficiaryForPayee(
         {
           payeeId,
           name,
@@ -579,7 +576,7 @@ const handleRazorpayWebhook = async (req, res, next) => {
       })
     }
 
-    const payout = await handleRazorpayPayoutWebhook({
+    const payout = await razorpayService.handleRazorpayPayoutWebhook({
       body: { ...(req.query || {}), ...(req.body || {}) },
       headers: req.headers,
       rawBody: req.rawBody || '',
@@ -753,6 +750,134 @@ const runRetryCronNow = async (req, res, next) => {
   }
 }
 
+const createRazorpayContact = async (req, res, next) => {
+  try {
+    if (!['admin', 'transporter', 'driver'].includes(req.user?.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const body = req.body || {}
+    const result = await razorpayService.createRazorpayContact(body, { fetchImpl: req.fetch || global.fetch })
+
+    return res.status(201).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getRazorpayContact = async (req, res, next) => {
+  try {
+    const contactId = String(req.params.contactId || req.params.id || '').trim()
+    if (!contactId) return res.status(400).json({ success: false, message: 'contact id required' })
+    const result = await razorpayService.getRazorpayContact(contactId, { fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const listRazorpayContacts = async (req, res, next) => {
+  try {
+    const result = await razorpayService.listRazorpayContacts({ query: req.query || {}, fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const createRazorpayFundAccount = async (req, res, next) => {
+  try {
+    if (!['admin', 'transporter', 'driver'].includes(req.user?.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const body = req.body || {}
+    const result = await razorpayService.createRazorpayFundAccount(body, { fetchImpl: req.fetch || global.fetch })
+    return res.status(201).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const listRazorpayFundAccounts = async (req, res, next) => {
+  try {
+    const result = await razorpayService.listRazorpayFundAccounts({ query: req.query || {}, fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const createRazorpayPayout = async (req, res, next) => {
+  try {
+    if (!['admin', 'transporter', 'driver'].includes(req.user?.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+
+    const body = req.body || {}
+    const headers = {
+      'X-Payout-Idempotency': req.headers['x-payout-idempotency'] || req.headers['X-Payout-Idempotency'] || undefined
+    }
+
+    const result = await razorpayService.createRazorpayPayout(body, { headers, fetchImpl: req.fetch || global.fetch })
+    return res.status(201).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const listRazorpayPayouts = async (req, res, next) => {
+  try {
+    if (!['admin', 'transporter', 'driver'].includes(req.user?.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    const result = await razorpayService.listRazorpayPayouts({ query: req.query || {}, fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getRazorpayPayout = async (req, res, next) => {
+  try {
+    if (!['admin', 'transporter', 'driver'].includes(req.user?.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    const id = String(req.params.payoutId || req.params.id || '').trim()
+    if (!id) return res.status(400).json({ success: false, message: 'payout id required' })
+    const result = await razorpayService.getRazorpayPayout(id, { fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const listRazorpayTransactions = async (req, res, next) => {
+  try {
+    if (!['admin', 'transporter', 'driver'].includes(req.user?.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    const result = await razorpayService.listRazorpayTransactions({ query: req.query || {}, fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getRazorpayTransaction = async (req, res, next) => {
+  try {
+    if (!['admin', 'transporter', 'driver'].includes(req.user?.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    const id = String(req.params.transactionId || req.params.id || '').trim()
+    if (!id) return res.status(400).json({ success: false, message: 'transaction id required' })
+    const result = await razorpayService.getRazorpayTransaction(id, { fetchImpl: req.fetch || global.fetch })
+    return res.status(200).json({ success: true, data: result })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   cancelPayout,
   createBeneficiary,
@@ -767,5 +892,16 @@ module.exports = {
   retryPayout,
   runRetryCronNow,
   removeBeneficiary,
-  triggerAutomaticPayout
+  triggerAutomaticPayout,
+  // Razorpay proxy endpoints
+  createRazorpayContact,
+  getRazorpayContact,
+  listRazorpayContacts,
+  createRazorpayFundAccount,
+  listRazorpayFundAccounts,
+  createRazorpayPayout,
+  listRazorpayPayouts,
+  getRazorpayPayout,
+  listRazorpayTransactions,
+  getRazorpayTransaction
 }

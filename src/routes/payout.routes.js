@@ -1,6 +1,6 @@
 const express = require('express')
 const router = express.Router()
-const { authenticate } = require('../middleware/auth.middleware')
+const { authenticate, authorizeRoles } = require('../middleware/auth.middleware')
 const {
   cancelPayout,
   createBeneficiary,
@@ -11,6 +11,16 @@ const {
   getPayoutStatus,
   handleCashfreeWebhook,
   handleRazorpayWebhook,
+  createRazorpayContact,
+  getRazorpayContact,
+  listRazorpayContacts,
+  createRazorpayFundAccount,
+  listRazorpayFundAccounts,
+  createRazorpayPayout,
+  listRazorpayPayouts,
+  getRazorpayPayout,
+  listRazorpayTransactions,
+  getRazorpayTransaction,
   listPayouts,
   retryPayout,
   runRetryCronNow,
@@ -25,9 +35,23 @@ router.get('/razorpay/webhook', handleRazorpayWebhook)
 
 router.use(authenticate)
 
+// Allow admin, transporter and driver to access Razorpay proxy endpoints
+router.use('/razorpay', authorizeRoles(['admin', 'transporter', 'driver']))
+
 router.post('/beneficiary', createBeneficiary)
 router.get('/beneficiary', getBeneficiary)
 router.delete('/beneficiary', removeBeneficiary)
+// Razorpay proxy endpoints
+router.post('/razorpay/contacts', createRazorpayContact)
+router.get('/razorpay/contacts/:id', getRazorpayContact)
+router.get('/razorpay/contacts', listRazorpayContacts)
+router.post('/razorpay/fund_accounts', createRazorpayFundAccount)
+router.get('/razorpay/fund_accounts', listRazorpayFundAccounts)
+router.post('/razorpay/payouts', createRazorpayPayout)
+router.get('/razorpay/payouts', listRazorpayPayouts)
+router.get('/razorpay/payouts/:id', getRazorpayPayout)
+router.get('/razorpay/transactions', listRazorpayTransactions)
+router.get('/razorpay/transactions/:id', getRazorpayTransaction)
 router.post('/', createPayout)
 router.get('/', listPayouts)
 router.get('/admin/summary', getAdminPayoutSummary)

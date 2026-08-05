@@ -1257,6 +1257,71 @@ const getPayoutSummary = async () => {
   }
 }
 
+const listRazorpayContacts = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+  const result = await razorpayRequest('/contacts', { method: 'GET', query, fetchImpl })
+  return result.data || {}
+}
+
+const getRazorpayContact = async (contactId, { fetchImpl = global.fetch } = {}) => {
+  if (!contactId) {
+    const error = new Error('contactId is required')
+    error.statusCode = 400
+    throw error
+  }
+  const result = await razorpayRequest(`/contacts/${String(contactId).trim()}`, { method: 'GET', fetchImpl })
+  return result.data || {}
+}
+
+const listRazorpayFundAccounts = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+  const result = await razorpayRequest('/fund_accounts', { method: 'GET', query, fetchImpl })
+  return result.data || {}
+}
+
+const getRazorpayFundAccount = async (fundAccountId, { fetchImpl = global.fetch } = {}) => {
+  if (!fundAccountId) {
+    const error = new Error('fundAccountId is required')
+    error.statusCode = 400
+    throw error
+  }
+  const result = await razorpayRequest(`/fund_accounts/${String(fundAccountId).trim()}`, { method: 'GET', fetchImpl })
+  return result.data || {}
+}
+
+const createRazorpayPayout = async (body, { headers = {}, fetchImpl = global.fetch } = {}) => {
+  const result = await razorpayRequest('/payouts', { method: 'POST', body, headers, fetchImpl })
+  return result.data || {}
+}
+
+const listRazorpayPayouts = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+  const result = await razorpayRequest('/payouts', { method: 'GET', query, fetchImpl })
+  return result.data || {}
+}
+
+const getRazorpayPayout = async (payoutId, { fetchImpl = global.fetch } = {}) => {
+  if (!payoutId) {
+    const error = new Error('payoutId is required')
+    error.statusCode = 400
+    throw error
+  }
+  const result = await razorpayRequest(`/payouts/${String(payoutId).trim()}`, { method: 'GET', fetchImpl })
+  return result.data || {}
+}
+
+const listRazorpayTransactions = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+  const result = await razorpayRequest('/transactions', { method: 'GET', query, fetchImpl })
+  return result.data || {}
+}
+
+const getRazorpayTransaction = async (txnId, { fetchImpl = global.fetch } = {}) => {
+  if (!txnId) {
+    const error = new Error('txnId is required')
+    error.statusCode = 400
+    throw error
+  }
+  const result = await razorpayRequest(`/transactions/${String(txnId).trim()}`, { method: 'GET', fetchImpl })
+  return result.data || {}
+}
+
 module.exports = {
   createAutomaticPayoutForPayment,
   createRazorpayPayoutRecord,
@@ -1271,5 +1336,16 @@ module.exports = {
   syncRazorpayBeneficiaryForPayee,
   startRazorpayPayoutTransfer,
   verifyRazorpayCheckoutPayload,
-  verifyRazorpayPaymentSignature
+  verifyRazorpayPaymentSignature,
+  // Proxy / utility functions
+  listRazorpayContacts,
+  getRazorpayContact,
+  listRazorpayFundAccounts,
+  getRazorpayFundAccount,
+  createRazorpayPayout,
+  listRazorpayPayouts,
+  getRazorpayPayout,
+  listRazorpayTransactions,
+  getRazorpayTransaction
 }
+

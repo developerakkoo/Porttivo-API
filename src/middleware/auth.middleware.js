@@ -165,3 +165,21 @@ module.exports = {
   authenticate,
   optionalAuth,
 };
+
+// Authorize user types/roles for specific routes
+const authorizeRoles = (roles = []) => (req, res, next) => {
+  try {
+    if (!req.user || !roles.includes(req.user.userType)) {
+      return res.status(403).json({ success: false, message: 'Access denied' })
+    }
+    next()
+  } catch (err) {
+    next(err)
+  }
+}
+
+module.exports = {
+  authenticate,
+  optionalAuth,
+  authorizeRoles
+}
