@@ -12,6 +12,18 @@ const { auditRequest } = require('./src/middleware/audit.middleware');
 const { logApiRequest } = require('./src/middleware/requestLog.middleware');
 const { initializeSocketIO } = require('./src/services/socket.service');
 
+if (typeof global.fetch !== 'function') {
+  try {
+    const { fetch: undiciFetch } = require('undici')
+    global.fetch = undiciFetch
+  } catch (error) {
+    logger.error('Fetch API is not available and undici is not installed', {
+      message: error.message
+    })
+    process.exit(1)
+  }
+}
+
 // Import routes
 const authRoutes = require('./src/routes/auth.routes');
 const transporterRoutes = require('./src/routes/transporter.routes');
