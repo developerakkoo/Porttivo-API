@@ -283,7 +283,7 @@ const ensureRazorpayBeneficiaryPayload = ({
   }
 }
 
-const createRazorpayContact = async (contact, fetchImpl = global.fetch) => {
+const createRazorpayContact = async (contact, fetchImpl = getFetchImpl()) => {
   const result = await razorpayRequest('/contacts', {
     method: 'POST',
     body: contact,
@@ -305,7 +305,7 @@ const createRazorpayContact = async (contact, fetchImpl = global.fetch) => {
 
 const createRazorpayFundAccount = async (
   { contactId, accountType = 'bank_account', bankAccount },
-  fetchImpl = global.fetch
+  fetchImpl = getFetchImpl()
 ) => {
   const result = await razorpayRequest('/fund_accounts', {
     method: 'POST',
@@ -370,7 +370,7 @@ const syncRazorpayBeneficiaryForPayee = async (
     ifsc,
     accountType = 'bank_account'
   } = {},
-  fetchImpl = global.fetch
+  fetchImpl = getFetchImpl()
 ) => {
   const { payee, modelName } = await findPayeeRecordById(payeeId)
   if (!payee) {
@@ -737,7 +737,7 @@ const ensureAutomaticPayoutMetadata = payment => {
 
 const startRazorpayPayoutTransfer = async (
   payoutInput,
-  { fetchImpl = global.fetch } = {}
+  { fetchImpl = getFetchImpl() } = {}
 ) => {
   let payout =
     payoutInput && payoutInput._id && payoutInput.status
@@ -957,7 +957,7 @@ const startRazorpayPayoutTransfer = async (
 
 const createAutomaticPayoutForPayment = async (
   paymentInput,
-  { fetchImpl = global.fetch } = {}
+  { fetchImpl = getFetchImpl() } = {}
 ) => {
   const payment =
     paymentInput && paymentInput._id && paymentInput.status
@@ -1102,7 +1102,7 @@ const isRazorpayRetryDue = payout => {
 }
 
 const processDuePayoutRetries = async ({
-  fetchImpl = global.fetch,
+  fetchImpl = getFetchImpl(),
   limit = 25
 } = {}) => {
   const payouts = await Payout.find({
@@ -1163,7 +1163,7 @@ const handleRazorpayPayoutWebhook = async ({
   body = {},
   headers = {},
   rawBody = '',
-  fetchImpl = global.fetch
+  fetchImpl = getFetchImpl()
 } = {}) => {
   if (!verifyRazorpayPayoutWebhook(body, headers, rawBody)) {
     const error = new Error('Invalid Razorpay payout webhook signature')
@@ -1269,12 +1269,12 @@ const getPayoutSummary = async () => {
   }
 }
 
-const listRazorpayContacts = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+const listRazorpayContacts = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
   const result = await razorpayRequest('/contacts', { method: 'GET', query, fetchImpl })
   return result.data || {}
 }
 
-const getRazorpayContact = async (contactId, { fetchImpl = global.fetch } = {}) => {
+const getRazorpayContact = async (contactId, { fetchImpl = getFetchImpl() } = {}) => {
   if (!contactId) {
     const error = new Error('contactId is required')
     error.statusCode = 400
@@ -1284,12 +1284,12 @@ const getRazorpayContact = async (contactId, { fetchImpl = global.fetch } = {}) 
   return result.data || {}
 }
 
-const listRazorpayFundAccounts = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+const listRazorpayFundAccounts = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
   const result = await razorpayRequest('/fund_accounts', { method: 'GET', query, fetchImpl })
   return result.data || {}
 }
 
-const getRazorpayFundAccount = async (fundAccountId, { fetchImpl = global.fetch } = {}) => {
+const getRazorpayFundAccount = async (fundAccountId, { fetchImpl = getFetchImpl() } = {}) => {
   if (!fundAccountId) {
     const error = new Error('fundAccountId is required')
     error.statusCode = 400
@@ -1299,17 +1299,17 @@ const getRazorpayFundAccount = async (fundAccountId, { fetchImpl = global.fetch 
   return result.data || {}
 }
 
-const createRazorpayPayout = async (body, { headers = {}, fetchImpl = global.fetch } = {}) => {
+const createRazorpayPayout = async (body, { headers = {}, fetchImpl = getFetchImpl() } = {}) => {
   const result = await razorpayRequest('/payouts', { method: 'POST', body, headers, fetchImpl })
   return result.data || {}
 }
 
-const listRazorpayPayouts = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+const listRazorpayPayouts = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
   const result = await razorpayRequest('/payouts', { method: 'GET', query, fetchImpl })
   return result.data || {}
 }
 
-const getRazorpayPayout = async (payoutId, { fetchImpl = global.fetch } = {}) => {
+const getRazorpayPayout = async (payoutId, { fetchImpl = getFetchImpl() } = {}) => {
   if (!payoutId) {
     const error = new Error('payoutId is required')
     error.statusCode = 400
@@ -1319,12 +1319,12 @@ const getRazorpayPayout = async (payoutId, { fetchImpl = global.fetch } = {}) =>
   return result.data || {}
 }
 
-const listRazorpayTransactions = async ({ query = {}, fetchImpl = global.fetch } = {}) => {
+const listRazorpayTransactions = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
   const result = await razorpayRequest('/transactions', { method: 'GET', query, fetchImpl })
   return result.data || {}
 }
 
-const getRazorpayTransaction = async (txnId, { fetchImpl = global.fetch } = {}) => {
+const getRazorpayTransaction = async (txnId, { fetchImpl = getFetchImpl() } = {}) => {
   if (!txnId) {
     const error = new Error('txnId is required')
     error.statusCode = 400
