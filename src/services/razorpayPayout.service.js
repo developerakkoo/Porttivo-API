@@ -1338,8 +1338,10 @@ module.exports = {
   verifyRazorpayCheckoutPayload,
   verifyRazorpayPaymentSignature,
   // Proxy / utility functions
+  createRazorpayContact,
   listRazorpayContacts,
   getRazorpayContact,
+  createRazorpayFundAccount,
   listRazorpayFundAccounts,
   getRazorpayFundAccount,
   createRazorpayPayout,
