@@ -97,9 +97,21 @@ const buildRequestHeaders = (extraHeaders = {}) => {
   }
 }
 
+const getFetchImpl = () => {
+  if (typeof global.fetch === 'function') {
+    return global.fetch
+  }
+
+  try {
+    return require('undici').fetch
+  } catch (error) {
+    return null
+  }
+}
+
 const razorpayRequest = async (
   path,
-  { method = 'GET', body = null, headers = {}, query = null, fetchImpl = global.fetch } = {}
+  { method = 'GET', body = null, headers = {}, query = null, fetchImpl = getFetchImpl() } = {}
 ) => {
   if (typeof fetchImpl !== 'function') {
     throw new Error('Fetch is not available for Razorpay payout requests')
