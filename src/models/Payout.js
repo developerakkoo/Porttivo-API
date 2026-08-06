@@ -212,9 +212,21 @@ const payoutSchema = new mongoose.Schema(
 
 payoutSchema.index({ paymentId: 1 }, { unique: true, sparse: true })
 payoutSchema.index({ referenceType: 1, referenceId: 1, provider: 1 })
-payoutSchema.index({ 'cashfree.transferId': 1 }, { unique: true, sparse: true })
+payoutSchema.index(
+  { 'cashfree.transferId': 1 },
+  {
+    unique: true,
+    partialFilterExpression: { 'cashfree.transferId': { $exists: true, $ne: null } }
+  }
+)
 payoutSchema.index({ 'cashfree.beneId': 1 })
-payoutSchema.index({ 'razorpay.payoutId': 1 }, { unique: true, sparse: true })
+payoutSchema.index(
+  { 'razorpay.payoutId': 1 },
+  {
+    unique: true,
+    partialFilterExpression: { 'razorpay.payoutId': { $exists: true, $ne: null } }
+  }
+)
 payoutSchema.index({ 'razorpay.fundAccountId': 1 })
 payoutSchema.index({ status: 1, 'retry.nextRetryAt': 1, updatedAt: -1 })
 
