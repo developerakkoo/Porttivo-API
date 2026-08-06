@@ -20,6 +20,8 @@ router.get('/references/:referenceType/:referenceId', authenticate, getPaymentSe
 router.get('/cashfree/return', handleCashfreeReturn)
 router.post('/:provider/webhook', handleGatewayWebhook)
 router.get('/:provider/webhook', handleGatewayWebhook)
+router.post('/:provider/verify', handleGatewayWebhook)
+router.get('/:provider/verify', handleGatewayWebhook)
 router.get('/transporter/history',authenticate, getTransporterPaymentHistory)
 router.get('/admin/history', authenticate, getAdminPaymentHistory)
 
