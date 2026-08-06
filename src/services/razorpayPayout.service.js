@@ -102,6 +102,10 @@ const getFetchImpl = () => {
     return global.fetch
   }
 
+  if (typeof globalThis.fetch === 'function') {
+    return globalThis.fetch
+  }
+
   try {
     return require('undici').fetch
   } catch (error) {
@@ -113,7 +117,8 @@ const razorpayRequest = async (
   path,
   { method = 'GET', body = null, headers = {}, query = null, fetchImpl = getFetchImpl() } = {}
 ) => {
-  if (typeof fetchImpl !== 'function') {
+  const resolvedFetchImpl = typeof fetchImpl === 'function' ? fetchImpl : getFetchImpl()
+  if (typeof resolvedFetchImpl !== 'function') {
     throw new Error('Fetch is not available for Razorpay payout requests')
   }
 
@@ -126,7 +131,7 @@ const razorpayRequest = async (
     }
   }
 
-  const response = await fetchImpl(url.toString(), {
+  const response = await resolvedFetchImpl(url.toString(), {
     method,
     headers: buildRequestHeaders(headers),
     body: body ? JSON.stringify(body) : undefined

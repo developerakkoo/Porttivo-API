@@ -5,6 +5,45 @@ const { createMockRes } = require('./helpers/http')
 
 const payoutTests = [
   {
+    name: 'createRazorpayContact forwards a fetch function to the Razorpay service',
+    async run() {
+      let capturedFetchImpl = null
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/razorpayPayout.service': {
+            createRazorpayContact: async (body, fetchImpl) => {
+              capturedFetchImpl = fetchImpl
+              return { id: 'contact_1', body }
+            }
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        user: { id: 'admin-1', userType: 'admin' },
+        body: {
+          name: 'Shubham Shelke1',
+          email: 'shelkeshubham011@gmail.com',
+          contact: '9403884043',
+          type: 'Vendor'
+        },
+        fetch: () => ({})
+      }
+      const res = createMockRes()
+
+      await controller.createRazorpayContact(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 201)
+      assert.equal(typeof capturedFetchImpl, 'function')
+      assert.equal(capturedFetchImpl, req.fetch)
+    }
+  },
+  {
     name: 'createBeneficiary rejects transporter accounts for another payee',
     async run() {
       const controller = loadWithMocks(
