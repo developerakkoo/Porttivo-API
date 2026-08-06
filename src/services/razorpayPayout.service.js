@@ -186,6 +186,43 @@ const getPayeeSnapshot = (payee, modelName) => {
   }
 }
 
+const extractRazorpayMessage = payload => {
+  if (!payload || typeof payload === 'undefined') {
+    return null
+  }
+
+  if (typeof payload === 'string') {
+    return payload.trim() || null
+  }
+
+  if (payload instanceof Error) {
+    return payload.message || null
+  }
+
+  if (typeof payload === 'object') {
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message.trim()
+    }
+
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error.trim()
+    }
+
+    if (payload.error && typeof payload.error === 'object') {
+      const nestedMessage = payload.error.description || payload.error.message || payload.error.error_description
+      if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
+        return nestedMessage.trim()
+      }
+    }
+
+    if (payload.description && typeof payload.description === 'string' && payload.description.trim()) {
+      return payload.description.trim()
+    }
+  }
+
+  return null
+}
+
 const parseRazorpayResponse = payload => {
   if (!payload) {
     return { raw: payload, status: null }
@@ -220,7 +257,7 @@ const parseRazorpayResponse = payload => {
     fundAccountId: data.fund_account_id || data.fundAccountId || null,
     utr: data.utr || data.utr_no || data.utrNo || null,
     code: data.code || data.error_code || null,
-    message: data.message || data.error || data.errorMessage || null,
+    message: extractRazorpayMessage(data.message || data.error || data.errorMessage || data) || null,
     statusDetails: data.status_details || data.statusDetails || null
   }
 }

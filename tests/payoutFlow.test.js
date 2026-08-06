@@ -5,6 +5,28 @@ const { createMockRes } = require('./helpers/http')
 
 const payoutTests = [
   {
+    name: 'createRazorpayContact throws a readable message when Razorpay returns an object error',
+    async run() {
+      const razorpayService = require(path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'))
+      const fakeFetch = async () => ({
+        ok: false,
+        status: 400,
+        text: async () => JSON.stringify({
+          error: { description: 'contact already exists' },
+          message: { code: 'BAD_REQUEST', description: 'contact already exists' }
+        })
+      })
+
+      await assert.rejects(
+        () => razorpayService.createRazorpayContact({ name: 'Test' }, fakeFetch),
+        (error) => {
+          assert.equal(error.message, 'contact already exists')
+          return true
+        }
+      )
+    }
+  },
+  {
     name: 'createRazorpayContact forwards a fetch function to the Razorpay service',
     async run() {
       let capturedFetchImpl = null
