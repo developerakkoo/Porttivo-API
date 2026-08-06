@@ -612,13 +612,12 @@ const handleGatewayWebhook = async (req, res, next) => {
 
     const merchantTransactionId = String(
       gatewayMetadata.providerOrderId ||
-      metadata.providerOrderId ||
-        body.txnid ||
-        body.order_id ||
-        body.orderId ||
-        body.merchantTransactionId ||
-        body.cf_order_id ||
-        ''
+      body.txnid ||
+      body.order_id ||
+      body.orderId ||
+      body.merchantTransactionId ||
+      body.cf_order_id ||
+      ''
     ).trim()
 
     const paymentSessionId = String(

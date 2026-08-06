@@ -98,7 +98,12 @@ app.use(express.json({
     req.rawBody = buf ? buf.toString('utf8') : '';
   }
 }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({
+  extended: true,
+  verify: (req, res, buf) => {
+    req.rawBody = buf ? buf.toString('utf8') : '';
+  }
+}));
 app.use(logApiRequest);
 
 // Audit middleware for /api routes (logs mutating ops when req.user exists)

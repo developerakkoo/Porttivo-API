@@ -818,12 +818,18 @@ const verifyGatewayWebhook = ({
     ).trim()
 
     if (webhookSignature) {
-      return verifyWebhookSignature({
+      const verified = verifyWebhookSignature({
         signature: webhookSignature,
         body,
         rawBody,
         secrets: [razorpayWebhookSecret, razorpayKeySecret]
       })
+
+      if (verified) {
+        return true
+      }
+
+      return verifyRazorpayPaymentSignature(body)
     }
 
     return verifyRazorpayPaymentSignature(body)

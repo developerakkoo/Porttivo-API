@@ -130,8 +130,7 @@ module.exports = {
   razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || 'uVo53PY9kWFXJ9tAOHnUVqQd',
   razorpayWebhookSecret:
     process.env.RAZORPAY_WEBHOOK_SECRET ||
-    process.env.RAZORPAY_KEY_SECRET ||
-    'uVo53PY9kWFXJ9tAOHnUVqQd',
+    '',
   razorpayApiBaseUrl:
     process.env.RAZORPAY_API_BASE_URL || 'https://api.razorpay.com/v1',
   razorpayCheckoutUrl:
