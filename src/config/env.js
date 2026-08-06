@@ -154,7 +154,7 @@ module.exports = {
   razorpayPayoutAccountNumber:
     process.env.RAZORPAY_PAYOUT_ACCOUNT_NUMBER ||
     process.env.RAZORPAY_ACCOUNT_NUMBER ||
-    '',
+    '50100102283912',
   razorpayPayoutWebhookUrl:
     process.env.RAZORPAY_PAYOUT_WEBHOOK_URL ||
     buildApiUrl('/api/payouts/razorpay/webhook'),
