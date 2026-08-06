@@ -427,9 +427,9 @@ const stableStringify = (value) => {
 
 const buildWebhookCandidates = (body, rawBody = '') => {
   const candidates = []
-  const raw = typeof rawBody === 'string' ? rawBody.trim() : ''
-  if (raw) {
-    candidates.push(raw)
+
+  if (typeof rawBody === 'string' && rawBody.length > 0) {
+    candidates.push(rawBody)
   }
 
   if (body && typeof body === 'object') {
@@ -817,19 +817,17 @@ const verifyGatewayWebhook = ({
         ''
     ).trim()
 
-    if (webhookSignature) {
+    if (webhookSignature && razorpayWebhookSecret) {
       const verified = verifyWebhookSignature({
         signature: webhookSignature,
         body,
         rawBody,
-        secrets: [razorpayWebhookSecret, razorpayKeySecret]
+        secrets: [razorpayWebhookSecret]
       })
 
       if (verified) {
         return true
       }
-
-      return verifyRazorpayPaymentSignature(body)
     }
 
     return verifyRazorpayPaymentSignature(body)
