@@ -66,6 +66,15 @@ const makeTransferId = (prefix = 'RZP') => {
 const makeIdempotencyKey = payoutId =>
   `RZP-${String(payoutId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)}`
 
+const savePayoutWithLogs = async payout => {
+  console.log('Saving payout...')
+  console.log({
+    payoutId: payout?.razorpay?.payoutId || null,
+    status: payout?.status || null
+  })
+  return payout.save()
+}
+
 const sanitizeResponse = payload => {
   if (!payload || typeof payload !== 'object') {
     return payload || {}
@@ -203,6 +212,20 @@ const normalizeRazorpayContactType = type => {
   }
 
   return aliases[normalized] || normalized
+}
+
+const normalizeRazorpayPayoutStatus = status => {
+  const normalized = String(status || '').trim().toLowerCase()
+  if (['captured', 'paid', 'processed', 'success', 'completed', 'succeeded'].includes(normalized)) {
+    return 'SUCCESS'
+  }
+  if (['failed', 'failure', 'reversed', 'rejected', 'cancelled', 'canceled'].includes(normalized)) {
+    return 'FAILED'
+  }
+  if (['processing', 'queued', 'pending', 'created', 'initiated'].includes(normalized)) {
+    return 'PROCESSING'
+  }
+  return 'PROCESSING'
 }
 
 const extractRazorpayMessage = payload => {
@@ -773,6 +796,7 @@ const createRazorpayPayoutRecord = async ({
       fundAccountId: razorpay.fundAccountId || null,
       payoutId: razorpay.payoutId || null,
       referenceId: razorpay.referenceId || null,
+      utr: razorpay.utr || null,
       transferMode: razorpay.transferMode || 'IMPS',
       statusDetails: razorpay.statusDetails || {},
       beneficiary: razorpay.beneficiary || {},
@@ -791,7 +815,7 @@ const createRazorpayPayoutRecord = async ({
     lastAttemptAt: razorpay.payoutId ? new Date() : null
   })
 
-  return payout.save()
+  return savePayoutWithLogs(payout)
 }
 
 const findExistingRazorpayPayout = async ({
@@ -971,13 +995,21 @@ const startRazorpayPayoutTransfer = async (
       fetchImpl
     })
 
+    console.log('==== Razorpay Create Payout Response ====')
+    console.dir(response.data, { depth: null })
+
     const parsed = parseRazorpayResponse(response.data)
+    console.log('Parsed:')
+    console.dir(parsed, { depth: null })
+    console.log('PayoutId:', parsed.payoutId)
+
     payout.razorpay = {
       ...(payout.razorpay || {}),
       contactId,
       fundAccountId,
       payoutId: parsed.payoutId || payout.razorpay?.payoutId || null,
       referenceId: parsed.data?.reference_id || parsed.data?.referenceId || payout.razorpay?.referenceId || null,
+      utr: parsed.utr || parsed.data?.utr || parsed.data?.utr_no || parsed.data?.utrNo || payout.razorpay?.utr || null,
       transferMode: requestBody.request.mode,
       statusDetails: parsed.statusDetails || payout.razorpay?.statusDetails || {},
       beneficiary: beneficiary || payout.razorpay?.beneficiary || {},
@@ -989,7 +1021,7 @@ const startRazorpayPayoutTransfer = async (
     }
     payout.lastAttemptAt = new Date()
 
-    const status = normalizeRazorpayStatus(parsed.status || parsed.data?.status)
+    const status = normalizeRazorpayPayoutStatus(parsed.status || parsed.data?.status)
     if (status === 'SUCCESS') {
       payout.status = 'SUCCESS'
       payout.completedAt = new Date()
@@ -1007,10 +1039,6 @@ const startRazorpayPayoutTransfer = async (
         reason: parsed.message || 'Payout failed',
         isRetryable: false
       })
-    } else if (status === 'REFUNDED') {
-      payout.status = 'REFUNDED'
-      payout.completedAt = payout.completedAt || new Date()
-      payout.failure = buildPayoutFailure({})
     } else {
       payout.status = 'PROCESSING'
       payout.failure = buildPayoutFailure({
@@ -1021,7 +1049,7 @@ const startRazorpayPayoutTransfer = async (
       })
     }
 
-    await payout.save()
+    await savePayoutWithLogs(payout)
     return payout
   } catch (error) {
     const message = error?.message || 'Razorpay payout request failed'
@@ -1053,7 +1081,7 @@ const startRazorpayPayoutTransfer = async (
     if (!isRetryable) {
       payout.completedAt = new Date()
     }
-    await payout.save()
+    await savePayoutWithLogs(payout)
     return payout
   }
 }
@@ -1156,7 +1184,7 @@ const createAutomaticPayoutForPayment = async (
       reason: 'Payee Razorpay beneficiary is not active',
       isRetryable: false
     })
-    await hydratedPayout.save()
+    await savePayoutWithLogs(hydratedPayout)
     return hydratedPayout
   }
 
@@ -1204,6 +1232,62 @@ const isRazorpayRetryDue = payout => {
   return false
 }
 
+const syncRazorpayPayoutStatus = async (payout, { fetchImpl = getFetchImpl() } = {}) => {
+  if (!payout) {
+    return null
+  }
+
+  const payoutId = String(payout?.razorpay?.payoutId || '').trim()
+  if (!payoutId) {
+    return payout
+  }
+
+  const previousStatus = payout.status
+  const remoteResponse = await getRazorpayPayout(payoutId, { fetchImpl })
+  const parsed = parseRazorpayResponse(remoteResponse)
+  const remoteStatus = normalizeRazorpayPayoutStatus(parsed.status || parsed.data?.status)
+
+  payout.razorpay = {
+    ...(payout.razorpay || {}),
+    payoutId,
+    referenceId: parsed.data?.reference_id || parsed.data?.referenceId || payout.razorpay?.referenceId || null,
+    utr: parsed.utr || parsed.data?.utr || parsed.data?.utr_no || parsed.data?.utrNo || payout.razorpay?.utr || null,
+    statusDetails: parsed.statusDetails || payout.razorpay?.statusDetails || {},
+    response: sanitizeResponse(parsed.raw || remoteResponse || {})
+  }
+
+  if (remoteStatus === 'SUCCESS') {
+    payout.status = 'SUCCESS'
+    payout.completedAt = payout.completedAt || new Date()
+    payout.failure = buildPayoutFailure({})
+    payout.retry = {
+      ...(payout.retry || {}),
+      nextRetryAt: null
+    }
+  } else if (remoteStatus === 'FAILED') {
+    payout.status = 'FAILED'
+    payout.completedAt = payout.completedAt || new Date()
+    payout.failure = buildPayoutFailure({
+      code: parsed.code || 'PAYOUT_FAILED',
+      message: parsed.message || 'Payout failed',
+      reason: parsed.message || 'Payout failed',
+      isRetryable: false
+    })
+  } else {
+    payout.status = 'PROCESSING'
+    payout.failure = buildPayoutFailure({
+      code: parsed.code || 'PAYOUT_PROCESSING',
+      message: parsed.message || 'Payout processing',
+      reason: parsed.message || 'Payout processing',
+      isRetryable: true
+    })
+  }
+
+  console.log('Mongo status before update:', previousStatus)
+  console.log('Mongo status after update:', payout.status)
+  return savePayoutWithLogs(payout)
+}
+
 const processDuePayoutRetries = async ({
   fetchImpl = getFetchImpl(),
   limit = 25
@@ -1222,7 +1306,9 @@ const processDuePayoutRetries = async ({
     }
 
     // eslint-disable-next-line no-await-in-loop
-    const updated = await startRazorpayPayoutTransfer(payout, { fetchImpl })
+    const updated = payout.razorpay?.payoutId
+      ? await syncRazorpayPayoutStatus(payout, { fetchImpl })
+      : await startRazorpayPayoutTransfer(payout, { fetchImpl })
     processed.push(updated)
   }
 
@@ -1283,6 +1369,10 @@ const handleRazorpayPayoutWebhook = async ({
       ''
   ).trim()
   const referenceId = String(entity.reference_id || entity.referenceId || '').trim()
+  const eventName = String(body.event || entity.status || '').trim().toLowerCase()
+  const webhookStatus = normalizeRazorpayPayoutStatus(
+    entity.status || eventName || body.event || body.status
+  )
 
   const payoutQuery = payoutId
     ? { 'razorpay.payoutId': payoutId, provider: 'RAZORPAY' }
@@ -1294,10 +1384,18 @@ const handleRazorpayPayoutWebhook = async ({
 
   const payout = await Payout.findOne(payoutQuery).sort({ createdAt: -1 })
   if (!payout) {
+    console.log('Incoming webhook payoutId:', payoutId)
     const error = new Error('Payout record not found')
     error.statusCode = 404
     throw error
   }
+
+  const mongoPayoutId = payout.razorpay?.payoutId || null
+  const mongoStatusBeforeUpdate = payout.status
+  console.log('Incoming webhook payoutId:', payoutId)
+  console.log('Mongo payoutId:', mongoPayoutId)
+  console.log('Webhook status:', webhookStatus)
+  console.log('Mongo status before update:', mongoStatusBeforeUpdate)
 
   payout.lastWebhookAt = new Date()
   payout.razorpay = {
@@ -1313,40 +1411,42 @@ const handleRazorpayPayoutWebhook = async ({
     }
   }
 
-  const eventName = String(body.event || entity.status || '').trim().toLowerCase()
-  const status = normalizeRazorpayStatus(
-    entity.status || eventName || body.event || body.status
-  )
-
-  if (status === 'SUCCESS') {
-    payout.status = 'SUCCESS'
-    payout.completedAt = new Date()
-    payout.failure = buildPayoutFailure({})
-    payout.retry = {
-      ...(payout.retry || {}),
-      nextRetryAt: null
-    }
-  } else if (status === 'FAILED') {
-    payout.status = 'FAILED'
-    payout.completedAt = new Date()
-    payout.failure = buildPayoutFailure({
-      code: entity.error_code || entity.code || 'PAYOUT_FAILED',
-      message: entity.status_message || entity.reason || entity.message || 'Payout failed',
-      reason: entity.status_message || entity.reason || entity.message || 'Payout failed',
-      isRetryable: false
-    })
+  let updatedPayout = payout
+  if (updatedPayout.razorpay?.payoutId) {
+    updatedPayout = await syncRazorpayPayoutStatus(updatedPayout, { fetchImpl })
   } else {
-    payout.status = 'PROCESSING'
-    payout.failure = buildPayoutFailure({
-      code: entity.error_code || entity.code || 'PAYOUT_PROCESSING',
-      message: entity.status_message || entity.reason || 'Payout processing',
-      reason: entity.status_message || entity.reason || 'Payout processing',
-      isRetryable: true
-    })
+    if (webhookStatus === 'SUCCESS') {
+      updatedPayout.status = 'SUCCESS'
+      updatedPayout.completedAt = new Date()
+      updatedPayout.failure = buildPayoutFailure({})
+      updatedPayout.retry = {
+        ...(updatedPayout.retry || {}),
+        nextRetryAt: null
+      }
+    } else if (webhookStatus === 'FAILED') {
+      updatedPayout.status = 'FAILED'
+      updatedPayout.completedAt = new Date()
+      updatedPayout.failure = buildPayoutFailure({
+        code: entity.error_code || entity.code || 'PAYOUT_FAILED',
+        message: entity.status_message || entity.reason || entity.message || 'Payout failed',
+        reason: entity.status_message || entity.reason || entity.message || 'Payout failed',
+        isRetryable: false
+      })
+    } else {
+      updatedPayout.status = 'PROCESSING'
+      updatedPayout.failure = buildPayoutFailure({
+        code: entity.error_code || entity.code || 'PAYOUT_PROCESSING',
+        message: entity.status_message || entity.reason || 'Payout processing',
+        reason: entity.status_message || entity.reason || 'Payout processing',
+        isRetryable: true
+      })
+    }
+
+    updatedPayout = await savePayoutWithLogs(updatedPayout)
   }
 
-  await payout.save()
-  return payout
+  console.log('Mongo status after update:', updatedPayout.status)
+  return updatedPayout
 }
 
 const getPayoutSummary = async () => {
@@ -1451,6 +1551,7 @@ module.exports = {
   patchPayeeRazorpayBeneficiary,
   syncRazorpayBeneficiaryForPayee,
   startRazorpayPayoutTransfer,
+  syncRazorpayPayoutStatus,
   verifyRazorpayCheckoutPayload,
   verifyRazorpayPaymentSignature,
   // Proxy / utility functions

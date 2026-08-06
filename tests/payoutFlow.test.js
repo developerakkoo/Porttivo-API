@@ -1102,6 +1102,54 @@ const payoutTests = [
     }
   },
   {
+    name: 'syncRazorpayPayoutStatus refreshes an existing payout from Razorpay',
+    async run() {
+      const payoutDoc = {
+        _id: 'payout-1',
+        provider: 'RAZORPAY',
+        status: 'PROCESSING',
+        retry: { count: 0, maxRetry: 3, nextRetryAt: null },
+        failure: {},
+        razorpay: {
+          payoutId: 'pout_123',
+          referenceId: null,
+          response: {}
+        },
+        async save() {
+          return this
+        }
+      }
+
+      const service = require(path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'))
+
+      const originalFetch = global.fetch
+      global.fetch = async (url) => {
+        assert.equal(String(url), 'https://api.razorpay.com/v1/payouts/pout_123')
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            id: 'pout_123',
+            status: 'processed',
+            reference_id: 'ref-001',
+            utr: 'UTR-001',
+            status_details: { reason: 'Cleared' }
+          })
+        }
+      }
+
+      try {
+        const updated = await service.syncRazorpayPayoutStatus(payoutDoc)
+        assert.equal(updated.status, 'SUCCESS')
+        assert.equal(updated.razorpay.referenceId, 'ref-001')
+        assert.equal(updated.razorpay.utr, 'UTR-001')
+        assert.ok(updated.completedAt instanceof Date)
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
     name: 'Cashfree payout webhook marks a payout successful',
     async run() {
       const payoutDoc = {

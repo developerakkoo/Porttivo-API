@@ -757,9 +757,7 @@ const createRazorpayContact = async (req, res, next) => {
     }
 
     const body = req.body || {}
-    const result = await razorpayService.createRazorpayContact(body, {
-      fetchImpl: req.fetch || global.fetch
-    })
+    const result = await razorpayService.createRazorpayContact(body, req.fetch || global.fetch)
 
     if (req.user?.userType !== 'admin') {
       const { payee } = await razorpayService.findPayeeRecordById(req.user.id)
@@ -887,6 +885,26 @@ const getRazorpayPayout = async (req, res, next) => {
     const id = String(req.params.payoutId || req.params.id || '').trim()
     if (!id) return res.status(400).json({ success: false, message: 'payout id required' })
     const result = await razorpayService.getRazorpayPayout(id, { fetchImpl: req.fetch || global.fetch })
+
+    try {
+      const payout = await Payout.findOne({
+        provider: 'RAZORPAY',
+        $or: [{ 'razorpay.payoutId': id }, { 'razorpay.referenceId': id }]
+      }).sort({ createdAt: -1 })
+
+      if (payout) {
+        await razorpayService.syncRazorpayPayoutStatus(payout, {
+          fetchImpl: req.fetch || global.fetch
+        })
+      }
+    } catch (syncError) {
+      logger.warn('Razorpay payout sync skipped for manual lookup', {
+        payoutId: id,
+        message: syncError.message,
+        stack: syncError.stack
+      })
+    }
+
     return res.status(200).json({ success: true, data: result })
   } catch (error) {
     next(error)
