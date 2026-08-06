@@ -757,7 +757,25 @@ const createRazorpayContact = async (req, res, next) => {
     }
 
     const body = req.body || {}
-    const result = await razorpayService.createRazorpayContact(body, { fetchImpl: req.fetch || global.fetch })
+    const result = await razorpayService.createRazorpayContact(body, {
+      fetchImpl: req.fetch || global.fetch
+    })
+
+    if (req.user?.userType !== 'admin') {
+      const { payee } = await razorpayService.findPayeeRecordById(req.user.id)
+      if (payee) {
+        const contactId = result.data?.id || result.contactId || null
+        if (contactId) {
+          await razorpayService.patchPayeeRazorpayBeneficiary({
+            payee,
+            contactId,
+            providerResponse: {
+              contact: result.raw || result.data || {}
+            }
+          })
+        }
+      }
+    }
 
     return res.status(201).json({ success: true, data: result })
   } catch (error) {
@@ -792,7 +810,30 @@ const createRazorpayFundAccount = async (req, res, next) => {
     }
 
     const body = req.body || {}
-    const result = await razorpayService.createRazorpayFundAccount(body, { fetchImpl: req.fetch || global.fetch })
+    const result = await razorpayService.createRazorpayFundAccount(body, {
+      fetchImpl: req.fetch || global.fetch
+    })
+
+    if (req.user?.userType !== 'admin') {
+      const { payee } = await razorpayService.findPayeeRecordById(req.user.id)
+      if (payee) {
+        const fundAccountId = result.data?.id || result.fundAccountId || null
+        const contactId = body.contactId || body.contact_id || payee.razorpayBeneficiary?.contactId || null
+        if (fundAccountId && contactId) {
+          await razorpayService.patchPayeeRazorpayBeneficiary({
+            payee,
+            contactId,
+            fundAccountId,
+            bankAccountNumber: body.bankAccount?.account_number || body.account_number || null,
+            accountType: body.accountType || body.account_type || 'bank_account',
+            providerResponse: {
+              fundAccount: result.raw || result.data || {}
+            }
+          })
+        }
+      }
+    }
+
     return res.status(201).json({ success: true, data: result })
   } catch (error) {
     next(error)

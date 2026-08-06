@@ -426,6 +426,43 @@ const updatePayeeRazorpayBeneficiary = async ({
   }
 }
 
+const patchPayeeRazorpayBeneficiary = async ({
+  payee,
+  contactId,
+  fundAccountId,
+  bankAccountNumber,
+  accountType,
+  providerResponse
+} = {}) => {
+  const now = new Date()
+
+  payee.razorpayBeneficiary = {
+    contactId: contactId || payee.razorpayBeneficiary?.contactId || null,
+    fundAccountId: fundAccountId || payee.razorpayBeneficiary?.fundAccountId || null,
+    status: 'ACTIVE',
+    bankAccountLast4:
+      bankAccountNumber !== undefined
+        ? extractAccountLast4(bankAccountNumber)
+        : payee.razorpayBeneficiary?.bankAccountLast4 || null,
+    accountType: accountType || payee.razorpayBeneficiary?.accountType || 'bank_account',
+    referenceId:
+      String(payee._id || '').trim() || payee.razorpayBeneficiary?.referenceId || null,
+    providerResponse: sanitizeResponse({
+      ...(payee.razorpayBeneficiary?.providerResponse || {}),
+      ...(providerResponse || {})
+    }),
+    verifiedAt: now,
+    createdAt: payee.razorpayBeneficiary?.createdAt || now,
+    updatedAt: now
+  }
+
+  await payee.save()
+  return {
+    payee,
+    modelName: payee.constructor?.modelName || null
+  }
+}
+
 const syncRazorpayBeneficiaryForPayee = async (
   {
     payeeId,
@@ -1411,6 +1448,7 @@ module.exports = {
   makeTransferId,
   normalizeMoney,
   processDuePayoutRetries,
+  patchPayeeRazorpayBeneficiary,
   syncRazorpayBeneficiaryForPayee,
   startRazorpayPayoutTransfer,
   verifyRazorpayCheckoutPayload,
