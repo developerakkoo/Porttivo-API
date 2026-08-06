@@ -608,7 +608,7 @@ const handleGatewayWebhook = async (req, res, next) => {
       hasRawBody: Boolean(req.rawBody)
     })
 
-    const metadata = getGatewayPayloadMetadata(provider, body)
+    const gatewayMetadata = getGatewayPayloadMetadata(provider, body)
 
     const merchantTransactionId = String(
       gatewayMetadata.providerOrderId ||
