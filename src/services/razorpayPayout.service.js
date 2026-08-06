@@ -186,6 +186,25 @@ const getPayeeSnapshot = (payee, modelName) => {
   }
 }
 
+const normalizeRazorpayContactType = type => {
+  const normalized = String(type || '').trim().toLowerCase()
+  if (!normalized) {
+    return 'customer'
+  }
+
+  const aliases = {
+    vendor: 'vendor',
+    supplier: 'vendor',
+    customer: 'customer',
+    employee: 'employee',
+    merchant: 'merchant',
+    sub_merchant: 'sub_merchant',
+    submerchant: 'sub_merchant'
+  }
+
+  return aliases[normalized] || normalized
+}
+
 const extractRazorpayMessage = payload => {
   if (!payload || typeof payload === 'undefined') {
     return null
@@ -309,9 +328,9 @@ const ensureRazorpayBeneficiaryPayload = ({
       name: contactName,
       email: contactEmail || undefined,
       contact: contactPhone,
-      type: String(payee?.constructor?.modelName || payee?.userType || 'beneficiary')
-        .trim()
-        .toLowerCase() || 'beneficiary',
+      type: normalizeRazorpayContactType(
+        String(payee?.constructor?.modelName || payee?.userType || 'beneficiary').trim()
+      ),
       reference_id: String(payeeId || payee?._id || '').trim() || undefined
     },
     fundAccount: {
@@ -326,9 +345,14 @@ const ensureRazorpayBeneficiaryPayload = ({
 }
 
 const createRazorpayContact = async (contact, fetchImpl = getFetchImpl()) => {
+  const normalizedContact = {
+    ...(contact || {}),
+    type: normalizeRazorpayContactType(contact?.type)
+  }
+
   const result = await razorpayRequest('/contacts', {
     method: 'POST',
-    body: contact,
+    body: normalizedContact,
     fetchImpl
   })
 

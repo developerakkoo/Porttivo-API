@@ -27,6 +27,26 @@ const payoutTests = [
     }
   },
   {
+    name: 'createRazorpayContact normalizes Vendor to the Razorpay-compatible type',
+    async run() {
+      const razorpayService = require(path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'))
+      let capturedBody = null
+      const fakeFetch = async (_url, options) => {
+        capturedBody = JSON.parse(options.body)
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'contact_2', contact: { type: 'vendor' } })
+        }
+      }
+
+      const result = await razorpayService.createRazorpayContact({ name: 'Test', type: 'Vendor' }, fakeFetch)
+
+      assert.equal(result.data?.contact?.type || result.data?.type, 'vendor')
+      assert.equal(capturedBody.type, 'vendor')
+    }
+  },
+  {
     name: 'createRazorpayContact forwards a fetch function to the Razorpay service',
     async run() {
       let capturedFetchImpl = null
