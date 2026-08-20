@@ -305,16 +305,31 @@ const normalizePayuStatus = (status) => {
 
 const normalizeRazorpayStatus = (status) => {
   const normalized = String(status || '').trim().toLowerCase()
+  const terminalSegment = normalized.includes('.')
+    ? normalized.split('.').pop()
+    : normalized
   if (['captured', 'paid', 'processed', 'success', 'completed'].includes(normalized)) {
+    return 'SUCCESS'
+  }
+  if (['captured', 'paid', 'processed', 'success', 'completed'].includes(terminalSegment)) {
     return 'SUCCESS'
   }
   if (['failed', 'failure', 'reversed', 'rejected', 'cancelled', 'canceled'].includes(normalized)) {
     return 'FAILED'
   }
+  if (['failed', 'failure', 'reversed', 'rejected', 'cancelled', 'canceled'].includes(terminalSegment)) {
+    return 'FAILED'
+  }
   if (['refunded', 'refund'].includes(normalized)) {
     return 'REFUNDED'
   }
+  if (['refunded', 'refund'].includes(terminalSegment)) {
+    return 'REFUNDED'
+  }
   if (['authorized', 'queued', 'pending', 'processing', 'created', 'initiated', 'attempted'].includes(normalized)) {
+    return 'PENDING'
+  }
+  if (['authorized', 'queued', 'pending', 'processing', 'created', 'initiated', 'attempted'].includes(terminalSegment)) {
     return 'PENDING'
   }
   return 'PENDING'

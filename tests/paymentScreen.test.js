@@ -777,6 +777,100 @@ const paymentTests = [
     }
   },
   {
+    name: 'Razorpay event webhooks such as payment.captured trigger payout creation',
+    async run() {
+      const actualPaymentGateway = require('../src/services/paymentGateway.service')
+      const paymentDoc = {
+        _id: '507f1f77bcf86cd799439015',
+        provider: 'RAZORPAY',
+        providerOrderId: 'order_RZP_2',
+        status: 'PENDING',
+        merchantTransactionId: 'RZP-XYZ',
+        payer: {
+          userId: 'payer-1',
+          userType: 'transporter',
+          name: 'Alpha Logistics',
+          email: 'alpha@example.com',
+          mobile: '9999999999'
+        },
+        paymentResponse: {},
+        callbackPayload: {},
+        metadata: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      let payoutCalled = false
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payment.controller.js'),
+        {
+          '../services/paymentGateway.service.js': {
+            ...actualPaymentGateway,
+            verifyGatewayWebhook: () => true
+          },
+          '../services/cashfreePayout.service': {
+            createAutomaticPayoutForPayment: async (payment) => {
+              payoutCalled = true
+              assert.equal(payment.status, 'SUCCESS')
+              return {
+                _id: 'payout-2',
+                provider: 'RAZORPAY',
+                status: 'PROCESSING',
+                razorpay: {
+                  payoutId: 'pout_2'
+                }
+              }
+            }
+          },
+          '../models/PaymentSession': {
+            findById: async () => null,
+            findOne: async (query) => {
+              if (query?.providerOrderId === 'order_RZP_2') {
+                return paymentDoc
+              }
+              return null
+            }
+          }
+        }
+      )
+
+      const body = {
+        event: 'payment.captured',
+        razorpay_order_id: 'order_RZP_2',
+        razorpay_payment_id: 'pay_RZP_2',
+        razorpay_signature: 'ignored',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_RZP_2',
+              order_id: 'order_RZP_2',
+              status: 'captured'
+            }
+          }
+        }
+      }
+      const req = {
+        params: { provider: 'RAZORPAY' },
+        query: {},
+        body,
+        headers: {},
+        rawBody: JSON.stringify(body)
+      }
+      const res = createMockRes()
+
+      await controller.handleGatewayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(paymentDoc.status, 'SUCCESS')
+      assert.equal(paymentDoc.providerTransactionId, 'pay_RZP_2')
+      assert.equal(paymentDoc.providerOrderId, 'order_RZP_2')
+      assert.equal(payoutCalled, true)
+    }
+  },
+  {
     name: 'Cashfree return GET is acknowledged without failing the payment',
     async run() {
       const paymentDoc = {
