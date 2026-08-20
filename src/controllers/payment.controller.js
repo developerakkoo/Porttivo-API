@@ -827,12 +827,23 @@ const handleGatewayWebhook = async (req, res, next) => {
         })
 
         if (payout) {
+          const payoutTransferId =
+            payout.provider === 'RAZORPAY'
+              ? payout.razorpay?.payoutId || null
+              : payout.cashfree?.transferId || null
+          const payoutReferenceId =
+            payout.provider === 'RAZORPAY'
+              ? payout.razorpay?.referenceId || null
+              : payout.cashfree?.referenceId || null
+
           payment.metadata = {
             ...(payment.metadata || {}),
             payout: {
               id: payout._id?.toString() || null,
+              provider: payout.provider || payment.provider || null,
               status: payout.status,
-              transferId: payout.cashfree?.transferId || null
+              transferId: payoutTransferId,
+              referenceId: payoutReferenceId
             }
           }
 

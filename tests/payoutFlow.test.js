@@ -561,37 +561,72 @@ const payoutTests = [
   {
     name: 'automatic payout transitions to success when Cashfree accepts the transfer',
     async run() {
-      let payoutDoc = {
-        _id: 'payout-1',
-        payerId: 'payer-1',
-        payeeId: 'payee-1',
-        paymentId: 'payment-1',
-        referenceType: 'INVOICE',
-        referenceId: 'INV-1001',
-        amount: 5000,
-        currency: 'INR',
-        provider: 'CASHFREE',
-        cashfree: {
-          beneId: 'TRANSPORTER_payee-1',
-          transferId: null,
-          transferMode: 'IMPS',
-          beneficiary: {
-            beneId: 'TRANSPORTER_payee-1',
-            status: 'ACTIVE'
-          },
-          request: {},
-          response: {}
-        },
-        status: 'CREATED',
-        retry: { count: 0, maxRetry: 3, nextRetryAt: null },
-        failure: {},
+      let payoutDoc = null
+      class MockPayout {
+        constructor(doc = {}) {
+          Object.assign(this, doc)
+          this._id = this._id || 'payout-1'
+        }
+
+        toObject() {
+          return {
+            ...this,
+            _id: this._id
+          }
+        }
+
         async save() {
+          payoutDoc = this
           return this
         }
       }
 
+      MockPayout.findOne = (query = {}) => {
+        if (query.status === 'SUCCESS' || query._id) {
+          return null
+        }
+
+        return {
+          sort: async () => null
+        }
+      }
+
+      MockPayout.findOneAndUpdate = async (_query, update) => {
+        payoutDoc = new MockPayout({
+          ...(payoutDoc || {}),
+          ...(update?.$set || {})
+        })
+        return payoutDoc
+      }
+
+      MockPayout.findById = async (id) => {
+        if (!payoutDoc) {
+          return null
+        }
+
+        if (id && String(id) !== String(payoutDoc._id)) {
+          return null
+        }
+
+        return payoutDoc
+      }
+
+      MockPayout.collection = {
+        insertOne: async (doc) => {
+          payoutDoc = new MockPayout({
+            ...doc,
+            _id: 'payout-1'
+          })
+          return { insertedId: 'payout-1' }
+        }
+      }
+
+      MockPayout.countDocuments = async () => 0
+      MockPayout.modelName = 'Payout'
+
       const paymentDoc = {
         _id: 'payment-1',
+        provider: 'CASHFREE',
         status: 'SUCCESS',
         amount: 5000,
         currency: 'INR',
@@ -628,47 +663,16 @@ const payoutTests = [
           '../models/Transporter': {
             findById: async (id) => (id === 'payee-1' ? payeeDoc : null)
           },
-          '../models/Driver': { findById: async () => null },
-          '../models/Customer': { findById: async () => null },
-          '../models/PumpOwner': { findById: async () => null },
-          '../models/CompanyUser': { findById: async () => null },
-          '../models/PaymentSession': {
-            findById: async (id) => (id === 'payment-1' ? paymentDoc : null)
-          },
-          '../services/razorpayPayout.service': {
-            createAutomaticPayoutForPayment: async () => ({
-              ...payoutDoc,
-              status: 'SUCCESS',
-              cashfree: {
-                ...(payoutDoc.cashfree || {}),
-                transferId: 'TRF-1',
-                utr: 'UTR-123456'
-              }
-            })
-          },
-          '../models/Payout': {
-            findOne: async () => null,
-            findOneAndUpdate: async (_query, update) => {
-              payoutDoc = {
-                ...payoutDoc,
-                ...(update?.$set || {})
-              }
-              return payoutDoc
-            },
-            create: async ([doc]) => {
-              payoutDoc = {
-                ...payoutDoc,
-                ...doc,
-                save: async function save() {
-                  return this
-                }
-              }
-              return [payoutDoc]
-            },
-            countDocuments: async () => 0,
-            findById: async () => payoutDoc
-          }
-        }
+        '../models/Driver': { findById: async () => null },
+        '../models/Customer': { findById: async () => null },
+        '../models/PumpOwner': { findById: async () => null },
+        '../models/CompanyUser': { findById: async () => null },
+        '../models/PaymentSession': {
+          findById: async (id) => (id === 'payment-1' ? paymentDoc : null)
+        },
+        '../models/Payout': MockPayout,
+        '../services/razorpayPayout.service': {}
+      }
       )
 
       const originalFetch = global.fetch
@@ -693,12 +697,89 @@ const payoutTests = [
       try {
         const payout = await service.createAutomaticPayoutForPayment(paymentDoc)
 
+        assert.equal(payout.provider, 'CASHFREE')
         assert.equal(payout.status, 'SUCCESS')
         assert.equal(payout.cashfree.transferId, 'TRF-1')
         assert.equal(payout.cashfree.utr, 'UTR-123456')
       } finally {
         global.fetch = originalFetch
       }
+    }
+  },
+  {
+    name: 'automatic payout dispatches to Razorpay when the pay-in provider is Razorpay',
+    async run() {
+      let capturedPayment = null
+      let capturedFetchImpl = null
+
+      const paymentDoc = {
+        _id: 'payment-razorpay-dispatch',
+        provider: 'RAZORPAY',
+        status: 'SUCCESS',
+        amount: 2500,
+        currency: 'INR',
+        payer: { userId: 'payer-1' },
+        metadata: {
+          payout: {
+            payeeId: 'payee-1',
+            payeeType: 'TRANSPORTER',
+            transferMode: 'IMPS'
+          }
+        }
+      }
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/cashfreePayout.service.js'),
+        {
+          '../config/env': {
+            cashfreePayoutMode: 'sandbox',
+            cashfreePayoutClientId: 'cf-client',
+            cashfreePayoutClientSecret: 'cf-secret',
+            cashfreePayoutWebhookSecret: 'cf-secret',
+            cashfreePayoutApiBaseUrl: 'https://sandbox.cashfree.com/payout',
+            cashfreePayoutWebhookUrl: 'https://app.example/payout-webhook',
+            cashfreePayoutBankEncryptionSecret: 'encrypt-secret'
+          },
+          '../models/Transporter': { findById: async () => null },
+          '../models/Driver': { findById: async () => null },
+          '../models/Customer': { findById: async () => null },
+          '../models/PumpOwner': { findById: async () => null },
+          '../models/CompanyUser': { findById: async () => null },
+          '../models/PaymentSession': {
+            findById: async (id) => (id === paymentDoc._id ? paymentDoc : null)
+          },
+          '../models/Payout': {},
+          '../services/razorpayPayout.service': {
+            createAutomaticPayoutForPayment: async (paymentInput, options) => {
+              capturedPayment = paymentInput
+              capturedFetchImpl = options?.fetchImpl
+              return {
+                _id: 'payout-razorpay-dispatch',
+                provider: 'RAZORPAY',
+                status: 'SUCCESS',
+                razorpay: {
+                  payoutId: 'pout_dispatch',
+                  referenceId: 'ref_dispatch'
+                }
+              }
+            }
+          }
+        }
+      )
+
+      const fakeFetch = async () => {
+        throw new Error('Cashfree fetch should not be used for Razorpay pay-ins')
+      }
+
+      const payout = await service.createAutomaticPayoutForPayment(paymentDoc, {
+        fetchImpl: fakeFetch
+      })
+
+      assert.equal(capturedPayment._id, paymentDoc._id)
+      assert.equal(capturedPayment.provider, 'RAZORPAY')
+      assert.equal(capturedFetchImpl, fakeFetch)
+      assert.equal(payout.provider, 'RAZORPAY')
+      assert.equal(payout.razorpay.payoutId, 'pout_dispatch')
     }
   },
   {
@@ -763,37 +844,72 @@ const payoutTests = [
   {
     name: 'automatic payout marks failed when Cashfree rejects deprecated API with 403',
     async run() {
-      let payoutDoc = {
-        _id: 'payout-403',
-        payerId: 'payer-1',
-        payeeId: 'payee-1',
-        paymentId: 'payment-403',
-        referenceType: 'INVOICE',
-        referenceId: 'INV-403',
-        amount: 5000,
-        currency: 'INR',
-        provider: 'CASHFREE',
-        cashfree: {
-          beneId: 'TRANSPORTER_payee-1',
-          transferId: null,
-          transferMode: 'IMPS',
-          beneficiary: {
-            beneId: 'TRANSPORTER_payee-1',
-            status: 'ACTIVE'
-          },
-          request: {},
-          response: {}
-        },
-        status: 'CREATED',
-        retry: { count: 0, maxRetry: 3, nextRetryAt: null },
-        failure: {},
+      let payoutDoc = null
+      class MockPayout {
+        constructor(doc = {}) {
+          Object.assign(this, doc)
+          this._id = this._id || 'payout-403'
+        }
+
+        toObject() {
+          return {
+            ...this,
+            _id: this._id
+          }
+        }
+
         async save() {
+          payoutDoc = this
           return this
         }
       }
 
+      MockPayout.findOne = (query = {}) => {
+        if (query.status === 'SUCCESS' || query._id) {
+          return null
+        }
+
+        return {
+          sort: async () => null
+        }
+      }
+
+      MockPayout.findOneAndUpdate = async (_query, update) => {
+        payoutDoc = new MockPayout({
+          ...(payoutDoc || {}),
+          ...(update?.$set || {})
+        })
+        return payoutDoc
+      }
+
+      MockPayout.findById = async (id) => {
+        if (!payoutDoc) {
+          return null
+        }
+
+        if (id && String(id) !== String(payoutDoc._id)) {
+          return null
+        }
+
+        return payoutDoc
+      }
+
+      MockPayout.collection = {
+        insertOne: async (doc) => {
+          payoutDoc = new MockPayout({
+            ...doc,
+            _id: 'payout-403'
+          })
+          return { insertedId: 'payout-403' }
+        }
+      }
+
+      MockPayout.countDocuments = async () => 0
+      MockPayout.modelName = 'Payout'
+
       const paymentDoc = {
         _id: 'payment-403',
+        provider: 'CASHFREE',
         status: 'SUCCESS',
         amount: 5000,
         currency: 'INR',
@@ -830,46 +946,16 @@ const payoutTests = [
           '../models/Transporter': {
             findById: async (id) => (id === 'payee-1' ? payeeDoc : null)
           },
-          '../models/Driver': { findById: async () => null },
-          '../models/Customer': { findById: async () => null },
-          '../models/PumpOwner': { findById: async () => null },
-          '../models/CompanyUser': { findById: async () => null },
-          '../models/PaymentSession': {
-            findById: async (id) => (id === 'payment-403' ? paymentDoc : null)
-          },
-          '../services/razorpayPayout.service': {
-            createAutomaticPayoutForPayment: async () => ({
-              ...payoutDoc,
-              status: 'FAILED',
-              failure: {
-                code: '403',
-                message: 'The payout v1 and v1.2 APIs have been deprecated. Please use v2 APIs.'
-              }
-            })
-          },
-          '../models/Payout': {
-            findOne: async () => null,
-            findOneAndUpdate: async (_query, update) => {
-              payoutDoc = {
-                ...payoutDoc,
-                ...(update?.$set || {})
-              }
-              return payoutDoc
-            },
-            create: async ([doc]) => {
-              payoutDoc = {
-                ...payoutDoc,
-                ...doc,
-                save: async function save() {
-                  return this
-                }
-              }
-              return [payoutDoc]
-            },
-            countDocuments: async () => 0,
-            findById: async () => payoutDoc
-          }
-        }
+        '../models/Driver': { findById: async () => null },
+        '../models/Customer': { findById: async () => null },
+        '../models/PumpOwner': { findById: async () => null },
+        '../models/CompanyUser': { findById: async () => null },
+        '../models/PaymentSession': {
+          findById: async (id) => (id === 'payment-403' ? paymentDoc : null)
+        },
+        '../models/Payout': MockPayout,
+        '../services/razorpayPayout.service': {}
+      }
       )
 
       const originalFetch = global.fetch
@@ -892,6 +978,7 @@ const payoutTests = [
       try {
         const payout = await service.createAutomaticPayoutForPayment(paymentDoc)
 
+        assert.equal(payout.provider, 'CASHFREE')
         assert.equal(payout.status, 'FAILED')
         assert.equal(payout.failure.code, '403')
       } finally {

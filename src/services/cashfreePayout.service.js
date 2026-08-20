@@ -33,6 +33,7 @@ const PAYEE_MODELS = [
 const RETRY_DELAYS_MS = [15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000]
 const STALE_PROCESSING_WINDOW_MS = 10 * 60 * 1000
 const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+const AUTO_PAYOUT_PROVIDERS = new Set(['CASHFREE', 'RAZORPAY'])
 
 let cronTimer = null
 
@@ -119,6 +120,25 @@ const buildTransferRemarks = ({
     .filter(Boolean)
 
   return sanitizeTransferRemarks(parts.join(' '), fallback)
+}
+
+const resolveAutoPayoutProvider = payment => {
+  const provider = String(payment?.provider || '').trim().toUpperCase()
+  if (!provider) {
+    const error = new Error('Payment provider is required for automatic payout')
+    error.statusCode = 400
+    throw error
+  }
+
+  if (!AUTO_PAYOUT_PROVIDERS.has(provider)) {
+    const error = new Error(
+      `Unsupported pay-in provider for automatic payout: ${provider}`
+    )
+    error.statusCode = 400
+    throw error
+  }
+
+  return provider
 }
 
 // Bank account details are intentionally never persisted in our database.
@@ -791,13 +811,18 @@ const removeRegisteredBeneficiary = async (
 const findExistingPayout = async ({
   paymentId,
   referenceType,
-  referenceId
+  referenceId,
+  provider
 }) => {
   const query = {}
   if (paymentId) query.paymentId = paymentId
   else if (referenceType || referenceId) {
     if (referenceType) query.referenceType = referenceType
     if (referenceId) query.referenceId = referenceId
+  }
+
+  if (provider) {
+    query.provider = provider
   }
 
   if (!Object.keys(query).length) {
@@ -870,7 +895,7 @@ const createPayoutRecord = async ({
   }
 
   const existingByPayment = paymentId
-    ? await Payout.findOne({ paymentId }).sort({ createdAt: -1 })
+    ? await Payout.findOne({ paymentId, provider }).sort({ createdAt: -1 })
     : null
 
   const existingByReference =
@@ -896,11 +921,11 @@ const createPayoutRecord = async ({
   }
 
   try {
-     logger.info("[DEBUG] Payout model", {
-    modelName: Payout.modelName,
-    constructor: Payout.constructor.name,
-    isModel: Payout.prototype instanceof mongoose.Model
-  });
+    logger.info('[DEBUG] Payout model', {
+      modelName: Payout.modelName,
+      constructor: Payout.constructor.name,
+      isModel: Payout.prototype instanceof mongoose.Model
+    })
     const payout = new Payout({
       payerId,
       payeeId,
@@ -948,19 +973,19 @@ const createPayoutRecord = async ({
 
     const insertResult = await Payout.collection.insertOne(insertPayload)
     const savedPayout = await Payout.findById(insertResult.insertedId)
-    logger.info("[DEBUG] Created payout", {
-    constructor: savedPayout?.constructor?.name,
-    hasSave: typeof savedPayout?.save,
-    hasId: !!savedPayout?._id,
-    instanceOfModel: savedPayout instanceof mongoose.Model,
-    payoutId: savedPayout?._id?.toString()
-  });
-    logger.info("[DEBUG] Inside createPayoutRecord after create()", {
-    payout: savedPayout,
-    constructor: savedPayout?.constructor?.name,
-    hasSave: typeof savedPayout?.save,
-    hasId: !!savedPayout?._id
-  })
+    logger.info('[DEBUG] Created payout', {
+      constructor: savedPayout?.constructor?.name,
+      hasSave: typeof savedPayout?.save,
+      hasId: !!savedPayout?._id,
+      instanceOfModel: savedPayout instanceof mongoose.Model,
+      payoutId: savedPayout?._id?.toString()
+    })
+    logger.info('[DEBUG] Inside createPayoutRecord after create()', {
+      payout: savedPayout,
+      constructor: savedPayout?.constructor?.name,
+      hasSave: typeof savedPayout?.save,
+      hasId: !!savedPayout?._id
+    })
 
     if (!savedPayout) {
       throw new Error('Payout insert completed but reload failed')
@@ -1215,12 +1240,16 @@ const startPayoutTransfer = async (
       payout = await getPayoutById(payoutInput._id)
     } else {
       const lookup = {}
-      if (payoutInput.paymentId) {
-        lookup.paymentId = payoutInput.paymentId
-      } else if (payoutInput.referenceType || payoutInput.referenceId) {
-        if (payoutInput.referenceType) lookup.referenceType = payoutInput.referenceType
-        if (payoutInput.referenceId) lookup.referenceId = payoutInput.referenceId
-      }
+    if (payoutInput.paymentId) {
+      lookup.paymentId = payoutInput.paymentId
+    } else if (payoutInput.referenceType || payoutInput.referenceId) {
+      if (payoutInput.referenceType) lookup.referenceType = payoutInput.referenceType
+      if (payoutInput.referenceId) lookup.referenceId = payoutInput.referenceId
+    }
+
+    if (payoutInput.provider) {
+      lookup.provider = payoutInput.provider
+    }
 
       if (Object.keys(lookup).length) {
         payout = await findExistingPayout(lookup)
@@ -1233,6 +1262,7 @@ const startPayoutTransfer = async (
     error.statusCode = 404
     throw error
   }
+  payout.provider = payout.provider || 'CASHFREE'
   logger.info('[PAYOUT] Starting payout transfer', {
     payoutId: payout._id.toString(),
     paymentId: payout.paymentId?.toString(),
@@ -1489,13 +1519,132 @@ const ensureAutomaticPayoutMetadata = payment => {
   }
 }
 
+const createCashfreeAutomaticPayoutForPayment = async (
+  paymentInput,
+  { fetchImpl = global.fetch } = {}
+) => {
+  const payment =
+    paymentInput && paymentInput._id && paymentInput.status
+      ? paymentInput
+      : await PaymentSession.findById(paymentInput)
+
+  if (!payment || payment.status !== 'SUCCESS') {
+    return null
+  }
+
+  const autoMetadata = ensureAutomaticPayoutMetadata(payment)
+  if (!autoMetadata) {
+    return null
+  }
+
+  const existing = await findExistingPayout({
+    paymentId: payment._id,
+    referenceType: autoMetadata.referenceType,
+    referenceId: autoMetadata.referenceId,
+    provider: 'CASHFREE'
+  })
+
+  if (existing) {
+    if (
+      existing.status === 'CREATED' ||
+      existing.status === 'RETRY_PENDING' ||
+      existing.status === 'PROCESSING'
+    ) {
+      const updatedExisting = await startPayoutTransfer(existing, { fetchImpl })
+      if (updatedExisting) {
+        updatedExisting.provider = updatedExisting.provider || 'CASHFREE'
+      }
+      return updatedExisting
+    }
+    existing.provider = existing.provider || 'CASHFREE'
+    return existing
+  }
+
+  const { payee, modelName } = await findPayeeRecordById(autoMetadata.payeeId)
+  const payeeSnapshot = getPayeeSnapshot(payee, modelName)
+
+  const payout = await createPayoutRecord({
+    payerId: payment.payer?.userId || payment.initiatedBy?.userId || null,
+    payeeId: autoMetadata.payeeId,
+    payeeType: autoMetadata.payeeType || payeeSnapshot?.userType || null,
+    paymentId: payment._id,
+    referenceType: autoMetadata.referenceType || payment.referenceType || null,
+    referenceId: autoMetadata.referenceId || payment.referenceId || null,
+    amount: autoMetadata.amount,
+    currency: autoMetadata.currency || payment.currency || 'INR',
+    provider: 'CASHFREE',
+    status: 'CREATED',
+    cashfree: {
+      beneId: payee?.cashfreeBeneficiary?.beneId || null,
+      transferMode: autoMetadata.transferMode || 'IMPS',
+      beneficiary: payee?.cashfreeBeneficiary || {},
+      request: {},
+      response: {}
+    }
+  })
+
+  const hydratedPayout =
+    payout && payout._id && typeof payout.save === 'function'
+      ? payout
+      : await findExistingPayout({
+          paymentId: payment._id,
+          referenceType: autoMetadata.referenceType || payment.referenceType || null,
+          referenceId: autoMetadata.referenceId || payment.referenceId || null,
+          provider: 'CASHFREE'
+        })
+
+  if (!hydratedPayout) {
+    throw new Error('Automatic payout could not be reloaded after creation')
+  }
+  hydratedPayout.provider = hydratedPayout.provider || 'CASHFREE'
+
+  if (
+    !payee?.cashfreeBeneficiary?.beneId ||
+    payee?.cashfreeBeneficiary?.status !== 'ACTIVE'
+  ) {
+    hydratedPayout.status = 'RETRY_PENDING'
+    hydratedPayout.failure = buildPayoutFailure({
+      code: 'CASHFREE_BENEFICIARY_NOT_FOUND',
+      message: 'Payment safe. Transfer pending.',
+      reason: 'Payee Cashfree beneficiary is not active',
+      isRetryable: false
+    })
+    hydratedPayout.retry = {
+      ...(hydratedPayout.retry || {}),
+      nextRetryAt: null
+    }
+    await hydratedPayout.save()
+    return hydratedPayout
+  }
+
+  const started = await startPayoutTransfer(hydratedPayout, { fetchImpl })
+  if (started) {
+    started.provider = started.provider || 'CASHFREE'
+  }
+  return started
+}
+
 const createAutomaticPayoutForPayment = async (
   paymentInput,
   { fetchImpl = global.fetch } = {}
 ) => {
-  return razorpayPayoutService.createAutomaticPayoutForPayment(paymentInput, {
-    fetchImpl
-  })
+  const payment =
+    paymentInput && paymentInput._id && paymentInput.status
+      ? paymentInput
+      : await PaymentSession.findById(paymentInput)
+
+  if (!payment || payment.status !== 'SUCCESS') {
+    return null
+  }
+
+  const provider = resolveAutoPayoutProvider(payment)
+  if (provider === 'RAZORPAY') {
+    return razorpayPayoutService.createAutomaticPayoutForPayment(payment, {
+      fetchImpl
+    })
+  }
+
+  return createCashfreeAutomaticPayoutForPayment(payment, { fetchImpl })
 }
 
 const isPayoutRetryDue = payout => {
