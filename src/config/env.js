@@ -125,9 +125,9 @@ module.exports = {
   cashfreeWebhookUrl:
     process.env.CASHFREE_WEBHOOK_URL ||
     buildApiUrl('/api/payments/cashfree/webhook'),
-  razorpayMode: process.env.RAZORPAY_MODE || 'sandbox',
-  razorpayKeyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_TK5zgPNM47awfl',
-  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || 'uVo53PY9kWFXJ9tAOHnUVqQd',
+  razorpayMode: process.env.RAZORPAY_MODE || 'production',
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_TLF84Z0KLAXg6s',
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || 'UtVZjsQJiO9FsHhVOwuaXSB9',
   razorpayWebhookSecret:
     process.env.RAZORPAY_WEBHOOK_SECRET ||
     '72pAaA_RJzvw_Jj',
@@ -139,22 +139,22 @@ module.exports = {
   razorpayWebhookUrl:
     process.env.RAZORPAY_WEBHOOK_URL ||
     buildApiUrl('/api/payments/razorpay/webhook'),
-  razorpayPayoutMode: process.env.RAZORPAY_PAYOUT_MODE || process.env.RAZORPAY_MODE || 'sandbox',
+  razorpayPayoutMode: process.env.RAZORPAY_PAYOUT_MODE || process.env.RAZORPAY_MODE || 'production',
   razorpayPayoutKeyId:
-    process.env.RAZORPAY_PAYOUT_KEY_ID || process.env.RAZORPAY_KEY_ID || 'rzp_test_TK5zgPNM47awfl',
+    process.env.RAZORPAY_PAYOUT_KEY_ID || process.env.RAZORPAY_KEY_ID || 'rzp_live_TLF84Z0KLAXg6s',
   razorpayPayoutKeySecret:
-    process.env.RAZORPAY_PAYOUT_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET || 'uVo53PY9kWFXJ9tAOHnUVqQd',
+    process.env.RAZORPAY_PAYOUT_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET || 'UtVZjsQJiO9FsHhVOwuaXSB9',
   razorpayPayoutWebhookSecret:
     process.env.RAZORPAY_PAYOUT_WEBHOOK_SECRET ||
     process.env.RAZORPAY_WEBHOOK_SECRET ||
     process.env.RAZORPAY_KEY_SECRET ||
-    '',
+    'asdfghjklop0987654321dfvbn',
   razorpayPayoutApiBaseUrl:
     process.env.RAZORPAY_PAYOUT_API_BASE_URL || 'https://api.razorpay.com/v1',
   razorpayPayoutAccountNumber:
     process.env.RAZORPAY_PAYOUT_ACCOUNT_NUMBER ||
     process.env.RAZORPAY_ACCOUNT_NUMBER ||
-    '2323230057321829',
+    '50000210062',
   razorpayPayoutWebhookUrl:
     process.env.RAZORPAY_PAYOUT_WEBHOOK_URL ||
     buildApiUrl('/api/payouts/razorpay/webhook'),
