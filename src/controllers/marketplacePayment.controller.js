@@ -13,7 +13,7 @@ const {
 } = require('../services/tripAccess.service')
 const {
   getGatewayPayloadMetadata,
-  verifyGatewayWebhook,
+  verifyGatewayWebhook
 } = require('../services/paymentGateway.service')
 const {
   createAutomaticPayoutForPayment
@@ -202,7 +202,8 @@ const initiateMarketplaceTripRazorpayPayment = async (req, res, next) => {
           amount: payment.amount,
           currency: payment.currency,
           merchantTransactionId: payment.merchantTransactionId,
-          providerOrderId: payment.providerOrderId || requestFields.order_id || null,
+          providerOrderId:
+            payment.providerOrderId || requestFields.order_id || null,
           actionUrl: payment.paymentRequest.actionUrl,
           method: payment.paymentRequest.method,
           fields: payment.paymentRequest.fields
@@ -336,9 +337,12 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
       payment.failedAt = new Date()
       await payment.save()
 
-      logger.error(`[${requestId}] Marketplace Razorpay webhook failed verification`, {
-        paymentId: payment._id.toString()
-      })
+      logger.error(
+        `[${requestId}] Marketplace Razorpay webhook failed verification`,
+        {
+          paymentId: payment._id.toString()
+        }
+      )
 
       return res.status(400).json({
         success: false,
@@ -349,8 +353,10 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
     const previousStatus = payment.status
 
     payment.paymentResponse = { ...body, verified: true }
-    payment.providerTransactionId = incomingProviderTxnId || payment.providerTransactionId
-    payment.providerOrderId = gatewayMetadata.providerOrderId || payment.providerOrderId
+    payment.providerTransactionId =
+      incomingProviderTxnId || payment.providerTransactionId
+    payment.providerOrderId =
+      gatewayMetadata.providerOrderId || payment.providerOrderId
 
     if (responseStatus === 'SUCCESS') {
       payment.status = 'SUCCESS'
@@ -468,10 +474,13 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
       message: 'Marketplace Razorpay webhook processed successfully'
     })
   } catch (error) {
-    logger.error(`[${crypto.randomUUID()}] Marketplace Razorpay webhook error`, {
-      message: error.message,
-      stack: error.stack
-    })
+    logger.error(
+      `[${crypto.randomUUID()}] Marketplace Razorpay webhook error`,
+      {
+        message: error.message,
+        stack: error.stack
+      }
+    )
     next(error)
   }
 }
@@ -631,13 +640,7 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
     const latestPayment = await getLatestPaymentForTrip(trip._id)
 
     // --------------------------------------------------
-    // 4. Get CURRENT payout
-    //
-    // IMPORTANT:
-    // Do NOT use:
-    // latestPayment.metadata?.payout?.status
-    //
-    // Payout collection is the source of truth.
+    // 4. Get current payout
     // --------------------------------------------------
     let latestPayout = null
 
@@ -653,10 +656,7 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
     // 5. Milestone 1
     // --------------------------------------------------
     const milestoneOneCompleted = Array.isArray(trip.milestones)
-      ? trip.milestones.some(
-          milestone =>
-            milestone?.milestoneNumber === 1
-        )
+      ? trip.milestones.some(milestone => milestone?.milestoneNumber === 1)
       : false
 
     // --------------------------------------------------
@@ -672,24 +672,19 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
     // --------------------------------------------------
     // 7. Payout status
     // --------------------------------------------------
-    const payoutStatus =
-      latestPayout?.status ||
-      null
+    const payoutStatus = latestPayout?.status || null
 
     // --------------------------------------------------
-    // 8. Determine whether payment can be initiated
-    //
-    // Only allow a new payment when there is:
-    // - no payment
-    // - or previous payment FAILED/CANCELLED
-    //
-    // Never allow a new payment while PENDING/PROCESSING/SUCCESS.
+    // 8. Duplicate payment protection
     // --------------------------------------------------
-    const paymentInProgress = [
-      'PENDING',
-      'PROCESSING',
-      'SUCCESS'
-    ].includes(paymentStatus)
+
+    // Does an actual payment document exist?
+    const hasPayment = !!latestPayment
+
+    // Existing payment statuses that must block
+    // another payment attempt.
+    const paymentInProgress =
+      hasPayment && ['PENDING', 'PROCESSING', 'SUCCESS'].includes(paymentStatus)
 
     const canInitiatePayment =
       isMarketplaceBookingTrip(trip) &&
@@ -742,9 +737,13 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
 
         eligibility: {
           marketplaceTrip: isMarketplaceBookingTrip(trip),
+
           tripStarted: trip.status === 'ACTIVE',
+
           milestoneOneCompleted,
+
           paymentStatus,
+
           canInitiatePayment
         }
       }
