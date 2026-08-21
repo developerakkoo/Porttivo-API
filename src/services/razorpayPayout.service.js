@@ -44,7 +44,8 @@ const normalizeMoney = amount => {
   return Number(value.toFixed(2))
 }
 
-const normalizeIntegerAmount = amount => Math.round(Number(normalizeMoney(amount)) * 100)
+const normalizeIntegerAmount = amount =>
+  Math.round(Number(normalizeMoney(amount)) * 100)
 
 const extractAccountLast4 = value => {
   const text = String(value || '').trim()
@@ -64,7 +65,9 @@ const makeTransferId = (prefix = 'RZP') => {
 }
 
 const makeIdempotencyKey = payoutId =>
-  `RZP-${String(payoutId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48)}`
+  `RZP-${String(payoutId || '')
+    .replace(/[^a-zA-Z0-9_-]/g, '')
+    .slice(0, 48)}`
 
 const savePayoutWithLogs = async payout => {
   console.log('Saving payout...')
@@ -124,9 +127,16 @@ const getFetchImpl = () => {
 
 const razorpayRequest = async (
   path,
-  { method = 'GET', body = null, headers = {}, query = null, fetchImpl = getFetchImpl() } = {}
+  {
+    method = 'GET',
+    body = null,
+    headers = {},
+    query = null,
+    fetchImpl = getFetchImpl()
+  } = {}
 ) => {
-  const resolvedFetchImpl = typeof fetchImpl === 'function' ? fetchImpl : getFetchImpl()
+  const resolvedFetchImpl =
+    typeof fetchImpl === 'function' ? fetchImpl : getFetchImpl()
   if (typeof resolvedFetchImpl !== 'function') {
     throw new Error('Fetch is not available for Razorpay payout requests')
   }
@@ -196,7 +206,9 @@ const getPayeeSnapshot = (payee, modelName) => {
 }
 
 const normalizeRazorpayContactType = type => {
-  const normalized = String(type || '').trim().toLowerCase()
+  const normalized = String(type || '')
+    .trim()
+    .toLowerCase()
   if (!normalized) {
     return 'customer'
   }
@@ -215,14 +227,38 @@ const normalizeRazorpayContactType = type => {
 }
 
 const normalizeRazorpayPayoutStatus = status => {
-  const normalized = String(status || '').trim().toLowerCase()
-  if (['captured', 'paid', 'processed', 'success', 'completed', 'succeeded'].includes(normalized)) {
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+  if (
+    [
+      'captured',
+      'paid',
+      'processed',
+      'success',
+      'completed',
+      'succeeded'
+    ].includes(normalized)
+  ) {
     return 'SUCCESS'
   }
-  if (['failed', 'failure', 'reversed', 'rejected', 'cancelled', 'canceled'].includes(normalized)) {
+  if (
+    [
+      'failed',
+      'failure',
+      'reversed',
+      'rejected',
+      'cancelled',
+      'canceled'
+    ].includes(normalized)
+  ) {
     return 'FAILED'
   }
-  if (['processing', 'queued', 'pending', 'created', 'initiated'].includes(normalized)) {
+  if (
+    ['processing', 'queued', 'pending', 'created', 'initiated'].includes(
+      normalized
+    )
+  ) {
     return 'PROCESSING'
   }
   return 'PROCESSING'
@@ -251,13 +287,20 @@ const extractRazorpayMessage = payload => {
     }
 
     if (payload.error && typeof payload.error === 'object') {
-      const nestedMessage = payload.error.description || payload.error.message || payload.error.error_description
+      const nestedMessage =
+        payload.error.description ||
+        payload.error.message ||
+        payload.error.error_description
       if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
         return nestedMessage.trim()
       }
     }
 
-    if (payload.description && typeof payload.description === 'string' && payload.description.trim()) {
+    if (
+      payload.description &&
+      typeof payload.description === 'string' &&
+      payload.description.trim()
+    ) {
       return payload.description.trim()
     }
   }
@@ -278,7 +321,8 @@ const parseRazorpayResponse = payload => {
     }
   }
 
-  const data = payload.data && typeof payload.data === 'object' ? payload.data : payload
+  const data =
+    payload.data && typeof payload.data === 'object' ? payload.data : payload
   const status = String(
     data.status ||
       data.payout_status ||
@@ -299,7 +343,10 @@ const parseRazorpayResponse = payload => {
     fundAccountId: data.fund_account_id || data.fundAccountId || null,
     utr: data.utr || data.utr_no || data.utrNo || null,
     code: data.code || data.error_code || null,
-    message: extractRazorpayMessage(data.message || data.error || data.errorMessage || data) || null,
+    message:
+      extractRazorpayMessage(
+        data.message || data.error || data.errorMessage || data
+      ) || null,
     statusDetails: data.status_details || data.statusDetails || null
   }
 }
@@ -332,11 +379,17 @@ const ensureRazorpayBeneficiaryPayload = ({
   ifsc,
   accountType = 'bank_account'
 } = {}) => {
-  const contactName = String(name || payee?.name || payee?.company || payee?.pumpName || '').trim()
-  const contactEmail = String(email || payee?.email || '').trim().toLowerCase()
+  const contactName = String(
+    name || payee?.name || payee?.company || payee?.pumpName || ''
+  ).trim()
+  const contactEmail = String(email || payee?.email || '')
+    .trim()
+    .toLowerCase()
   const contactPhone = String(phone || payee?.mobile || '').trim()
   const accountNumber = String(bankAccount || '').trim()
-  const accountIfsc = String(ifsc || '').trim().toUpperCase()
+  const accountIfsc = String(ifsc || '')
+    .trim()
+    .toUpperCase()
 
   if (!contactName || !contactPhone || !accountNumber || !accountIfsc) {
     const error = new Error(
@@ -352,7 +405,9 @@ const ensureRazorpayBeneficiaryPayload = ({
       email: contactEmail || undefined,
       contact: contactPhone,
       type: normalizeRazorpayContactType(
-        String(payee?.constructor?.modelName || payee?.userType || 'beneficiary').trim()
+        String(
+          payee?.constructor?.modelName || payee?.userType || 'beneficiary'
+        ).trim()
       ),
       reference_id: String(payeeId || payee?._id || '').trim() || undefined
     },
@@ -461,15 +516,19 @@ const patchPayeeRazorpayBeneficiary = async ({
 
   payee.razorpayBeneficiary = {
     contactId: contactId || payee.razorpayBeneficiary?.contactId || null,
-    fundAccountId: fundAccountId || payee.razorpayBeneficiary?.fundAccountId || null,
+    fundAccountId:
+      fundAccountId || payee.razorpayBeneficiary?.fundAccountId || null,
     status: 'ACTIVE',
     bankAccountLast4:
       bankAccountNumber !== undefined
         ? extractAccountLast4(bankAccountNumber)
         : payee.razorpayBeneficiary?.bankAccountLast4 || null,
-    accountType: accountType || payee.razorpayBeneficiary?.accountType || 'bank_account',
+    accountType:
+      accountType || payee.razorpayBeneficiary?.accountType || 'bank_account',
     referenceId:
-      String(payee._id || '').trim() || payee.razorpayBeneficiary?.referenceId || null,
+      String(payee._id || '').trim() ||
+      payee.razorpayBeneficiary?.referenceId ||
+      null,
     providerResponse: sanitizeResponse({
       ...(payee.razorpayBeneficiary?.providerResponse || {}),
       ...(providerResponse || {})
@@ -516,8 +575,12 @@ const syncRazorpayBeneficiaryForPayee = async (
     accountType
   })
 
-  const contactResponse = await createRazorpayContact(payload.contact, fetchImpl)
-  const contactId = contactResponse.data?.id || contactResponse.contactId || null
+  const contactResponse = await createRazorpayContact(
+    payload.contact,
+    fetchImpl
+  )
+  const contactId =
+    contactResponse.data?.id || contactResponse.contactId || null
   if (!contactId) {
     throw new Error('Razorpay contact id not returned by provider')
   }
@@ -560,17 +623,41 @@ const syncRazorpayBeneficiaryForPayee = async (
 }
 
 const normalizeRazorpayStatus = status => {
-  const normalized = String(status || '').trim().toLowerCase()
-  if (['captured', 'paid', 'processed', 'success', 'completed'].includes(normalized)) {
+  const normalized = String(status || '')
+    .trim()
+    .toLowerCase()
+  if (
+    ['captured', 'paid', 'processed', 'success', 'completed'].includes(
+      normalized
+    )
+  ) {
     return 'SUCCESS'
   }
-  if (['failed', 'failure', 'reversed', 'rejected', 'cancelled', 'canceled'].includes(normalized)) {
+  if (
+    [
+      'failed',
+      'failure',
+      'reversed',
+      'rejected',
+      'cancelled',
+      'canceled'
+    ].includes(normalized)
+  ) {
     return 'FAILED'
   }
   if (['refunded', 'refund'].includes(normalized)) {
     return 'REFUNDED'
   }
-  if (['authorized', 'queued', 'pending', 'processing', 'created', 'initiated'].includes(normalized)) {
+  if (
+    [
+      'authorized',
+      'queued',
+      'pending',
+      'processing',
+      'created',
+      'initiated'
+    ].includes(normalized)
+  ) {
     return 'PENDING'
   }
   return 'PENDING'
@@ -619,7 +706,14 @@ const verifyWebhookSignature = ({
     candidates.push(
       `{${Object.keys(body)
         .sort()
-        .map(key => `${JSON.stringify(key)}:${typeof body[key] === 'object' ? JSON.stringify(body[key]) : JSON.stringify(body[key])}`)
+        .map(
+          key =>
+            `${JSON.stringify(key)}:${
+              typeof body[key] === 'object'
+                ? JSON.stringify(body[key])
+                : JSON.stringify(body[key])
+            }`
+        )
         .join(',')}}`
     )
   }
@@ -718,8 +812,13 @@ const buildRazorpayRequestBody = ({
       purpose: 'payout',
       queue_if_low_balance: true,
       reference_id:
-        String(payout.referenceId || payout._id || '').trim().slice(0, 40) || undefined,
-      narration: buildRazorpayNarration(payout.referenceType, payout.referenceId),
+        String(payout.referenceId || payout._id || '')
+          .trim()
+          .slice(0, 40) || undefined,
+      narration: buildRazorpayNarration(
+        payout.referenceType,
+        payout.referenceId
+      ),
       notes: {
         payout_id: payout._id ? payout._id.toString() : '',
         payment_id: safeObjectIdString(payout.paymentId) || '',
@@ -752,13 +851,17 @@ const createRazorpayPayoutRecord = async ({
   razorpay = {}
 }) => {
   if (!payerId || !payeeId) {
-    const error = new Error('payerId and payeeId are required for payout creation')
+    const error = new Error(
+      'payerId and payeeId are required for payout creation'
+    )
     error.statusCode = 400
     throw error
   }
 
   const existingByPayment = paymentId
-    ? await Payout.findOne({ paymentId, provider: 'RAZORPAY' }).sort({ createdAt: -1 })
+    ? await Payout.findOne({ paymentId, provider: 'RAZORPAY' }).sort({
+        createdAt: -1
+      })
     : null
 
   if (existingByPayment) {
@@ -776,7 +879,9 @@ const createRazorpayPayoutRecord = async ({
 
   if (
     existingByReference &&
-    ['SUCCESS', 'PROCESSING', 'CREATED', 'RETRY_PENDING'].includes(existingByReference.status)
+    ['SUCCESS', 'PROCESSING', 'CREATED', 'RETRY_PENDING'].includes(
+      existingByReference.status
+    )
   ) {
     return existingByReference
   }
@@ -858,7 +963,8 @@ const ensureAutomaticPayoutMetadata = payment => {
     currency: payoutMeta.currency || payment.currency || 'INR',
     bankAccount: payoutMeta.bankAccount || metadata.bankAccount || null,
     ifsc: payoutMeta.ifsc || metadata.ifsc || null,
-    accountType: payoutMeta.accountType || metadata.accountType || 'bank_account'
+    accountType:
+      payoutMeta.accountType || metadata.accountType || 'bank_account'
   }
 }
 
@@ -901,7 +1007,8 @@ const startRazorpayPayoutTransfer = async (
 
   const { payee } = await findPayeeRecordById(payout.payeeId)
   const beneficiary = payee?.razorpayBeneficiary || {}
-  let fundAccountId = payout.razorpay?.fundAccountId || beneficiary.fundAccountId || null
+  let fundAccountId =
+    payout.razorpay?.fundAccountId || beneficiary.fundAccountId || null
   let contactId = payout.razorpay?.contactId || beneficiary.contactId || null
 
   const autoMeta = payment ? ensureAutomaticPayoutMetadata(payment) : null
@@ -962,7 +1069,8 @@ const startRazorpayPayoutTransfer = async (
         'razorpay.contactId': contactId,
         'razorpay.fundAccountId': fundAccountId,
         'razorpay.transferMode': payout.razorpay?.transferMode || 'IMPS',
-        'razorpay.beneficiary': beneficiary || payout.razorpay?.beneficiary || {},
+        'razorpay.beneficiary':
+          beneficiary || payout.razorpay?.beneficiary || {},
         'razorpay.request': {
           ...(payout.razorpay?.request || {}),
           contactId,
@@ -1008,10 +1116,21 @@ const startRazorpayPayoutTransfer = async (
       contactId,
       fundAccountId,
       payoutId: parsed.payoutId || payout.razorpay?.payoutId || null,
-      referenceId: parsed.data?.reference_id || parsed.data?.referenceId || payout.razorpay?.referenceId || null,
-      utr: parsed.utr || parsed.data?.utr || parsed.data?.utr_no || parsed.data?.utrNo || payout.razorpay?.utr || null,
+      referenceId:
+        parsed.data?.reference_id ||
+        parsed.data?.referenceId ||
+        payout.razorpay?.referenceId ||
+        null,
+      utr:
+        parsed.utr ||
+        parsed.data?.utr ||
+        parsed.data?.utr_no ||
+        parsed.data?.utrNo ||
+        payout.razorpay?.utr ||
+        null,
       transferMode: requestBody.request.mode,
-      statusDetails: parsed.statusDetails || payout.razorpay?.statusDetails || {},
+      statusDetails:
+        parsed.statusDetails || payout.razorpay?.statusDetails || {},
       beneficiary: beneficiary || payout.razorpay?.beneficiary || {},
       request: {
         ...(payout.razorpay?.request || {}),
@@ -1021,7 +1140,9 @@ const startRazorpayPayoutTransfer = async (
     }
     payout.lastAttemptAt = new Date()
 
-    const status = normalizeRazorpayPayoutStatus(parsed.status || parsed.data?.status)
+    const status = normalizeRazorpayPayoutStatus(
+      parsed.status || parsed.data?.status
+    )
     if (status === 'SUCCESS') {
       payout.status = 'SUCCESS'
       payout.completedAt = new Date()
@@ -1164,7 +1285,8 @@ const createAutomaticPayoutForPayment = async (
       ? payout
       : await findExistingRazorpayPayout({
           paymentId: payment._id,
-          referenceType: autoMetadata.referenceType || payment.referenceType || null,
+          referenceType:
+            autoMetadata.referenceType || payment.referenceType || null,
           referenceId: autoMetadata.referenceId || payment.referenceId || null
         })
 
@@ -1222,7 +1344,8 @@ const isRazorpayRetryDue = payout => {
   }
 
   if (payout.status === 'PROCESSING') {
-    const lastAttempt = payout.lastAttemptAt || payout.updatedAt || payout.createdAt
+    const lastAttempt =
+      payout.lastAttemptAt || payout.updatedAt || payout.createdAt
     return (
       !lastAttempt ||
       Date.now() - new Date(lastAttempt).getTime() >= STALE_PROCESSING_WINDOW_MS
@@ -1232,7 +1355,10 @@ const isRazorpayRetryDue = payout => {
   return false
 }
 
-const syncRazorpayPayoutStatus = async (payout, { fetchImpl = getFetchImpl() } = {}) => {
+const syncRazorpayPayoutStatus = async (
+  payout,
+  { fetchImpl = getFetchImpl() } = {}
+) => {
   if (!payout) {
     return null
   }
@@ -1245,13 +1371,25 @@ const syncRazorpayPayoutStatus = async (payout, { fetchImpl = getFetchImpl() } =
   const previousStatus = payout.status
   const remoteResponse = await getRazorpayPayout(payoutId, { fetchImpl })
   const parsed = parseRazorpayResponse(remoteResponse)
-  const remoteStatus = normalizeRazorpayPayoutStatus(parsed.status || parsed.data?.status)
+  const remoteStatus = normalizeRazorpayPayoutStatus(
+    parsed.status || parsed.data?.status
+  )
 
   payout.razorpay = {
     ...(payout.razorpay || {}),
     payoutId,
-    referenceId: parsed.data?.reference_id || parsed.data?.referenceId || payout.razorpay?.referenceId || null,
-    utr: parsed.utr || parsed.data?.utr || parsed.data?.utr_no || parsed.data?.utrNo || payout.razorpay?.utr || null,
+    referenceId:
+      parsed.data?.reference_id ||
+      parsed.data?.referenceId ||
+      payout.razorpay?.referenceId ||
+      null,
+    utr:
+      parsed.utr ||
+      parsed.data?.utr ||
+      parsed.data?.utr_no ||
+      parsed.data?.utrNo ||
+      payout.razorpay?.utr ||
+      null,
     statusDetails: parsed.statusDetails || payout.razorpay?.statusDetails || {},
     response: sanitizeResponse(parsed.raw || remoteResponse || {})
   }
@@ -1368,8 +1506,12 @@ const handleRazorpayPayoutWebhook = async ({
       entity.fund_account_id ||
       ''
   ).trim()
-  const referenceId = String(entity.reference_id || entity.referenceId || '').trim()
-  const eventName = String(body.event || entity.status || '').trim().toLowerCase()
+  const referenceId = String(
+    entity.reference_id || entity.referenceId || ''
+  ).trim()
+  const eventName = String(body.event || entity.status || '')
+    .trim()
+    .toLowerCase()
   const webhookStatus = normalizeRazorpayPayoutStatus(
     entity.status || eventName || body.event || body.status
   )
@@ -1403,7 +1545,11 @@ const handleRazorpayPayoutWebhook = async ({
     payoutId: payoutId || payout.razorpay?.payoutId || null,
     referenceId: referenceId || payout.razorpay?.referenceId || null,
     transferMode: entity.mode || payout.razorpay?.transferMode || 'IMPS',
-    statusDetails: entity.status_details || entity.statusDetails || payout.razorpay?.statusDetails || {},
+    statusDetails:
+      entity.status_details ||
+      entity.statusDetails ||
+      payout.razorpay?.statusDetails ||
+      {},
     beneficiary: payout.razorpay?.beneficiary || {},
     response: {
       ...(payout.razorpay?.response || {}),
@@ -1428,8 +1574,16 @@ const handleRazorpayPayoutWebhook = async ({
       updatedPayout.completedAt = new Date()
       updatedPayout.failure = buildPayoutFailure({
         code: entity.error_code || entity.code || 'PAYOUT_FAILED',
-        message: entity.status_message || entity.reason || entity.message || 'Payout failed',
-        reason: entity.status_message || entity.reason || entity.message || 'Payout failed',
+        message:
+          entity.status_message ||
+          entity.reason ||
+          entity.message ||
+          'Payout failed',
+        reason:
+          entity.status_message ||
+          entity.reason ||
+          entity.message ||
+          'Payout failed',
         isRetryable: false
       })
     } else {
@@ -1472,69 +1626,158 @@ const getPayoutSummary = async () => {
   }
 }
 
-const listRazorpayContacts = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
-  const result = await razorpayRequest('/contacts', { method: 'GET', query, fetchImpl })
+const listRazorpayContacts = async ({
+  query = {},
+  fetchImpl = getFetchImpl()
+} = {}) => {
+  const result = await razorpayRequest('/contacts', {
+    method: 'GET',
+    query,
+    fetchImpl
+  })
   return result.data || {}
 }
 
-const getRazorpayContact = async (contactId, { fetchImpl = getFetchImpl() } = {}) => {
+const getRazorpayContact = async (
+  contactId,
+  { fetchImpl = getFetchImpl() } = {}
+) => {
   if (!contactId) {
     const error = new Error('contactId is required')
     error.statusCode = 400
     throw error
   }
-  const result = await razorpayRequest(`/contacts/${String(contactId).trim()}`, { method: 'GET', fetchImpl })
+  const result = await razorpayRequest(
+    `/contacts/${String(contactId).trim()}`,
+    { method: 'GET', fetchImpl }
+  )
   return result.data || {}
 }
 
-const listRazorpayFundAccounts = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
-  const result = await razorpayRequest('/fund_accounts', { method: 'GET', query, fetchImpl })
+const listRazorpayFundAccounts = async ({
+  query = {},
+  fetchImpl = getFetchImpl()
+} = {}) => {
+  const result = await razorpayRequest('/fund_accounts', {
+    method: 'GET',
+    query,
+    fetchImpl
+  })
   return result.data || {}
 }
 
-const getRazorpayFundAccount = async (fundAccountId, { fetchImpl = getFetchImpl() } = {}) => {
+const getRazorpayFundAccount = async (
+  fundAccountId,
+  { fetchImpl = getFetchImpl() } = {}
+) => {
   if (!fundAccountId) {
     const error = new Error('fundAccountId is required')
     error.statusCode = 400
     throw error
   }
-  const result = await razorpayRequest(`/fund_accounts/${String(fundAccountId).trim()}`, { method: 'GET', fetchImpl })
+  const result = await razorpayRequest(
+    `/fund_accounts/${String(fundAccountId).trim()}`,
+    { method: 'GET', fetchImpl }
+  )
   return result.data || {}
 }
 
-const createRazorpayPayout = async (body, { headers = {}, fetchImpl = getFetchImpl() } = {}) => {
-  const result = await razorpayRequest('/payouts', { method: 'POST', body, headers, fetchImpl })
+const createRazorpayPayout = async (
+  body,
+  { headers = {}, fetchImpl = getFetchImpl() } = {}
+) => {
+  const result = await razorpayRequest('/payouts', {
+    method: 'POST',
+    body,
+    headers,
+    fetchImpl
+  })
   return result.data || {}
 }
 
-const listRazorpayPayouts = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
-  const result = await razorpayRequest('/payouts', { method: 'GET', query, fetchImpl })
+const listRazorpayPayouts = async ({
+  query = {},
+  fetchImpl = getFetchImpl()
+} = {}) => {
+  const result = await razorpayRequest('/payouts', {
+    method: 'GET',
+    query,
+    fetchImpl
+  })
   return result.data || {}
 }
 
-const getRazorpayPayout = async (payoutId, { fetchImpl = getFetchImpl() } = {}) => {
+const getRazorpayPayout = async (
+  payoutId,
+  { fetchImpl = getFetchImpl() } = {}
+) => {
   if (!payoutId) {
     const error = new Error('payoutId is required')
     error.statusCode = 400
     throw error
   }
-  const result = await razorpayRequest(`/payouts/${String(payoutId).trim()}`, { method: 'GET', fetchImpl })
+  const result = await razorpayRequest(`/payouts/${String(payoutId).trim()}`, {
+    method: 'GET',
+    fetchImpl
+  })
   return result.data || {}
 }
 
-const listRazorpayTransactions = async ({ query = {}, fetchImpl = getFetchImpl() } = {}) => {
-  const result = await razorpayRequest('/transactions', { method: 'GET', query, fetchImpl })
+const listRazorpayTransactions = async ({
+  query = {},
+  fetchImpl = getFetchImpl()
+} = {}) => {
+  const result = await razorpayRequest('/transactions', {
+    method: 'GET',
+    query,
+    fetchImpl
+  })
   return result.data || {}
 }
 
-const getRazorpayTransaction = async (txnId, { fetchImpl = getFetchImpl() } = {}) => {
+const getRazorpayTransaction = async (
+  txnId,
+  { fetchImpl = getFetchImpl() } = {}
+) => {
   if (!txnId) {
     const error = new Error('txnId is required')
     error.statusCode = 400
     throw error
   }
-  const result = await razorpayRequest(`/transactions/${String(txnId).trim()}`, { method: 'GET', fetchImpl })
+  const result = await razorpayRequest(
+    `/transactions/${String(txnId).trim()}`,
+    { method: 'GET', fetchImpl }
+  )
   return result.data || {}
+}
+const isDriverPayoutReady = async driverId => {
+  const { payee } = await findPayeeRecordById(driverId)
+
+  if (!payee) {
+    return {
+      ready: false,
+      reason: 'DRIVER_NOT_FOUND'
+    }
+  }
+
+  const beneficiary = payee.razorpayBeneficiary || {}
+
+  if (
+    !beneficiary.contactId ||
+    !beneficiary.fundAccountId ||
+    String(beneficiary.status).toUpperCase() !== 'ACTIVE'
+  ) {
+    return {
+      ready: false,
+      reason: 'RAZORPAY_FUND_ACCOUNT_NOT_READY'
+    }
+  }
+
+  return {
+    ready: true,
+    contactId: beneficiary.contactId,
+    fundAccountId: beneficiary.fundAccountId
+  }
 }
 
 module.exports = {
@@ -1565,6 +1808,6 @@ module.exports = {
   listRazorpayPayouts,
   getRazorpayPayout,
   listRazorpayTransactions,
-  getRazorpayTransaction
+  getRazorpayTransaction,
+  isDriverPayoutReady
 }
-
