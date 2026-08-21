@@ -1,6 +1,7 @@
 const mongoose = require('mongoose')
 const Trip = require('../models/Trip')
 const PaymentSession = require('../models/PaymentSession')
+const { verifyRazorpayPaymentSignatureNew } = require('../services/paymentGateway.service')
 
 const {
   buildPaymentInitiationRequest,
@@ -456,6 +457,208 @@ const createTripAdvancePayment = async (req, res, next) => {
   }
 }
 
+
+
+
+
+const verifyTripAdvancePayment = async (req, res, next) => {
+  try {
+    const { tripId } = req.params
+
+    const {
+      razorpay_payment_id,
+      razorpay_order_id,
+      razorpay_signature
+    } = req.body
+
+    // ---------------------------------------------
+    // 1. Validate request
+    // ---------------------------------------------
+
+    if (!mongoose.Types.ObjectId.isValid(tripId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid trip ID'
+      })
+    }
+
+    if (
+      !razorpay_payment_id ||
+      !razorpay_order_id ||
+      !razorpay_signature
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'razorpay_payment_id, razorpay_order_id and razorpay_signature are required'
+      })
+    }
+
+    // ---------------------------------------------
+    // 2. Get trip
+    // ---------------------------------------------
+
+    const trip = await Trip.findById(tripId)
+
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found'
+      })
+    }
+
+    // ---------------------------------------------
+    // 3. Find our PaymentSession
+    // ---------------------------------------------
+
+    const paymentSession =
+      await PaymentSession.findOne({
+        referenceType: 'TRIP',
+        referenceId: trip._id.toString(),
+        purpose: 'DRIVER_ADVANCE',
+        provider: 'RAZORPAY',
+        providerOrderId: razorpay_order_id
+      }).sort({
+        createdAt: -1
+      })
+
+    if (!paymentSession) {
+      return res.status(404).json({
+        success: false,
+        message:
+          'Razorpay payment session not found'
+      })
+    }
+
+    // ---------------------------------------------
+    // 4. Idempotency
+    // ---------------------------------------------
+
+    if (paymentSession.status === 'SUCCESS') {
+      return res.status(200).json({
+        success: true,
+        message:
+          'Driver advance payment already verified',
+        data: {
+          paymentSessionId:
+            paymentSession.publicId,
+
+          status:
+            paymentSession.status,
+
+          paymentId:
+            paymentSession.providerTransactionId
+        }
+      })
+    }
+
+    // ---------------------------------------------
+    // 5. IMPORTANT:
+    // Use order ID from OUR database
+    // ---------------------------------------------
+
+    const orderId =
+      paymentSession.providerOrderId
+
+    // ---------------------------------------------
+    // 6. Verify Razorpay signature
+    // ---------------------------------------------
+
+    const isValid =
+      verifyRazorpayPaymentSignatureNew({
+        orderId,
+        paymentId:
+          razorpay_payment_id,
+        signature:
+          razorpay_signature
+      })
+
+    if (!isValid) {
+      paymentSession.status = 'FAILED'
+
+      paymentSession.failureReason =
+        'RAZORPAY_SIGNATURE_VERIFICATION_FAILED'
+
+      paymentSession.failureMessage =
+        'Razorpay payment signature verification failed'
+
+      await paymentSession.save()
+
+      return res.status(400).json({
+        success: false,
+        message:
+          'Razorpay payment verification failed'
+      })
+    }
+
+    // ---------------------------------------------
+    // 7. Save Razorpay payment information
+    // ---------------------------------------------
+
+    paymentSession.providerTransactionId =
+      razorpay_payment_id
+
+    paymentSession.providerOrderId =
+      orderId
+
+    paymentSession.providerSignature =
+      razorpay_signature
+
+    // ---------------------------------------------
+    // 8. Mark PayIN successful
+    // ---------------------------------------------
+
+    paymentSession.status = 'SUCCESS'
+
+    paymentSession.completedAt =
+      new Date()
+
+    await paymentSession.save()
+
+    // ---------------------------------------------
+    // 9. Response
+    // ---------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+
+      message:
+        'Driver advance payment verified successfully',
+
+      data: {
+        paymentSessionId:
+          paymentSession.publicId,
+
+        tripId:
+          trip._id.toString(),
+
+        amount:
+          paymentSession.amount,
+
+        currency:
+          paymentSession.currency,
+
+        paymentId:
+          razorpay_payment_id,
+
+        orderId,
+
+        paymentStatus:
+          'SUCCESS',
+
+        payoutStatus:
+          'PENDING'
+      }
+    })
+
+  } catch (error) {
+    next(error)
+  }
+}
+
+
+
 module.exports = {
-  createTripAdvancePayment
+  createTripAdvancePayment,
+  verifyTripAdvancePayment
 }

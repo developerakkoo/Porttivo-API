@@ -880,6 +880,54 @@ const getGatewayPayloadMetadata = (provider, payload = {}) => {
   }
 }
 
+
+const verifyRazorpayPaymentSignatureNew = ({
+  orderId,
+  paymentId,
+  signature
+}) => {
+  if (!orderId || !paymentId || !signature) {
+    return false
+  }
+
+  const secret = process.env.RAZORPAY_KEY_SECRET
+
+  if (!secret) {
+    throw new Error(
+      'RAZORPAY_KEY_SECRET is not configured'
+    )
+  }
+
+  const body = `${orderId}|${paymentId}`
+
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(body)
+    .digest('hex')
+
+  const expectedBuffer =
+    Buffer.from(expectedSignature, 'hex')
+
+  const receivedBuffer =
+    Buffer.from(signature, 'hex')
+
+  if (
+    expectedBuffer.length !==
+    receivedBuffer.length
+  ) {
+    return false
+  }
+
+  return crypto.timingSafeEqual(
+    expectedBuffer,
+    receivedBuffer
+  )
+}
+
+module.exports = {
+  verifyRazorpayPaymentSignature
+}
+
 module.exports = {
   DEFAULT_CURRENCY,
   SUPPORTED_PAYMENT_PROVIDERS,
@@ -900,5 +948,6 @@ module.exports = {
   verifyGatewayWebhook,
   verifyCashfreeWebhook,
   verifyPayuWebhook,
-  verifyRazorpayPaymentSignature
+  verifyRazorpayPaymentSignature,
+  verifyRazorpayPaymentSignatureNew
 }
