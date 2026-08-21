@@ -22,6 +22,7 @@ const {
   createMarketplacePaymentRequestForTrip
 } = require('../services/marketplacePayment.service')
 
+const Payout = require('../models/Payout')
 const toObjectIdString = value => {
   if (!value) return null
   if (typeof value === 'string') return value
@@ -475,6 +476,101 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
   }
 }
 
+// const getMarketplaceTripPaymentStatus = async (req, res, next) => {
+//   try {
+//     const { tripId } = req.params
+//     const actorId = getTransporterActorId(req.user)
+//     const isAdmin = req.user?.userType === 'admin'
+
+//     const { trip, booking } = await getMarketplaceTripPaymentContext(tripId)
+
+//     if (!trip) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'Trip not found'
+//       })
+//     }
+
+//     if (!isAdmin) {
+//       if (!booking) {
+//         return res.status(404).json({
+//           success: false,
+//           message: 'Booking not found for this trip'
+//         })
+//       }
+
+//       const buyerId = toObjectIdString(booking.buyerId)
+//       const sellerId = toObjectIdString(booking.sellerId)
+
+//       if (!actorId || (actorId !== buyerId && actorId !== sellerId)) {
+//         return res.status(403).json({
+//           success: false,
+//           message: 'Access denied'
+//         })
+//       }
+
+//       if (req.user.userType === 'company-user') {
+//         const allowed = await canTransporterPartyViewTripExecution(
+//           req.user,
+//           trip
+//         )
+//         if (!allowed) {
+//           return res.status(403).json({
+//             success: false,
+//             message: 'Access denied'
+//           })
+//         }
+//       }
+//     }
+
+//     const latestPayment = await getLatestPaymentForTrip(trip._id)
+//     const milestoneOneCompleted = Array.isArray(trip.milestones)
+//       ? trip.milestones.some(milestone => milestone?.milestoneNumber === 1)
+//       : false
+
+//     return res.status(200).json({
+//       success: true,
+//       data: {
+//         trip: {
+//           id: trip._id,
+//           tripId: trip.tripId,
+//           status: trip.status,
+//           isFromBooking: trip.isFromBooking,
+//           bookingId: trip.bookingId,
+//           tripType: trip.tripType
+//         },
+//         booking: booking
+//           ? {
+//               id: booking._id,
+//               buyerId: booking.buyerId?._id || booking.buyerId,
+//               sellerId: booking.sellerId?._id || booking.sellerId,
+//               agreedPrice: booking.agreedPrice,
+//               paymentStatus: booking.paymentStatus
+//             }
+//           : null,
+//         payment: latestPayment,
+//         eligibility: {
+//           marketplaceTrip: isMarketplaceBookingTrip(trip),
+//           tripStarted: trip.status === 'ACTIVE',
+//           milestoneOneCompleted,
+//           paymentStatus: latestPayment?.status || booking?.paymentStatus || 'PENDING',
+//           canInitiatePayment:
+//             isMarketplaceBookingTrip(trip) &&
+//             trip.status === 'ACTIVE' &&
+//             milestoneOneCompleted &&
+//             booking &&
+//             booking.status === 'CONFIRMED' &&
+//             Number(booking.agreedPrice) > 0 &&
+//             (latestPayment?.status || booking?.paymentStatus || 'PENDING') !==
+//               'SUCCESS'
+//         }
+//       }
+//     })
+//   } catch (error) {
+//     next(error)
+//   }
+// }
+
 const getMarketplaceTripPaymentStatus = async (req, res, next) => {
   try {
     const { tripId } = req.params
@@ -483,6 +579,9 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
 
     const { trip, booking } = await getMarketplaceTripPaymentContext(tripId)
 
+    // --------------------------------------------------
+    // 1. Trip validation
+    // --------------------------------------------------
     if (!trip) {
       return res.status(404).json({
         success: false,
@@ -490,6 +589,9 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
       })
     }
 
+    // --------------------------------------------------
+    // 2. Authorization
+    // --------------------------------------------------
     if (!isAdmin) {
       if (!booking) {
         return res.status(404).json({
@@ -513,6 +615,7 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
           req.user,
           trip
         )
+
         if (!allowed) {
           return res.status(403).json({
             success: false,
@@ -522,46 +625,127 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
       }
     }
 
+    // --------------------------------------------------
+    // 3. Get latest payment
+    // --------------------------------------------------
     const latestPayment = await getLatestPaymentForTrip(trip._id)
+
+    // --------------------------------------------------
+    // 4. Get CURRENT payout
+    //
+    // IMPORTANT:
+    // Do NOT use:
+    // latestPayment.metadata?.payout?.status
+    //
+    // Payout collection is the source of truth.
+    // --------------------------------------------------
+    let latestPayout = null
+
+    if (latestPayment?._id) {
+      latestPayout = await Payout.findOne({
+        paymentId: latestPayment._id
+      })
+        .sort({ createdAt: -1 })
+        .lean()
+    }
+
+    // --------------------------------------------------
+    // 5. Milestone 1
+    // --------------------------------------------------
     const milestoneOneCompleted = Array.isArray(trip.milestones)
-      ? trip.milestones.some(milestone => milestone?.milestoneNumber === 1)
+      ? trip.milestones.some(
+          milestone =>
+            milestone?.milestoneNumber === 1
+        )
       : false
 
+    // --------------------------------------------------
+    // 6. Payment status
+    // --------------------------------------------------
+    const paymentStatus =
+      latestPayment?.status ||
+      (booking?.paymentStatus === 'COMPLETED'
+        ? 'SUCCESS'
+        : booking?.paymentStatus) ||
+      'PENDING'
+
+    // --------------------------------------------------
+    // 7. Payout status
+    // --------------------------------------------------
+    const payoutStatus =
+      latestPayout?.status ||
+      null
+
+    // --------------------------------------------------
+    // 8. Determine whether payment can be initiated
+    //
+    // Only allow a new payment when there is:
+    // - no payment
+    // - or previous payment FAILED/CANCELLED
+    //
+    // Never allow a new payment while PENDING/PROCESSING/SUCCESS.
+    // --------------------------------------------------
+    const paymentInProgress = [
+      'PENDING',
+      'PROCESSING',
+      'SUCCESS'
+    ].includes(paymentStatus)
+
+    const canInitiatePayment =
+      isMarketplaceBookingTrip(trip) &&
+      trip.status === 'ACTIVE' &&
+      milestoneOneCompleted &&
+      !!booking &&
+      booking.status === 'CONFIRMED' &&
+      Number(booking.agreedPrice) > 0 &&
+      !paymentInProgress
+
+    // --------------------------------------------------
+    // 9. Frontend-friendly response
+    // --------------------------------------------------
     return res.status(200).json({
       success: true,
+
       data: {
         trip: {
           id: trip._id,
           tripId: trip.tripId,
           status: trip.status,
-          isFromBooking: trip.isFromBooking,
-          bookingId: trip.bookingId,
           tripType: trip.tripType
         },
+
         booking: booking
           ? {
               id: booking._id,
-              buyerId: booking.buyerId?._id || booking.buyerId,
-              sellerId: booking.sellerId?._id || booking.sellerId,
+              status: booking.status,
               agreedPrice: booking.agreedPrice,
+              currency: 'INR',
               paymentStatus: booking.paymentStatus
             }
           : null,
-        payment: latestPayment,
+
+        payment: latestPayment
+          ? {
+              id: latestPayment.publicId || latestPayment._id,
+              status: paymentStatus,
+              amount: latestPayment.amount,
+              currency: latestPayment.currency,
+              provider: latestPayment.provider
+            }
+          : null,
+
+        payout: latestPayout
+          ? {
+              status: payoutStatus
+            }
+          : null,
+
         eligibility: {
           marketplaceTrip: isMarketplaceBookingTrip(trip),
           tripStarted: trip.status === 'ACTIVE',
           milestoneOneCompleted,
-          paymentStatus: latestPayment?.status || booking?.paymentStatus || 'PENDING',
-          canInitiatePayment:
-            isMarketplaceBookingTrip(trip) &&
-            trip.status === 'ACTIVE' &&
-            milestoneOneCompleted &&
-            booking &&
-            booking.status === 'CONFIRMED' &&
-            Number(booking.agreedPrice) > 0 &&
-            (latestPayment?.status || booking?.paymentStatus || 'PENDING') !==
-              'SUCCESS'
+          paymentStatus,
+          canInitiatePayment
         }
       }
     })
