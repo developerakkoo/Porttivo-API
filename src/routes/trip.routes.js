@@ -43,7 +43,7 @@ const {
 const { uploadPOD, approvePOD } = require('../controllers/tripPOD.controller');
 const { uploadPOD: uploadPODMiddleware, uploadMilestonePhotos, handleMulterError } = require('../middleware/upload.middleware');
 const { optionalAuth } = require('../middleware/auth.middleware');
-const { createTripAdvancePayment, verifyTripAdvancePayment } = require('../controllers/tripAdvancePayment.controller')
+const { createTripAdvancePayment, verifyTripAdvancePayment, getTransporterTripAdvancePayments } = require('../controllers/tripAdvancePayment.controller')
 
 // Shared trip routes (public, no authentication required)
 // These must be defined BEFORE the authenticate middleware
@@ -57,6 +57,7 @@ router.use(authenticate);
 // Trip CRUD routes
 router.post('/:tripId/advance/pay', createTripAdvancePayment);
 router.post('/trips/:tripId/advance/verify', verifyTripAdvancePayment);
+router.get('/advance/payments', getTransporterTripAdvancePayments);
 router.post('/customer/book', bookCustomerTrip);
 router.get('/customer/my-trips', getCustomerTrips);
 router.get('/customer/history', getCustomerTripsByCustomer);

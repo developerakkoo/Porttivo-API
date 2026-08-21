@@ -1,7 +1,11 @@
 const mongoose = require('mongoose')
 const Trip = require('../models/Trip')
 const PaymentSession = require('../models/PaymentSession')
-const { verifyRazorpayPaymentSignatureNew } = require('../services/paymentGateway.service')
+const {
+  verifyRazorpayPaymentSignatureNew
+} = require('../services/paymentGateway.service')
+const Driver = require('../models/Driver')
+const Payout = require('../models/Payout')
 
 const {
   buildPaymentInitiationRequest,
@@ -11,9 +15,7 @@ const {
   resolvePayerProfile
 } = require('../services/paymentGateway.service')
 
-const {
-  isDriverPayoutReady
-} = require('../services/razorpayPayout.service')
+const { isDriverPayoutReady } = require('../services/razorpayPayout.service')
 
 const createTripAdvancePayment = async (req, res, next) => {
   try {
@@ -55,8 +57,7 @@ const createTripAdvancePayment = async (req, res, next) => {
     ) {
       return res.status(403).json({
         success: false,
-        message:
-          'You are not authorized to pay advance for this trip'
+        message: 'You are not authorized to pay advance for this trip'
       })
     }
 
@@ -80,8 +81,7 @@ const createTripAdvancePayment = async (req, res, next) => {
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({
         success: false,
-        message:
-          'Advance amount is not configured for this trip'
+        message: 'Advance amount is not configured for this trip'
       })
     }
 
@@ -106,20 +106,14 @@ const createTripAdvancePayment = async (req, res, next) => {
     // 7. Driver payout readiness
     // --------------------------------------------------
 
-    const payoutReadiness =
-      await isDriverPayoutReady(
-        trip.driverId.toString()
-      )
+    const payoutReadiness = await isDriverPayoutReady(trip.driverId.toString())
 
     if (!payoutReadiness?.ready) {
       return res.status(400).json({
         success: false,
-        message:
-          'Driver is not ready to receive payout',
+        message: 'Driver is not ready to receive payout',
 
-        reason:
-          payoutReadiness?.reason ||
-          'RAZORPAY_FUND_ACCOUNT_NOT_READY'
+        reason: payoutReadiness?.reason || 'RAZORPAY_FUND_ACCOUNT_NOT_READY'
       })
     }
 
@@ -127,26 +121,23 @@ const createTripAdvancePayment = async (req, res, next) => {
     // 8. Check already successful payment
     // --------------------------------------------------
 
-    const existingSuccessfulPayment =
-      await PaymentSession.findOne({
-        referenceType: 'TRIP',
-        referenceId: trip._id.toString(),
-        purpose: 'DRIVER_ADVANCE',
-        provider: 'RAZORPAY',
-        status: 'SUCCESS'
-      }).sort({ createdAt: -1 })
+    const existingSuccessfulPayment = await PaymentSession.findOne({
+      referenceType: 'TRIP',
+      referenceId: trip._id.toString(),
+      purpose: 'DRIVER_ADVANCE',
+      provider: 'RAZORPAY',
+      status: 'SUCCESS'
+    }).sort({ createdAt: -1 })
 
     if (existingSuccessfulPayment) {
       return res.status(200).json({
         success: true,
-        message:
-          'Driver advance has already been paid',
+        message: 'Driver advance has already been paid',
 
         data: {
           alreadyPaid: true,
 
-          paymentSessionId:
-            existingSuccessfulPayment.publicId
+          paymentSessionId: existingSuccessfulPayment.publicId
         }
       })
     }
@@ -155,47 +146,35 @@ const createTripAdvancePayment = async (req, res, next) => {
     // 9. Check existing pending payment
     // --------------------------------------------------
 
-    const existingPendingPayment =
-      await PaymentSession.findOne({
-        referenceType: 'TRIP',
-        referenceId: trip._id.toString(),
-        purpose: 'DRIVER_ADVANCE',
-        provider: 'RAZORPAY',
-        status: {
-          $in: ['CREATED', 'PENDING']
-        }
-      }).sort({ createdAt: -1 })
+    const existingPendingPayment = await PaymentSession.findOne({
+      referenceType: 'TRIP',
+      referenceId: trip._id.toString(),
+      purpose: 'DRIVER_ADVANCE',
+      provider: 'RAZORPAY',
+      status: {
+        $in: ['CREATED', 'PENDING']
+      }
+    }).sort({ createdAt: -1 })
 
-    if (
-      existingPendingPayment &&
-      existingPendingPayment.providerOrderId
-    ) {
+    if (existingPendingPayment && existingPendingPayment.providerOrderId) {
       return res.status(200).json({
         success: true,
 
-        message:
-          'Existing Razorpay payment session found',
+        message: 'Existing Razorpay payment session found',
 
         data: {
           alreadyPaid: false,
 
-          paymentSessionId:
-            existingPendingPayment.publicId,
+          paymentSessionId: existingPendingPayment.publicId,
 
           razorpay: {
-            keyId:
-              gatewayConfig.keyId,
+            keyId: gatewayConfig.keyId,
 
-            orderId:
-              existingPendingPayment.providerOrderId,
+            orderId: existingPendingPayment.providerOrderId,
 
-            amount:
-              Math.round(
-                Number(existingPendingPayment.amount) * 100
-              ),
+            amount: Math.round(Number(existingPendingPayment.amount) * 100),
 
-            currency:
-              existingPendingPayment.currency || 'INR'
+            currency: existingPendingPayment.currency || 'INR'
           }
         }
       })
@@ -205,200 +184,140 @@ const createTripAdvancePayment = async (req, res, next) => {
     // 10. Resolve payer
     // --------------------------------------------------
 
-    const payer =
-      resolvePayerProfile({}, req.user)
+    const payer = resolvePayerProfile({}, req.user)
 
     // --------------------------------------------------
     // 11. Generate merchant transaction ID
     // --------------------------------------------------
 
-    const merchantTransactionId =
-      makeTransactionId('ADV')
+    const merchantTransactionId = makeTransactionId('ADV')
 
     // --------------------------------------------------
     // 12. Create PaymentSession
     // --------------------------------------------------
 
-    const payment =
-      await PaymentSession.create({
+    const payment = await PaymentSession.create({
+      referenceType: 'TRIP',
 
-        referenceType: 'TRIP',
+      referenceId: trip._id.toString(),
 
-        referenceId:
-          trip._id.toString(),
+      purpose: 'DRIVER_ADVANCE',
 
-        purpose:
-          'DRIVER_ADVANCE',
+      provider: 'RAZORPAY',
 
-        provider:
-          'RAZORPAY',
+      status: 'CREATED',
 
-        status:
-          'CREATED',
+      amount: Number(normalizedAmount),
 
-        amount:
-          Number(normalizedAmount),
+      currency: 'INR',
 
-        currency:
-          'INR',
+      merchantTransactionId,
 
-        merchantTransactionId,
+      payer: {
+        userId: payer.userId || trip.transporterId,
 
-        payer: {
-          userId:
-            payer.userId ||
-            trip.transporterId,
+        userType: payer.userType || 'TRANSPORTER',
 
-          userType:
-            payer.userType ||
-            'TRANSPORTER',
+        name: payer.name || null,
 
-          name:
-            payer.name || null,
+        email: payer.email || null,
 
-          email:
-            payer.email || null,
+        mobile: payer.mobile || null
+      },
 
-          mobile:
-            payer.mobile || null
-        },
+      metadata: {
+        tripId: trip._id.toString(),
 
-        metadata: {
+        tripNumber: trip.tripId || null,
 
-          tripId:
-            trip._id.toString(),
+        transporterId: trip.transporterId?.toString() || null,
 
-          tripNumber:
-            trip.tripId || null,
+        driverId: trip.driverId?.toString() || null,
 
-          transporterId:
-            trip.transporterId?.toString() || null,
+        purpose: 'DRIVER_ADVANCE',
 
-          driverId:
-            trip.driverId?.toString() || null,
+        payout: {
+          payeeId: trip.driverId.toString(),
 
-          purpose:
-            'DRIVER_ADVANCE',
+          payeeType: 'DRIVER',
 
-          payout: {
+          transferMode: 'IMPS',
 
-            payeeId:
-              trip.driverId.toString(),
+          currency: 'INR'
+        }
+      },
 
-            payeeType:
-              'DRIVER',
+      initiatedBy: {
+        userId: req.user?.id || null,
 
-            transferMode:
-              'IMPS',
+        userType: req.user?.userType || null
+      },
 
-            currency:
-              'INR'
-          }
-        },
-
-        initiatedBy: {
-
-          userId:
-            req.user?.id || null,
-
-          userType:
-            req.user?.userType || null
-        },
-
-        initiatedAt:
-          new Date()
-      })
+      initiatedAt: new Date()
+    })
 
     // --------------------------------------------------
     // 13. Create Razorpay Order
     // --------------------------------------------------
 
-    const paymentRequest =
-      await buildPaymentInitiationRequest({
+    const paymentRequest = await buildPaymentInitiationRequest({
+      provider: 'RAZORPAY',
 
-        provider:
-          'RAZORPAY',
+      merchantTransactionId,
 
-        merchantTransactionId,
+      amount: normalizedAmount,
 
-        amount:
-          normalizedAmount,
+      currency: 'INR',
 
-        currency:
-          'INR',
+      payer: {
+        userId: payer.userId || trip.transporterId,
 
-        payer: {
+        userType: payer.userType || 'TRANSPORTER',
 
-          userId:
-            payer.userId ||
-            trip.transporterId,
+        name: payer.name || null,
 
-          userType:
-            payer.userType ||
-            'TRANSPORTER',
+        email: payer.email || null,
 
-          name:
-            payer.name || null,
+        mobile: payer.mobile || null
+      },
 
-          email:
-            payer.email || null,
+      reference: {
+        referenceType: 'TRIP',
 
-          mobile:
-            payer.mobile || null
-        },
+        referenceId: trip._id.toString(),
 
-        reference: {
+        purpose: 'DRIVER_ADVANCE'
+      },
 
-          referenceType:
-            'TRIP',
+      paymentSessionId: payment._id,
 
-          referenceId:
-            trip._id.toString(),
+      successUrl: null,
 
-          purpose:
-            'DRIVER_ADVANCE'
-        },
+      failureUrl: null,
 
-        paymentSessionId:
-          payment._id,
-
-        successUrl:
-          null,
-
-        failureUrl:
-          null,
-
-        metadata:
-          payment.metadata
-      })
+      metadata: payment.metadata
+    })
 
     // --------------------------------------------------
     // 14. Extract Razorpay Order ID
     // --------------------------------------------------
 
     const razorpayOrderId =
-      paymentRequest.rawResponse?.id ||
-      paymentRequest.fields?.order_id ||
-      null
+      paymentRequest.rawResponse?.id || paymentRequest.fields?.order_id || null
 
     if (!razorpayOrderId) {
-      throw new Error(
-        'Razorpay order ID was not returned'
-      )
+      throw new Error('Razorpay order ID was not returned')
     }
 
     // --------------------------------------------------
     // 15. Save Razorpay Order
     // --------------------------------------------------
 
-    payment.providerOrderId =
-      razorpayOrderId
+    payment.providerOrderId = razorpayOrderId
 
-    payment.paymentRequest =
-      paymentRequest
+    payment.paymentRequest = paymentRequest
 
-    payment.status =
-      'PENDING'
+    payment.status = 'PENDING'
 
     await payment.save()
 
@@ -407,69 +326,45 @@ const createTripAdvancePayment = async (req, res, next) => {
     // --------------------------------------------------
 
     return res.status(200).json({
-
       success: true,
 
-      message:
-        'Driver advance payment session created successfully',
+      message: 'Driver advance payment session created successfully',
 
       data: {
-
-        paymentSessionId:
-          payment.publicId,
+        paymentSessionId: payment.publicId,
 
         trip: {
+          id: trip._id.toString(),
 
-          id:
-            trip._id.toString(),
+          tripId: trip.tripId || null,
 
-          tripId:
-            trip.tripId || null,
+          driverId: trip.driverId.toString(),
 
-          driverId:
-            trip.driverId.toString(),
-
-          advanceAmount:
-            Number(normalizedAmount)
+          advanceAmount: Number(normalizedAmount)
         },
 
         razorpay: {
+          keyId: gatewayConfig.keyId,
 
-          keyId:
-            gatewayConfig.keyId,
+          orderId: razorpayOrderId,
 
-          orderId:
-            razorpayOrderId,
+          amount: Math.round(Number(normalizedAmount) * 100),
 
-          amount:
-            Math.round(
-              Number(normalizedAmount) * 100
-            ),
-
-          currency:
-            'INR'
+          currency: 'INR'
         }
       }
     })
-
   } catch (error) {
     next(error)
   }
 }
 
-
-
-
-
 const verifyTripAdvancePayment = async (req, res, next) => {
   try {
     const { tripId } = req.params
 
-    const {
-      razorpay_payment_id,
-      razorpay_order_id,
-      razorpay_signature
-    } = req.body
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature } =
+      req.body
 
     // ---------------------------------------------
     // 1. Validate request
@@ -482,11 +377,7 @@ const verifyTripAdvancePayment = async (req, res, next) => {
       })
     }
 
-    if (
-      !razorpay_payment_id ||
-      !razorpay_order_id ||
-      !razorpay_signature
-    ) {
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
       return res.status(400).json({
         success: false,
         message:
@@ -511,22 +402,20 @@ const verifyTripAdvancePayment = async (req, res, next) => {
     // 3. Find our PaymentSession
     // ---------------------------------------------
 
-    const paymentSession =
-      await PaymentSession.findOne({
-        referenceType: 'TRIP',
-        referenceId: trip._id.toString(),
-        purpose: 'DRIVER_ADVANCE',
-        provider: 'RAZORPAY',
-        providerOrderId: razorpay_order_id
-      }).sort({
-        createdAt: -1
-      })
+    const paymentSession = await PaymentSession.findOne({
+      referenceType: 'TRIP',
+      referenceId: trip._id.toString(),
+      purpose: 'DRIVER_ADVANCE',
+      provider: 'RAZORPAY',
+      providerOrderId: razorpay_order_id
+    }).sort({
+      createdAt: -1
+    })
 
     if (!paymentSession) {
       return res.status(404).json({
         success: false,
-        message:
-          'Razorpay payment session not found'
+        message: 'Razorpay payment session not found'
       })
     }
 
@@ -537,17 +426,13 @@ const verifyTripAdvancePayment = async (req, res, next) => {
     if (paymentSession.status === 'SUCCESS') {
       return res.status(200).json({
         success: true,
-        message:
-          'Driver advance payment already verified',
+        message: 'Driver advance payment already verified',
         data: {
-          paymentSessionId:
-            paymentSession.publicId,
+          paymentSessionId: paymentSession.publicId,
 
-          status:
-            paymentSession.status,
+          status: paymentSession.status,
 
-          paymentId:
-            paymentSession.providerTransactionId
+          paymentId: paymentSession.providerTransactionId
         }
       })
     }
@@ -557,27 +442,22 @@ const verifyTripAdvancePayment = async (req, res, next) => {
     // Use order ID from OUR database
     // ---------------------------------------------
 
-    const orderId =
-      paymentSession.providerOrderId
+    const orderId = paymentSession.providerOrderId
 
     // ---------------------------------------------
     // 6. Verify Razorpay signature
     // ---------------------------------------------
 
-    const isValid =
-      verifyRazorpayPaymentSignatureNew({
-        orderId,
-        paymentId:
-          razorpay_payment_id,
-        signature:
-          razorpay_signature
-      })
+    const isValid = verifyRazorpayPaymentSignatureNew({
+      orderId,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature
+    })
 
     if (!isValid) {
       paymentSession.status = 'FAILED'
 
-      paymentSession.failureReason =
-        'RAZORPAY_SIGNATURE_VERIFICATION_FAILED'
+      paymentSession.failureReason = 'RAZORPAY_SIGNATURE_VERIFICATION_FAILED'
 
       paymentSession.failureMessage =
         'Razorpay payment signature verification failed'
@@ -586,8 +466,7 @@ const verifyTripAdvancePayment = async (req, res, next) => {
 
       return res.status(400).json({
         success: false,
-        message:
-          'Razorpay payment verification failed'
+        message: 'Razorpay payment verification failed'
       })
     }
 
@@ -595,14 +474,11 @@ const verifyTripAdvancePayment = async (req, res, next) => {
     // 7. Save Razorpay payment information
     // ---------------------------------------------
 
-    paymentSession.providerTransactionId =
-      razorpay_payment_id
+    paymentSession.providerTransactionId = razorpay_payment_id
 
-    paymentSession.providerOrderId =
-      orderId
+    paymentSession.providerOrderId = orderId
 
-    paymentSession.providerSignature =
-      razorpay_signature
+    paymentSession.providerSignature = razorpay_signature
 
     // ---------------------------------------------
     // 8. Mark PayIN successful
@@ -610,8 +486,7 @@ const verifyTripAdvancePayment = async (req, res, next) => {
 
     paymentSession.status = 'SUCCESS'
 
-    paymentSession.completedAt =
-      new Date()
+    paymentSession.completedAt = new Date()
 
     await paymentSession.save()
 
@@ -622,43 +497,348 @@ const verifyTripAdvancePayment = async (req, res, next) => {
     return res.status(200).json({
       success: true,
 
-      message:
-        'Driver advance payment verified successfully',
+      message: 'Driver advance payment verified successfully',
 
       data: {
-        paymentSessionId:
-          paymentSession.publicId,
+        paymentSessionId: paymentSession.publicId,
 
-        tripId:
-          trip._id.toString(),
+        tripId: trip._id.toString(),
 
-        amount:
-          paymentSession.amount,
+        amount: paymentSession.amount,
 
-        currency:
-          paymentSession.currency,
+        currency: paymentSession.currency,
 
-        paymentId:
-          razorpay_payment_id,
+        paymentId: razorpay_payment_id,
 
         orderId,
 
-        paymentStatus:
-          'SUCCESS',
+        paymentStatus: 'SUCCESS',
 
-        payoutStatus:
-          'PENDING'
+        payoutStatus: 'PENDING'
       }
     })
-
   } catch (error) {
     next(error)
   }
 }
 
+const getTransporterTripAdvancePayments = async (req, res, next) => {
+  try {
+    const transporterId = String(req.user?.id || '')
 
+    if (!transporterId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      })
+    }
+
+    // --------------------------------------------------
+    // Pagination
+    // --------------------------------------------------
+
+    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1)
+
+    const limit = Math.min(
+      Math.max(Number.parseInt(req.query.limit, 10) || 20, 1),
+      100
+    )
+
+    const skip = (page - 1) * limit
+
+    // --------------------------------------------------
+    // Optional filters
+    // --------------------------------------------------
+
+    const { paymentStatus, payoutStatus, advanceStatus } = req.query
+
+    // --------------------------------------------------
+    // 1. Get transporter trips
+    // --------------------------------------------------
+
+    const tripQuery = {
+      transporterId: transporterId
+    }
+
+    const [trips, total] = await Promise.all([
+      Trip.find(tripQuery)
+        .select(
+          [
+            '_id',
+            'tripId',
+            'transporterId',
+            'driverId',
+            'advanceAmount',
+            'status',
+            'tripType',
+            'pickupLocation',
+            'dropLocation',
+            'scheduledAt',
+            'createdAt',
+            'updatedAt'
+          ].join(' ')
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+
+      Trip.countDocuments(tripQuery)
+    ])
+
+    if (!trips.length) {
+      return res.status(200).json({
+        success: true,
+        message: 'Trip advance payment status fetched successfully',
+        data: {
+          trips: [],
+          pagination: {
+            page,
+            limit,
+            total: 0,
+            pages: 0
+          }
+        }
+      })
+    }
+
+    // --------------------------------------------------
+    // 2. Get driver IDs
+    // --------------------------------------------------
+
+    const driverIds = trips.map(trip => trip.driverId).filter(Boolean)
+
+    const drivers = await Driver.find({
+      _id: { $in: driverIds }
+    })
+      .select('_id name mobile status')
+      .lean()
+
+    const driverMap = new Map(
+      drivers.map(driver => [String(driver._id), driver])
+    )
+
+    // --------------------------------------------------
+    // 3. Get PaymentSessions
+    // --------------------------------------------------
+
+    const tripIds = trips.map(trip => String(trip._id))
+
+    const paymentSessions = await PaymentSession.find({
+      referenceType: 'TRIP',
+      referenceId: { $in: tripIds },
+      purpose: 'DRIVER_ADVANCE',
+      provider: 'RAZORPAY'
+    })
+      .sort({ createdAt: -1 })
+      .lean()
+
+    // --------------------------------------------------
+    // 4. Keep latest payment session per trip
+    // --------------------------------------------------
+
+    const paymentMap = new Map()
+
+    for (const payment of paymentSessions) {
+      const tripId = String(payment.referenceId)
+
+      if (!paymentMap.has(tripId)) {
+        paymentMap.set(tripId, payment)
+      }
+    }
+
+    // --------------------------------------------------
+    // 5. Get payouts
+    // --------------------------------------------------
+
+    const paymentIds = Array.from(paymentMap.values())
+      .map(payment => payment._id)
+      .filter(Boolean)
+
+    const payouts = paymentIds.length
+      ? await Payout.find({
+          paymentId: { $in: paymentIds },
+          provider: 'RAZORPAY'
+        })
+          .select(
+            [
+              '_id',
+              'paymentId',
+              'amount',
+              'currency',
+              'status',
+              'initiatedAt',
+              'startedAt',
+              'completedAt',
+              'lastWebhookAt',
+              'failure',
+              'razorpay.payoutId',
+              'razorpay.referenceId',
+              'razorpay.transferMode',
+              'razorpay.statusDetails'
+            ].join(' ')
+          )
+          .lean()
+      : []
+
+    // --------------------------------------------------
+    // 6. Map payout by PaymentSession
+    // --------------------------------------------------
+
+    const payoutMap = new Map()
+
+    for (const payout of payouts) {
+      const paymentId = String(payout.paymentId)
+
+      if (!payoutMap.has(paymentId)) {
+        payoutMap.set(paymentId, payout)
+      }
+    }
+
+    // --------------------------------------------------
+    // 7. Build response
+    // --------------------------------------------------
+
+    let result = trips.map(trip => {
+      const tripId = String(trip._id)
+
+      const payment = paymentMap.get(tripId) || null
+
+      const payout = payment ? payoutMap.get(String(payment._id)) || null : null
+
+      const paymentStatus = payment?.status || 'NOT_CREATED'
+
+      const payoutStatus = payout?.status || null
+
+      // ----------------------------------------------
+      // Calculate combined advance status
+      // ----------------------------------------------
+
+      let status = 'NOT_PAID'
+
+      if (!trip.advanceAmount || Number(trip.advanceAmount) <= 0) {
+        status = 'NO_ADVANCE'
+      } else if (!payment) {
+        status = 'NOT_PAID'
+      } else if (payment.status === 'CREATED' || payment.status === 'PENDING') {
+        status = 'PAYMENT_PENDING'
+      } else if (
+        payment.status === 'FAILED' ||
+        payment.status === 'CANCELLED'
+      ) {
+        status = 'PAYMENT_FAILED'
+      } else if (payment.status === 'SUCCESS') {
+        if (!payout) {
+          status = 'PAYOUT_PENDING'
+        } else if (payout.status === 'CREATED') {
+          status = 'PAYOUT_PENDING'
+        } else if (payout.status === 'PROCESSING') {
+          status = 'PAYOUT_PROCESSING'
+        } else if (payout.status === 'SUCCESS') {
+          status = 'PAID'
+        } else if (
+          payout.status === 'FAILED' ||
+          payout.status === 'CANCELLED'
+        ) {
+          status = 'PAYOUT_FAILED'
+        } else if (payout.status === 'RETRY_PENDING') {
+          status = 'PAYOUT_RETRY_PENDING'
+        }
+      }
+
+      const driver = trip.driverId
+        ? driverMap.get(String(trip.driverId)) || null
+        : null
+
+      return {
+        tripId: trip.tripId,
+        tripType: trip.tripType,
+        tripStatus: trip.status,
+
+        driver: driver
+          ? {
+              name: driver.name || null,
+              mobile: driver.mobile || null,
+            //   status: driver.status || null
+            }
+          : null,
+
+        advance: {
+          amount: Number(trip.advanceAmount || 0),
+        //   currency: payment?.currency || 'INR',
+
+          status,
+
+          payment: payment
+            ? {
+                status: payment.status,
+                paidAt: payment.completedAt || null
+              }
+            : {
+                status: 'NOT_CREATED',
+                paidAt: null
+              },
+
+          payout: payout
+            ? {
+                status: payout.status,
+                paidAt: payout.completedAt || null
+              }
+            : {
+                status: null,
+                paidAt: null
+              }
+        },
+
+        createdAt: trip.createdAt
+      }
+    })
+
+    // --------------------------------------------------
+    // 8. Optional filters
+    // --------------------------------------------------
+
+    if (paymentStatus) {
+      result = result.filter(
+        item =>
+          item.advance.paymentStatus === String(paymentStatus).toUpperCase()
+      )
+    }
+
+    if (payoutStatus) {
+      result = result.filter(
+        item => item.advance.payoutStatus === String(payoutStatus).toUpperCase()
+      )
+    }
+
+    if (advanceStatus) {
+      result = result.filter(
+        item => item.advance.status === String(advanceStatus).toUpperCase()
+      )
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Trip advance payment status fetched successfully',
+
+      data: {
+        trips: result,
+
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
 
 module.exports = {
   createTripAdvancePayment,
-  verifyTripAdvancePayment
+  verifyTripAdvancePayment,
+  getTransporterTripAdvancePayments
 }
