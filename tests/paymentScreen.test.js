@@ -926,7 +926,7 @@ const paymentTests = [
     }
   },
   {
-    name: 'Marketplace milestone 1 auto-creates a PayU payment request',
+    name: 'Marketplace milestone 1 auto-creates a Razorpay payment request',
     async run() {
       let created = false
       let broadcasted = false
@@ -975,10 +975,10 @@ const paymentTests = [
         amount: 7500,
         paymentRequest: {
           fields: {
-            txnid: 'PAYU-TRIP-1'
+            order_id: 'RZP-TRIP-1'
           },
-          actionUrl: 'https://test.payu.in/_payment',
-          method: 'POST',
+          actionUrl: 'https://api.razorpay.com/checkout',
+          method: 'GET',
           mode: 'sandbox'
         }
       }
@@ -1054,19 +1054,20 @@ const paymentTests = [
       assert.equal(res.statusCode, 200)
       assert.equal(created, true)
       assert.equal(broadcasted, true)
-      assert.equal(payment.paymentRequest.fields.txnid, 'PAYU-TRIP-1')
+      assert.equal(payment.paymentRequest.fields.order_id, 'RZP-TRIP-1')
     }
   },
   {
-    name: 'PayU webhook success triggers Cashfree payout',
+    name: 'Razorpay webhook success triggers Razorpay payout',
     async run() {
       let payoutCalled = false
 
       const paymentDoc = {
         _id: '507f1f77bcf86cd799439011',
-        provider: 'PAYU',
+        provider: 'RAZORPAY',
         status: 'PENDING',
-        merchantTransactionId: 'PAYU-ABC',
+        merchantTransactionId: 'RZP-ABC',
+        providerOrderId: 'order_123',
         payerTransporterId: 'buyer-1',
         amount: 8200,
         paymentResponse: {},
@@ -1095,9 +1096,13 @@ const paymentTests = [
           '../models/VehicleBooking': {
             findById: async () => bookingDoc
           },
-          '../services/payu.service': {
-            verifyPayuResponseHash: () => true,
-            normalizePayuStatus: () => 'SUCCESS'
+          '../services/paymentGateway.service': {
+            getGatewayPayloadMetadata: () => ({
+              providerTransactionId: 'pay_123',
+              providerOrderId: 'order_123',
+              status: 'SUCCESS'
+            }),
+            verifyGatewayWebhook: () => true
           },
           '../services/cashfreePayout.service': {
             createAutomaticPayoutForPayment: async () => {
@@ -1121,22 +1126,16 @@ const paymentTests = [
       const req = {
         query: {},
         body: {
-          status: 'success',
-          txnid: 'PAYU-ABC',
-          mihpayid: 'MIH-123',
-          udf1: '',
-          email: 'buyer@example.com',
-          firstname: 'Buyer A',
-          productinfo: 'Marketplace payment',
-          amount: '8200.00',
-          hash: 'ignored'
+          razorpay_order_id: 'order_123',
+          razorpay_payment_id: 'pay_123',
+          razorpay_signature: 'ignored'
         },
         headers: {},
         rawBody: ''
       }
       const res = createMockRes()
 
-      await controller.handlePayuWebhook(req, res, (error) => {
+      await controller.handleMarketplaceRazorpayWebhook(req, res, (error) => {
         throw error
       })
 

@@ -12,19 +12,15 @@ const {
   isMarketplaceBookingTrip
 } = require('../services/tripAccess.service')
 const {
-  isConfigured,
-  buildMarketplaceTripPaymentRequest,
-  verifyPayuResponseHash,
-  normalizePayuStatus,
-  makeTransactionId
-} = require('../services/payu.service')
+  getGatewayPayloadMetadata,
+  verifyGatewayWebhook,
+} = require('../services/paymentGateway.service')
 const {
   createAutomaticPayoutForPayment
 } = require('../services/cashfreePayout.service')
 const {
   createMarketplacePaymentRequestForTrip
 } = require('../services/marketplacePayment.service')
-const { payuSuccessUrl, payuFailureUrl } = require('../config/env')
 
 const toObjectIdString = value => {
   if (!value) return null
@@ -144,15 +140,8 @@ const assertMarketplacePayableTrip = async (tripId, user) => {
   }
 }
 
-const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
+const initiateMarketplaceTripRazorpayPayment = async (req, res, next) => {
   try {
-    if (!isConfigured()) {
-      return res.status(500).json({
-        success: false,
-        message: 'PayU is not configured'
-      })
-    }
-
     const { tripId } = req.params
     const { payerName, payerEmail, payerPhone } = req.body || {}
     const context = await assertMarketplacePayableTrip(tripId, req.user)
@@ -177,9 +166,7 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
         name: payerName,
         email: payerEmail,
         mobile: payerPhone
-      },
-      successUrl: payuSuccessUrl,
-      failureUrl: payuFailureUrl
+      }
     })
 
     if (payment.status === 'SUCCESS') {
@@ -193,16 +180,16 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
     }
 
     const requestFields = payment.paymentRequest?.fields || {}
-    if (!requestFields.txnid || !payment.paymentRequest?.actionUrl) {
+    if (!requestFields.order_id || !payment.paymentRequest?.actionUrl) {
       return res.status(500).json({
         success: false,
-        message: 'Unable to create PayU checkout request'
+        message: 'Unable to create Razorpay checkout request'
       })
     }
 
     return res.status(200).json({
       success: true,
-      message: 'PayU payment request created successfully',
+      message: 'Razorpay payment request created successfully',
       data: {
         payment: {
           id: getPaymentPublicId(payment),
@@ -214,13 +201,14 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
           amount: payment.amount,
           currency: payment.currency,
           merchantTransactionId: payment.merchantTransactionId,
+          providerOrderId: payment.providerOrderId || requestFields.order_id || null,
           actionUrl: payment.paymentRequest.actionUrl,
           method: payment.paymentRequest.method,
           fields: payment.paymentRequest.fields
         },
         gateway: {
-          provider: 'PAYU',
-          name: 'PayU',
+          provider: 'RAZORPAY',
+          name: 'Razorpay',
           mode: payment.paymentRequest.mode,
           actionUrl: payment.paymentRequest.actionUrl,
           method: payment.paymentRequest.method
@@ -232,7 +220,7 @@ const initiateMarketplaceTripPayuPayment = async (req, res, next) => {
   }
 }
 
-const handlePayuWebhook = async (req, res, next) => {
+const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
   const requestId = crypto.randomUUID()
 
   try {
@@ -240,22 +228,27 @@ const handlePayuWebhook = async (req, res, next) => {
       ...(req.query || {}),
       ...(req.body || {})
     }
-    const merchantTransactionId = String(
-      body.txnid ||
+    const orderId = String(
+      body.razorpay_order_id ||
+        body.order_id ||
+        body.orderId ||
+        body.txnid ||
         body.merchantTransactionId ||
         body.merchant_transaction_id ||
         ''
     ).trim()
-    const paymentId = String(body.udf1 || '').trim()
+    const paymentId = String(body.udf1 || body.paymentSessionId || '').trim()
 
-    logger.info(`[${requestId}] PayU webhook received`, {
-      merchantTransactionId,
+    logger.info(`[${requestId}] Marketplace Razorpay webhook received`, {
+      orderId,
       paymentId,
       bodyKeys: Object.keys(body || {})
     })
 
-    if (!merchantTransactionId && !paymentId) {
-      logger.warn(`[${requestId}] PayU webhook missing transaction reference`)
+    if (!orderId && !paymentId) {
+      logger.warn(
+        `[${requestId}] Marketplace Razorpay webhook missing transaction reference`
+      )
       return res.status(400).json({
         success: false,
         message: 'Transaction reference is required'
@@ -266,13 +259,18 @@ const handlePayuWebhook = async (req, res, next) => {
     if (paymentId && mongoose.Types.ObjectId.isValid(paymentId)) {
       payment = await MarketplacePayment.findById(paymentId)
     }
-    if (!payment && merchantTransactionId) {
-      payment = await MarketplacePayment.findOne({ merchantTransactionId })
+    if (!payment && orderId) {
+      payment = await MarketplacePayment.findOne({ providerOrderId: orderId })
+    }
+    if (!payment && body.txnid) {
+      payment = await MarketplacePayment.findOne({
+        merchantTransactionId: String(body.txnid).trim()
+      })
     }
 
     if (!payment) {
       logger.warn(`[${requestId}] Marketplace payment record not found`, {
-        merchantTransactionId,
+        orderId,
         paymentId
       })
       return res.status(404).json({
@@ -281,8 +279,18 @@ const handlePayuWebhook = async (req, res, next) => {
       })
     }
 
+    const gatewayMetadata = getGatewayPayloadMetadata('RAZORPAY', body)
+    const signatureOk = verifyGatewayWebhook({
+      provider: 'RAZORPAY',
+      body,
+      headers: req.headers || {},
+      rawBody: req.rawBody || ''
+    })
     const incomingProviderTxnId = String(
-      body.mihpayid || body.payuMoneyId || body.bank_ref_num || ''
+      gatewayMetadata.providerTransactionId ||
+        body.razorpay_payment_id ||
+        body.payment_id ||
+        ''
     ).trim()
 
     logger.info(`[${requestId}] Marketplace payment found`, {
@@ -297,49 +305,51 @@ const handlePayuWebhook = async (req, res, next) => {
         payment.providerTransactionId === incomingProviderTxnId)
     ) {
       logger.info(
-        `[${requestId}] Duplicate PayU success notification ignored`,
+        `[${requestId}] Duplicate Razorpay success notification ignored`,
         {
           paymentId: payment._id.toString()
         }
       )
       return res.status(200).json({
         success: true,
-        message: 'PayU webhook processed successfully'
+        message: 'Marketplace Razorpay webhook processed successfully'
       })
     }
 
-    const responseStatus = normalizePayuStatus(body.status)
-    const hashOk = verifyPayuResponseHash(body)
+    const responseStatus =
+      gatewayMetadata.status === 'PENDING' &&
+      signatureOk &&
+      (body.razorpay_payment_id || incomingProviderTxnId)
+        ? 'SUCCESS'
+        : gatewayMetadata.status
 
-    logger.info(`[${requestId}] PayU webhook verification`, {
-      hashOk,
+    logger.info(`[${requestId}] Marketplace Razorpay webhook verification`, {
+      signatureOk,
       status: responseStatus
     })
 
-    if (!hashOk) {
+    if (!signatureOk) {
       payment.status = 'FAILED'
-      payment.failureReason = 'Invalid PayU response hash'
+      payment.failureReason = 'Invalid Razorpay response signature'
       payment.paymentResponse = { ...body, verified: false }
       payment.failedAt = new Date()
       await payment.save()
 
-      logger.error(`[${requestId}] PayU webhook failed verification`, {
+      logger.error(`[${requestId}] Marketplace Razorpay webhook failed verification`, {
         paymentId: payment._id.toString()
       })
 
       return res.status(400).json({
         success: false,
-        message: 'Invalid PayU response hash'
+        message: 'Invalid Razorpay response signature'
       })
     }
 
     const previousStatus = payment.status
 
     payment.paymentResponse = { ...body, verified: true }
-    payment.providerTransactionId =
-      incomingProviderTxnId || payment.providerTransactionId
-    payment.providerOrderId =
-      body.bank_ref_num || body.pgTransactionId || payment.providerOrderId
+    payment.providerTransactionId = incomingProviderTxnId || payment.providerTransactionId
+    payment.providerOrderId = gatewayMetadata.providerOrderId || payment.providerOrderId
 
     if (responseStatus === 'SUCCESS') {
       payment.status = 'SUCCESS'
@@ -412,14 +422,14 @@ const handlePayuWebhook = async (req, res, next) => {
           }
           await payment.save()
 
-          logger.info(`[${requestId}] Cashfree payout initiated`, {
+          logger.info(`[${requestId}] Razorpay payout initiated`, {
             paymentId: payment._id.toString(),
             payoutId: payout._id?.toString(),
             payoutStatus: payout.status
           })
         }
       } catch (payoutError) {
-        logger.error(`[${requestId}] Cashfree payout initiation failed`, {
+        logger.error(`[${requestId}] Razorpay payout initiation failed`, {
           paymentId: payment._id.toString(),
           message: payoutError.message,
           stack: payoutError.stack
@@ -454,10 +464,10 @@ const handlePayuWebhook = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: 'PayU webhook processed successfully'
+      message: 'Marketplace Razorpay webhook processed successfully'
     })
   } catch (error) {
-    logger.error(`[${crypto.randomUUID()}] PayU webhook error`, {
+    logger.error(`[${crypto.randomUUID()}] Marketplace Razorpay webhook error`, {
       message: error.message,
       stack: error.stack
     })
@@ -542,13 +552,16 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
           marketplaceTrip: isMarketplaceBookingTrip(trip),
           tripStarted: trip.status === 'ACTIVE',
           milestoneOneCompleted,
+          paymentStatus: latestPayment?.status || booking?.paymentStatus || 'PENDING',
           canInitiatePayment:
             isMarketplaceBookingTrip(trip) &&
             trip.status === 'ACTIVE' &&
             milestoneOneCompleted &&
             booking &&
             booking.status === 'CONFIRMED' &&
-            Number(booking.agreedPrice) > 0
+            Number(booking.agreedPrice) > 0 &&
+            (latestPayment?.status || booking?.paymentStatus || 'PENDING') !==
+              'SUCCESS'
         }
       }
     })
@@ -558,7 +571,7 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
 }
 
 module.exports = {
-  initiateMarketplaceTripPayuPayment,
-  handlePayuWebhook,
+  initiateMarketplaceTripRazorpayPayment,
+  handleMarketplaceRazorpayWebhook,
   getMarketplaceTripPaymentStatus
 }

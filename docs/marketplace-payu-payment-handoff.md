@@ -1,6 +1,6 @@
-# Marketplace Trip PayU Payment Handoff
+# Marketplace Trip Razorpay Payment Handoff
 
-This document describes the end-to-end PayU PayIN flow for marketplace trips only, from payment eligibility to UI-facing status updates.
+This document describes the end-to-end Razorpay pay-in flow for marketplace trips only, from payment eligibility to UI-facing status updates.
 
 ## Scope
 
@@ -20,14 +20,14 @@ This document describes the end-to-end PayU PayIN flow for marketplace trips onl
 3. The trip starts.
 4. Driver completes milestone 1.
 5. Backend marks the trip as payment-eligible and emits a real-time event.
-6. Buyer transporter initiates PayU PayIN.
-7. PayU callback/webhook updates payment status.
+6. Buyer transporter initiates Razorpay pay-in.
+7. Razorpay callback/webhook updates payment status.
 8. Trip and booking payment status are updated for UI consumption.
 
 ## New Backend Components
 
 - `MarketplacePayment` model
-- PayU signing and verification service
+- Razorpay signing and verification service
 - Marketplace payment controller and routes
 - Marketplace payment snapshot service
 - Marketplace payment ready notification helper
@@ -58,9 +58,9 @@ This document describes the end-to-end PayU PayIN flow for marketplace trips onl
 
 ## Routes
 
-### 1. Initiate PayU PayIN
+### 1. Initiate Razorpay PayIN
 
-`POST /api/marketplace-payments/trips/:tripId/payu/initiate`
+`POST /api/marketplace-payments/trips/:tripId/razorpay/initiate`
 
 Authentication:
 
@@ -90,14 +90,14 @@ Rules:
 
 Success response includes:
 
-- PayU checkout URL
-- PayU form fields
+- Razorpay checkout URL
+- Razorpay form fields
 - merchant transaction id
 - payment status
 
 ### 2. Payment Status
 
-`GET /api/marketplace-payments/trips/:tripId/payu/status`
+`GET /api/marketplace-payments/trips/:tripId/razorpay/status`
 
 Authentication:
 
@@ -116,11 +116,11 @@ Response includes:
 - latest marketplace payment record
 - eligibility flags
 
-### 3. PayU Webhook / Callback
+### 3. Razorpay Webhook / Callback
 
-`POST /api/marketplace-payments/payu/webhook`
+`POST /api/marketplace-payments/razorpay/webhook`
 
-`GET /api/marketplace-payments/payu/webhook`
+`GET /api/marketplace-payments/razorpay/webhook`
 
 Authentication:
 
@@ -128,8 +128,8 @@ Authentication:
 
 Purpose:
 
-- Receives PayU callback or redirect payload
-- Verifies PayU response hash
+- Receives Razorpay callback or redirect payload
+- Verifies Razorpay response signature
 - Updates `MarketplacePayment`
 - Updates `VehicleBooking.paymentStatus`
 
@@ -270,7 +270,7 @@ Recommended UI behavior:
 - Show a Pay Now CTA when the socket event `marketplace:payment:ready` arrives.
 - Re-fetch trip details or payment status after redirect/callback completion.
 
-## PayU Request Notes
+## Razorpay Request Notes
 
 When initiating payment, backend returns:
 
@@ -278,9 +278,9 @@ When initiating payment, backend returns:
 - `method`
 - `fields`
 
-The frontend should render a standard PayU form POST using those fields.
+The frontend should render a standard Razorpay checkout using those fields.
 
-Important fields returned in the PayU payload:
+Important fields returned in the Razorpay payload:
 
 - `key`
 - `txnid`
@@ -313,7 +313,7 @@ Booking payment status values used by this flow:
 
 ## Environment Variables
 
-Set these values for PayU:
+Set these values for Razorpay:
 
 - `PAYU_MODE`
 - `PAYU_KEY`
@@ -329,7 +329,7 @@ Set these values for PayU:
 ## Implementation Files
 
 - [`src/models/MarketplacePayment.js`](../src/models/MarketplacePayment.js)
-- [`src/services/payu.service.js`](../src/services/payu.service.js)
+- [`src/services/paymentGateway.service.js`](../src/services/paymentGateway.service.js)
 - [`src/services/marketplacePayment.service.js`](../src/services/marketplacePayment.service.js)
 - [`src/utils/marketplacePaymentNotification.js`](../src/utils/marketplacePaymentNotification.js)
 - [`src/controllers/marketplacePayment.controller.js`](../src/controllers/marketplacePayment.controller.js)
@@ -343,11 +343,11 @@ Set these values for PayU:
 1. Open trip details with `GET /api/trips/:id`.
 2. Read `marketplacePayment.eligibility`.
 3. If `canInitiatePayment` is true, show the Pay Now button.
-4. On click, call `POST /api/marketplace-payments/trips/:tripId/payu/initiate`.
-5. Render the PayU form using the returned `actionUrl` and `fields`.
-6. After PayU redirects back or the webhook completes, refresh:
+4. On click, call `POST /api/marketplace-payments/trips/:tripId/razorpay/initiate`.
+5. Render the Razorpay checkout using the returned `actionUrl` and `fields`.
+6. After Razorpay redirects back or the webhook completes, refresh:
    - `GET /api/trips/:id`
-   - `GET /api/marketplace-payments/trips/:tripId/payu/status`
+   - `GET /api/marketplace-payments/trips/:tripId/razorpay/status`
 7. Listen for `marketplace:payment:ready` to refresh the UI immediately when milestone 1 completes.
 
 ## Notes

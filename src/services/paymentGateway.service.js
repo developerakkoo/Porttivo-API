@@ -155,7 +155,8 @@ const buildRazorpayOrderPayload = ({
   currency = DEFAULT_CURRENCY,
   payer,
   reference,
-  paymentSessionId
+  paymentSessionId,
+  callbackUrl
 }) => {
   if (!razorpayKeyId || !razorpayKeySecret || !razorpayApiBaseUrl) {
     throw new Error('Razorpay is not configured')
@@ -683,6 +684,7 @@ const buildPaymentInitiationRequest = async ({
   paymentSessionId,
   successUrl,
   failureUrl,
+  callbackUrl,
   metadata = {},
   fetchImpl = global.fetch
 }) => {
@@ -709,7 +711,8 @@ const buildPaymentInitiationRequest = async ({
       amount,
       payer,
       reference,
-      paymentSessionId
+      paymentSessionId,
+      callbackUrl
     })
 
     const orderResponse = await createRazorpayOrder(orderPayload.requestBody, fetchImpl)
@@ -740,7 +743,7 @@ const buildPaymentInitiationRequest = async ({
         },
         theme: orderPayload.checkout.theme,
         readonly: orderPayload.checkout.readonly,
-        callback_url: razorpayWebhookUrl,
+        callback_url: callbackUrl || razorpayWebhookUrl,
         redirect: false
       },
       rawResponse: orderResponse

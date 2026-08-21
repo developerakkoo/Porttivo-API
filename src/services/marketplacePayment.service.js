@@ -4,7 +4,11 @@ const VehicleBooking = require('../models/VehicleBooking')
 const MarketplacePayment = require('../models/MarketplacePayment')
 const logger = require('../utils/logger')
 const { isMarketplaceBookingTrip } = require('./tripAccess.service')
-const { buildMarketplaceTripPaymentRequest, makeTransactionId } = require('../services/payu.service')
+const {
+  buildPaymentInitiationRequest,
+  makeTransactionId
+} = require('../services/paymentGateway.service')
+const { marketplaceRazorpayWebhookUrl } = require('../config/env')
 
 const toObjectIdString = (value) => {
   if (!value) return null
@@ -50,8 +54,7 @@ const createMarketplacePaymentRequestForTrip = async ({
   booking,
   initiatedBy = {},
   payerOverrides = {},
-  successUrl,
-  failureUrl
+  fetchImpl = global.fetch
 }) => {
   if (!trip || !booking) {
     throw new Error('Trip and booking are required to build a marketplace payment request')
@@ -64,7 +67,7 @@ const createMarketplacePaymentRequestForTrip = async ({
 
   const buyer = normalizeMarketplaceBuyer(booking, payerOverrides)
   if (!buyer.email) {
-    throw new Error('Buyer email is required to initiate PayU payment')
+    throw new Error('Buyer email is required to initiate Razorpay payment')
   }
 
   logger.info('[MARKETPLACE_PAYMENT] Preparing payment request', {
@@ -111,7 +114,7 @@ const createMarketplacePaymentRequestForTrip = async ({
         bookingId: booking._id,
         payerTransporterId: toObjectIdString(booking.buyerId),
         beneficiaryTransporterId: toObjectIdString(booking.sellerId),
-        provider: 'PAYU',
+        provider: 'RAZORPAY',
         status: 'CREATED',
         amount: finalAmount,
         currency: 'INR',
@@ -127,16 +130,25 @@ const createMarketplacePaymentRequestForTrip = async ({
         initiatedAt: new Date()
       })
 
-    payment.paymentRequest = buildMarketplaceTripPaymentRequest({
+    payment.paymentRequest = await buildPaymentInitiationRequest({
+      provider: 'RAZORPAY',
       merchantTransactionId,
       amount: finalAmount,
       buyer,
-      trip,
-      booking,
-      paymentId: payment._id,
-      successUrl,
-      failureUrl
+      reference: {
+        referenceType: 'BOOKING',
+        referenceId: toObjectIdString(booking._id),
+        purpose: `Marketplace trip ${trip.tripId || trip._id}`
+      },
+      paymentSessionId: payment._id,
+      callbackUrl: marketplaceRazorpayWebhookUrl,
+      fetchImpl
     })
+    payment.providerOrderId =
+      payment.paymentRequest?.rawResponse?.id ||
+      payment.paymentRequest?.fields?.order_id ||
+      payment.providerOrderId ||
+      null
     payment.paymentGatewayUrl = payment.paymentRequest.actionUrl
     payment.status = 'PENDING'
     payment.amount = finalAmount
@@ -161,7 +173,7 @@ const createMarketplacePaymentRequestForTrip = async ({
       tripId: trip._id?.toString(),
       bookingId: booking._id?.toString(),
       amount: payment.amount,
-      txnid: payment.paymentRequest?.fields?.txnid
+      orderId: payment.paymentRequest?.fields?.order_id
     })
 
     return payment

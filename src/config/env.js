@@ -63,13 +63,13 @@ module.exports = {
       : 'https://test.payu.in/_payment'),
   payuSuccessUrl:
     process.env.PAYU_SUCCESS_URL ||
-    buildApiUrl('/api/marketplace-payments/payu/webhook'),
+    buildApiUrl('/api/payments/payu/webhook'),
   payuFailureUrl:
     process.env.PAYU_FAILURE_URL ||
-    buildApiUrl('/api/marketplace-payments/payu/webhook'),
+    buildApiUrl('/api/payments/payu/webhook'),
   payuWebhookUrl:
     process.env.PAYU_WEBHOOK_URL ||
-    buildApiUrl('/api/marketplace-payments/payu/webhook'),
+    buildApiUrl('/api/payments/payu/webhook'),
   payuPaymentLinksUrl: process.env.PAYU_PAYMENT_LINKS_URL || '',
   paymentScreenPayuSuccessUrl:
     process.env.PAYMENT_SCREEN_PAYU_SUCCESS_URL ||
@@ -139,6 +139,9 @@ module.exports = {
   razorpayWebhookUrl:
     process.env.RAZORPAY_WEBHOOK_URL ||
     buildApiUrl('/api/payments/razorpay/webhook'),
+  marketplaceRazorpayWebhookUrl:
+    process.env.MARKETPLACE_RAZORPAY_WEBHOOK_URL ||
+    buildApiUrl('/api/marketplace-payments/razorpay/webhook'),
   razorpayPayoutMode: process.env.RAZORPAY_PAYOUT_MODE || process.env.RAZORPAY_MODE || 'production',
   razorpayPayoutKeyId:
     process.env.RAZORPAY_PAYOUT_KEY_ID || process.env.RAZORPAY_KEY_ID || 'rzp_live_TLF84Z0KLAXg6s',

@@ -63,19 +63,19 @@ Notes:
 - Use `milestoneNumber` = `1`.
 - If the driver uploads milestone photos, the route can accept multipart uploads, but for basic flow only latitude/longitude is required.
 
-### 4.2 Initiate PayU Payment (Booking Buyer)
+### 4.2 Initiate Razorpay Payment (Booking Buyer)
 
 Endpoint:
 
 ```
-POST /api/marketplace-payments/trips/:tripId/payu/initiate
+POST /api/marketplace-payments/trips/:tripId/razorpay/initiate
 ```
 
 Description:
 
 - Buyer transporter calls this after milestone 1 completion.
 - Creates or returns the latest pending `MarketplacePayment` for the trip.
-- Returns PayU checkout request data.
+- Returns Razorpay checkout request data.
 
 Request body example:
 
@@ -92,7 +92,7 @@ Success response example:
 ```json
 {
   "success": true,
-  "message": "PayU payment request created successfully",
+  "message": "Razorpay payment request created successfully",
   "data": {
     "payment": {
       "id": "64d1f2c6d00bf23a6e0f8d9e",
@@ -103,27 +103,32 @@ Success response example:
       "status": "PENDING",
       "amount": 12500,
       "currency": "INR",
-      "merchantTransactionId": "PAYU-TRIP-123",
-      "actionUrl": "https://test.payu.in/_payment",
-      "method": "POST",
+      "merchantTransactionId": "RZP-TRIP-123",
+      "providerOrderId": "order_123",
+      "actionUrl": "https://checkout.razorpay.com/v1/checkout.js",
+      "method": "GET",
       "fields": {
-        "txnid": "PAYU-TRIP-123",
-        "amount": "12500",
-        "productinfo": "Marketplace payment",
-        "firstname": "Buyer Transporter",
-        "email": "buyer@example.com",
-        "phone": "9999999999",
-        "surl": "https://your-api.example.com/api/marketplace-payments/payu/webhook",
-        "furl": "https://your-api.example.com/api/marketplace-payments/payu/webhook",
-        "hash": "..."
+        "key": "rzp_live_...",
+        "order_id": "order_123",
+        "amount": 1250000,
+        "currency": "INR",
+        "name": "Buyer Transporter",
+        "description": "Marketplace trip TRIP-ABC123",
+        "prefill": {
+          "name": "Buyer Transporter",
+          "email": "buyer@example.com",
+          "contact": "9999999999"
+        },
+        "callback_url": "https://your-api.example.com/api/marketplace-payments/razorpay/webhook",
+        "redirect": false
       }
     },
     "gateway": {
-      "provider": "PAYU",
-      "name": "PayU",
+      "provider": "RAZORPAY",
+      "name": "Razorpay",
       "mode": "sandbox",
-      "actionUrl": "https://test.payu.in/_payment",
-      "method": "POST"
+      "actionUrl": "https://checkout.razorpay.com/v1/checkout.js",
+      "method": "GET"
     }
   }
 }
@@ -134,7 +139,7 @@ Success response example:
 Endpoint:
 
 ```
-GET /api/marketplace-payments/trips/:tripId/payu/status
+GET /api/marketplace-payments/trips/:tripId/razorpay/status
 ```
 
 Description:
@@ -182,36 +187,30 @@ Response structure:
 }
 ```
 
-## 5. PayU Webhook / Callback
+## 5. Razorpay Webhook / Callback
 
 Endpoint:
 
 ```
-POST /api/marketplace-payments/payu/webhook
-GET /api/marketplace-payments/payu/webhook
+POST /api/marketplace-payments/razorpay/webhook
+GET /api/marketplace-payments/razorpay/webhook
 ```
 
 Description:
 
-- Receives PayU callback or redirect after payment.
-- Verifies PayU hash.
+- Receives Razorpay callback or redirect after payment.
+- Verifies Razorpay signature.
 - Updates `MarketplacePayment` status.
 - Updates `VehicleBooking.paymentStatus`.
 - Triggers automatic Cashfree payout on first successful payment.
 
-Example PayU request body:
+Example Razorpay request body:
 
 ```json
 {
-  "status": "success",
-  "txnid": "PAYU-TRIP-123",
-  "mihpayid": "MIH-123",
-  "udf1": "64d1f2c6d00bf23a6e0f8d9e",
-  "email": "buyer@example.com",
-  "firstname": "Buyer Transporter",
-  "productinfo": "Marketplace payment",
-  "amount": "12500.00",
-  "hash": "..."
+  "razorpay_order_id": "order_123",
+  "razorpay_payment_id": "pay_123",
+  "razorpay_signature": "..."
 }
 ```
 
@@ -220,14 +219,14 @@ Response example:
 ```json
 {
   "success": true,
-  "message": "PayU webhook processed successfully"
+  "message": "Marketplace Razorpay webhook processed successfully"
 }
 ```
 
 Notes:
 
 - `udf1` is used to store the marketplace payment ID when available.
-- The backend ignores duplicate PayU success notifications if the payment is already marked `SUCCESS`.
+- The backend ignores duplicate Razorpay success notifications if the payment is already marked `SUCCESS`.
 
 ## 6. Expected Marketplace Trip Data Flow
 
@@ -241,9 +240,9 @@ Notes:
 
 1. Driver starts trip and completes milestone 1.
 2. Backend creates marketplace payment request and broadcasts readiness.
-3. Buyer uses `POST /api/marketplace-payments/trips/:tripId/payu/initiate` to get PayU checkout details.
-4. Buyer submits the PayU form to PayU.
-5. PayU calls back to `/api/marketplace-payments/payu/webhook`.
+3. Buyer uses `POST /api/marketplace-payments/trips/:tripId/razorpay/initiate` to get Razorpay checkout details.
+4. Buyer completes payment in Razorpay checkout.
+5. Razorpay calls back to `/api/marketplace-payments/razorpay/webhook`.
 6. If payment is `SUCCESS`:
    - `MarketplacePayment.status` becomes `SUCCESS`
    - `VehicleBooking.paymentStatus` becomes `COMPLETED`
@@ -252,16 +251,16 @@ Notes:
 
 ### 6.3 Post-payment
 
-- The UI should poll or refresh `/api/marketplace-payments/trips/:tripId/payu/status` to display payment completion.
+- The UI should poll or refresh `/api/marketplace-payments/trips/:tripId/razorpay/status` to display payment completion.
 - The buyer transporter sees `canInitiatePayment: false` after success.
 - The booking payment status moves from `HOLD`/`PENDING` to `COMPLETED`.
 
 ## 7. Postman Test Cases
 
 1. Complete milestone 1 for a marketplace trip.
-2. Verify payment readiness by calling `GET /api/marketplace-payments/trips/:tripId/payu/status`.
-3. Initiate PayU payment with `POST /api/marketplace-payments/trips/:tripId/payu/initiate`.
-4. Simulate PayU webhook with `POST /api/marketplace-payments/payu/webhook`.
+2. Verify payment readiness by calling `GET /api/marketplace-payments/trips/:tripId/razorpay/status`.
+3. Initiate Razorpay payment with `POST /api/marketplace-payments/trips/:tripId/razorpay/initiate`.
+4. Simulate Razorpay webhook with `POST /api/marketplace-payments/razorpay/webhook`.
 5. Confirm `MarketplacePayment.status` is `SUCCESS` and `booking.paymentStatus` becomes `COMPLETED`.
 
 

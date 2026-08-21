@@ -36,8 +36,8 @@ const marketplacePaymentSchema = new mongoose.Schema(
     },
     provider: {
       type: String,
-      enum: ['PAYU'],
-      default: 'PAYU',
+      enum: ['RAZORPAY'],
+      default: 'RAZORPAY',
       index: true
     },
     status: {
