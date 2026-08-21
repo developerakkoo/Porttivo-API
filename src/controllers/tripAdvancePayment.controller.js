@@ -522,6 +522,321 @@ const verifyTripAdvancePayment = async (req, res, next) => {
   }
 }
 
+// const getTransporterTripAdvancePayments = async (req, res, next) => {
+//   try {
+//     const transporterId = String(req.user?.id || '')
+
+//     if (!transporterId) {
+//       return res.status(401).json({
+//         success: false,
+//         message: 'Authentication required'
+//       })
+//     }
+
+//     // --------------------------------------------------
+//     // Pagination
+//     // --------------------------------------------------
+
+//     const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1)
+
+//     const limit = Math.min(
+//       Math.max(Number.parseInt(req.query.limit, 10) || 20, 1),
+//       100
+//     )
+
+//     const skip = (page - 1) * limit
+
+//     // --------------------------------------------------
+//     // Optional filters
+//     // --------------------------------------------------
+
+//     const { paymentStatus, payoutStatus, advanceStatus } = req.query
+
+//     // --------------------------------------------------
+//     // 1. Get transporter trips
+//     // --------------------------------------------------
+
+//     const tripQuery = {
+//       transporterId: transporterId
+//     }
+
+//     const [trips, total] = await Promise.all([
+//       Trip.find(tripQuery)
+//         .select(
+//           [
+//             '_id',
+//             'tripId',
+//             'transporterId',
+//             'driverId',
+//             'advanceAmount',
+//             'status',
+//             'tripType',
+//             'pickupLocation',
+//             'dropLocation',
+//             'scheduledAt',
+//             'createdAt',
+//             'updatedAt'
+//           ].join(' ')
+//         )
+//         .sort({ createdAt: -1 })
+//         .skip(skip)
+//         .limit(limit)
+//         .lean(),
+
+//       Trip.countDocuments(tripQuery)
+//     ])
+
+//     if (!trips.length) {
+//       return res.status(200).json({
+//         success: true,
+//         message: 'Trip advance payment status fetched successfully',
+//         data: {
+//           trips: [],
+//           pagination: {
+//             page,
+//             limit,
+//             total: 0,
+//             pages: 0
+//           }
+//         }
+//       })
+//     }
+
+//     // --------------------------------------------------
+//     // 2. Get driver IDs
+//     // --------------------------------------------------
+
+//     const driverIds = trips.map(trip => trip.driverId).filter(Boolean)
+
+//     const drivers = await Driver.find({
+//       _id: { $in: driverIds }
+//     })
+//       .select('_id name mobile status')
+//       .lean()
+
+//     const driverMap = new Map(
+//       drivers.map(driver => [String(driver._id), driver])
+//     )
+
+//     // --------------------------------------------------
+//     // 3. Get PaymentSessions
+//     // --------------------------------------------------
+
+//     const tripIds = trips.map(trip => String(trip._id))
+
+//     const paymentSessions = await PaymentSession.find({
+//       referenceType: 'TRIP',
+//       referenceId: { $in: tripIds },
+//       purpose: 'DRIVER_ADVANCE',
+//       provider: 'RAZORPAY'
+//     })
+//       .sort({ createdAt: -1 })
+//       .lean()
+
+//     // --------------------------------------------------
+//     // 4. Keep latest payment session per trip
+//     // --------------------------------------------------
+
+//     const paymentMap = new Map()
+
+//     for (const payment of paymentSessions) {
+//       const tripId = String(payment.referenceId)
+
+//       if (!paymentMap.has(tripId)) {
+//         paymentMap.set(tripId, payment)
+//       }
+//     }
+
+//     // --------------------------------------------------
+//     // 5. Get payouts
+//     // --------------------------------------------------
+
+//     const paymentIds = Array.from(paymentMap.values())
+//       .map(payment => payment._id)
+//       .filter(Boolean)
+
+//     const payouts = paymentIds.length
+//       ? await Payout.find({
+//           paymentId: { $in: paymentIds },
+//           provider: 'RAZORPAY'
+//         })
+//           .select(
+//             [
+//               '_id',
+//               'paymentId',
+//               'amount',
+//               'currency',
+//               'status',
+//               'initiatedAt',
+//               'startedAt',
+//               'completedAt',
+//               'lastWebhookAt',
+//               'failure',
+//               'razorpay.payoutId',
+//               'razorpay.referenceId',
+//               'razorpay.transferMode',
+//               'razorpay.statusDetails'
+//             ].join(' ')
+//           )
+//           .lean()
+//       : []
+
+//     // --------------------------------------------------
+//     // 6. Map payout by PaymentSession
+//     // --------------------------------------------------
+
+//     const payoutMap = new Map()
+
+//     for (const payout of payouts) {
+//       const paymentId = String(payout.paymentId)
+
+//       if (!payoutMap.has(paymentId)) {
+//         payoutMap.set(paymentId, payout)
+//       }
+//     }
+
+//     // --------------------------------------------------
+//     // 7. Build response
+//     // --------------------------------------------------
+
+//     let result = trips.map(trip => {
+//       const tripId = String(trip._id)
+
+//       const payment = paymentMap.get(tripId) || null
+
+//       const payout = payment ? payoutMap.get(String(payment._id)) || null : null
+
+//       const paymentStatus = payment?.status || 'NOT_CREATED'
+
+//       const payoutStatus = payout?.status || null
+
+//       // ----------------------------------------------
+//       // Calculate combined advance status
+//       // ----------------------------------------------
+
+//       let status = 'NOT_PAID'
+
+//       if (!trip.advanceAmount || Number(trip.advanceAmount) <= 0) {
+//         status = 'NO_ADVANCE'
+//       } else if (!payment) {
+//         status = 'NOT_PAID'
+//       } else if (payment.status === 'CREATED' || payment.status === 'PENDING') {
+//         status = 'PAYMENT_PENDING'
+//       } else if (
+//         payment.status === 'FAILED' ||
+//         payment.status === 'CANCELLED'
+//       ) {
+//         status = 'PAYMENT_FAILED'
+//       } else if (payment.status === 'SUCCESS') {
+//         if (!payout) {
+//           status = 'PAYOUT_PENDING'
+//         } else if (payout.status === 'CREATED') {
+//           status = 'PAYOUT_PENDING'
+//         } else if (payout.status === 'PROCESSING') {
+//           status = 'PAYOUT_PROCESSING'
+//         } else if (payout.status === 'SUCCESS') {
+//           status = 'PAID'
+//         } else if (
+//           payout.status === 'FAILED' ||
+//           payout.status === 'CANCELLED'
+//         ) {
+//           status = 'PAYOUT_FAILED'
+//         } else if (payout.status === 'RETRY_PENDING') {
+//           status = 'PAYOUT_RETRY_PENDING'
+//         }
+//       }
+
+//       const driver = trip.driverId
+//         ? driverMap.get(String(trip.driverId)) || null
+//         : null
+
+//       return {
+//         tripId: trip.tripId,
+//         tripType: trip.tripType,
+//         tripStatus: trip.status,
+
+//         driver: driver
+//           ? {
+//               name: driver.name || null,
+//               mobile: driver.mobile || null,
+//             //   status: driver.status || null
+//             }
+//           : null,
+
+//         advance: {
+//           amount: Number(trip.advanceAmount || 0),
+//         //   currency: payment?.currency || 'INR',
+
+//           status,
+
+//           payment: payment
+//             ? {
+//                 status: payment.status,
+//                 paidAt: payment.completedAt || null
+//               }
+//             : {
+//                 status: 'NOT_CREATED',
+//                 paidAt: null
+//               },
+
+//           payout: payout
+//             ? {
+//                 status: payout.status,
+//                 paidAt: payout.completedAt || null
+//               }
+//             : {
+//                 status: null,
+//                 paidAt: null
+//               }
+//         },
+
+//         createdAt: trip.createdAt
+//       }
+//     })
+
+//     // --------------------------------------------------
+//     // 8. Optional filters
+//     // --------------------------------------------------
+
+//     if (paymentStatus) {
+//       result = result.filter(
+//         item =>
+//           item.advance.paymentStatus === String(paymentStatus).toUpperCase()
+//       )
+//     }
+
+//     if (payoutStatus) {
+//       result = result.filter(
+//         item => item.advance.payoutStatus === String(payoutStatus).toUpperCase()
+//       )
+//     }
+
+//     if (advanceStatus) {
+//       result = result.filter(
+//         item => item.advance.status === String(advanceStatus).toUpperCase()
+//       )
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: 'Trip advance payment status fetched successfully',
+
+//       data: {
+//         trips: result,
+
+//         pagination: {
+//           page,
+//           limit,
+//           total,
+//           pages: Math.ceil(total / limit)
+//         }
+//       }
+//     })
+//   } catch (error) {
+//     next(error)
+//   }
+// }
+
 const getTransporterTripAdvancePayments = async (req, res, next) => {
   try {
     const transporterId = String(req.user?.id || '')
@@ -537,10 +852,16 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
     // Pagination
     // --------------------------------------------------
 
-    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1)
+    const page = Math.max(
+      Number.parseInt(req.query.page, 10) || 1,
+      1
+    )
 
     const limit = Math.min(
-      Math.max(Number.parseInt(req.query.limit, 10) || 20, 1),
+      Math.max(
+        Number.parseInt(req.query.limit, 10) || 20,
+        1
+      ),
       100
     )
 
@@ -550,14 +871,18 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
     // Optional filters
     // --------------------------------------------------
 
-    const { paymentStatus, payoutStatus, advanceStatus } = req.query
+    const {
+      paymentStatus,
+      payoutStatus,
+      advanceStatus
+    } = req.query
 
     // --------------------------------------------------
     // 1. Get transporter trips
     // --------------------------------------------------
 
     const tripQuery = {
-      transporterId: transporterId
+      transporterId
     }
 
     const [trips, total] = await Promise.all([
@@ -571,11 +896,8 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
             'advanceAmount',
             'status',
             'tripType',
-            'pickupLocation',
-            'dropLocation',
             'scheduledAt',
-            'createdAt',
-            'updatedAt'
+            'createdAt'
           ].join(' ')
         )
         .sort({ createdAt: -1 })
@@ -590,8 +912,10 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
       return res.status(200).json({
         success: true,
         message: 'Trip advance payment status fetched successfully',
+
         data: {
           trips: [],
+
           pagination: {
             page,
             limit,
@@ -603,35 +927,45 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
     }
 
     // --------------------------------------------------
-    // 2. Get driver IDs
+    // 2. Get drivers
     // --------------------------------------------------
 
-    const driverIds = trips.map(trip => trip.driverId).filter(Boolean)
+    const driverIds = trips
+      .map(trip => trip.driverId)
+      .filter(Boolean)
 
-    const drivers = await Driver.find({
-      _id: { $in: driverIds }
-    })
-      .select('_id name mobile status')
-      .lean()
+    const drivers = driverIds.length
+      ? await Driver.find({
+          _id: { $in: driverIds }
+        })
+          .select('_id name mobile')
+          .lean()
+      : []
 
     const driverMap = new Map(
-      drivers.map(driver => [String(driver._id), driver])
+      drivers.map(driver => [
+        String(driver._id),
+        driver
+      ])
     )
 
     // --------------------------------------------------
     // 3. Get PaymentSessions
     // --------------------------------------------------
 
-    const tripIds = trips.map(trip => String(trip._id))
+    const tripIds = trips.map(trip =>
+      String(trip._id)
+    )
 
-    const paymentSessions = await PaymentSession.find({
-      referenceType: 'TRIP',
-      referenceId: { $in: tripIds },
-      purpose: 'DRIVER_ADVANCE',
-      provider: 'RAZORPAY'
-    })
-      .sort({ createdAt: -1 })
-      .lean()
+    const paymentSessions =
+      await PaymentSession.find({
+        referenceType: 'TRIP',
+        referenceId: { $in: tripIds },
+        purpose: 'DRIVER_ADVANCE',
+        provider: 'RAZORPAY'
+      })
+        .sort({ createdAt: -1 })
+        .lean()
 
     // --------------------------------------------------
     // 4. Keep latest payment session per trip
@@ -651,7 +985,9 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
     // 5. Get payouts
     // --------------------------------------------------
 
-    const paymentIds = Array.from(paymentMap.values())
+    const paymentIds = Array.from(
+      paymentMap.values()
+    )
       .map(payment => payment._id)
       .filter(Boolean)
 
@@ -674,8 +1010,7 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
               'failure',
               'razorpay.payoutId',
               'razorpay.referenceId',
-              'razorpay.transferMode',
-              'razorpay.statusDetails'
+              'razorpay.transferMode'
             ].join(' ')
           )
           .lean()
@@ -696,130 +1031,194 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
     }
 
     // --------------------------------------------------
-    // 7. Build response
+    // 7. Build frontend-friendly response
     // --------------------------------------------------
 
     let result = trips.map(trip => {
-      const tripId = String(trip._id)
+      const tripObjectId = String(trip._id)
 
-      const payment = paymentMap.get(tripId) || null
+      const payment =
+        paymentMap.get(tripObjectId) || null
 
-      const payout = payment ? payoutMap.get(String(payment._id)) || null : null
+      const payout = payment
+        ? payoutMap.get(String(payment._id)) || null
+        : null
 
-      const paymentStatus = payment?.status || 'NOT_CREATED'
+      const paymentStatus =
+        payment?.status || 'NOT_CREATED'
 
-      const payoutStatus = payout?.status || null
+      const payoutStatus =
+        payout?.status || null
 
-      // ----------------------------------------------
-      // Calculate combined advance status
-      // ----------------------------------------------
+      // ------------------------------------------------
+      // Calculate overall advance status
+      // ------------------------------------------------
 
-      let status = 'NOT_PAID'
+      let advanceStatus = 'NOT_PAID'
 
-      if (!trip.advanceAmount || Number(trip.advanceAmount) <= 0) {
-        status = 'NO_ADVANCE'
-      } else if (!payment) {
-        status = 'NOT_PAID'
-      } else if (payment.status === 'CREATED' || payment.status === 'PENDING') {
-        status = 'PAYMENT_PENDING'
-      } else if (
+      if (
+        !trip.advanceAmount ||
+        Number(trip.advanceAmount) <= 0
+      ) {
+        advanceStatus = 'NO_ADVANCE'
+      }
+
+      else if (!payment) {
+        advanceStatus = 'NOT_PAID'
+      }
+
+      else if (
+        payment.status === 'CREATED' ||
+        payment.status === 'PENDING'
+      ) {
+        advanceStatus = 'PAYMENT_PENDING'
+      }
+
+      else if (
         payment.status === 'FAILED' ||
         payment.status === 'CANCELLED'
       ) {
-        status = 'PAYMENT_FAILED'
-      } else if (payment.status === 'SUCCESS') {
+        advanceStatus = 'PAYMENT_FAILED'
+      }
+
+      else if (payment.status === 'SUCCESS') {
+
         if (!payout) {
-          status = 'PAYOUT_PENDING'
-        } else if (payout.status === 'CREATED') {
-          status = 'PAYOUT_PENDING'
-        } else if (payout.status === 'PROCESSING') {
-          status = 'PAYOUT_PROCESSING'
-        } else if (payout.status === 'SUCCESS') {
-          status = 'PAID'
-        } else if (
+          advanceStatus = 'PAYOUT_PENDING'
+        }
+
+        else if (
+          payout.status === 'CREATED'
+        ) {
+          advanceStatus = 'PAYOUT_PENDING'
+        }
+
+        else if (
+          payout.status === 'PROCESSING'
+        ) {
+          advanceStatus = 'PAYOUT_PROCESSING'
+        }
+
+        else if (
+          payout.status === 'SUCCESS'
+        ) {
+          advanceStatus = 'PAID'
+        }
+
+        else if (
           payout.status === 'FAILED' ||
           payout.status === 'CANCELLED'
         ) {
-          status = 'PAYOUT_FAILED'
-        } else if (payout.status === 'RETRY_PENDING') {
-          status = 'PAYOUT_RETRY_PENDING'
+          advanceStatus = 'PAYOUT_FAILED'
+        }
+
+        else if (
+          payout.status === 'RETRY_PENDING'
+        ) {
+          advanceStatus = 'PAYOUT_RETRY_PENDING'
         }
       }
 
+      // ------------------------------------------------
+      // Driver
+      // ------------------------------------------------
+
       const driver = trip.driverId
-        ? driverMap.get(String(trip.driverId)) || null
+        ? driverMap.get(
+            String(trip.driverId)
+          ) || null
         : null
 
+      // ------------------------------------------------
+      // Frontend response
+      // ------------------------------------------------
+
       return {
-        tripId: trip.tripId,
-        tripType: trip.tripType,
-        tripStatus: trip.status,
+        trip: {
+          id: tripObjectId,
+          tripref: trip.tripId || null,
+          type: trip.tripType || null,
+          status: trip.status || null,
+          createdAt: trip.createdAt
+        },
 
         driver: driver
           ? {
               name: driver.name || null,
-              mobile: driver.mobile || null,
-            //   status: driver.status || null
+              mobile: driver.mobile || null
             }
           : null,
 
         advance: {
-          amount: Number(trip.advanceAmount || 0),
-        //   currency: payment?.currency || 'INR',
+          amount: Number(
+            trip.advanceAmount || 0
+          ),
 
-          status,
+          currency: payment?.currency || 'INR',
 
-          payment: payment
-            ? {
-                status: payment.status,
-                paidAt: payment.completedAt || null
-              }
-            : {
-                status: 'NOT_CREATED',
-                paidAt: null
-              },
+          status: advanceStatus,
 
-          payout: payout
-            ? {
-                status: payout.status,
-                paidAt: payout.completedAt || null
-              }
-            : {
-                status: null,
-                paidAt: null
-              }
-        },
+          payment: {
+            status: paymentStatus,
+            paidAt:
+              payment?.completedAt || null
+          },
 
-        createdAt: trip.createdAt
+          payout: {
+            status: payoutStatus,
+            paidAt:
+              payout?.completedAt || null
+          }
+        }
       }
     })
 
     // --------------------------------------------------
-    // 8. Optional filters
+    // 8. Apply filters
     // --------------------------------------------------
 
     if (paymentStatus) {
+      const normalizedPaymentStatus =
+        String(paymentStatus).toUpperCase()
+
       result = result.filter(
         item =>
-          item.advance.paymentStatus === String(paymentStatus).toUpperCase()
+          item.advance.payment.status ===
+          normalizedPaymentStatus
       )
     }
 
     if (payoutStatus) {
+      const normalizedPayoutStatus =
+        String(payoutStatus).toUpperCase()
+
       result = result.filter(
-        item => item.advance.payoutStatus === String(payoutStatus).toUpperCase()
+        item =>
+          item.advance.payout.status ===
+          normalizedPayoutStatus
       )
     }
 
     if (advanceStatus) {
+      const normalizedAdvanceStatus =
+        String(advanceStatus).toUpperCase()
+
       result = result.filter(
-        item => item.advance.status === String(advanceStatus).toUpperCase()
+        item =>
+          item.advance.status ===
+          normalizedAdvanceStatus
       )
     }
 
+    // --------------------------------------------------
+    // 9. Response
+    // --------------------------------------------------
+
     return res.status(200).json({
       success: true,
-      message: 'Trip advance payment status fetched successfully',
+
+      message:
+        'Trip advance payment status fetched successfully',
 
       data: {
         trips: result,
@@ -836,6 +1235,7 @@ const getTransporterTripAdvancePayments = async (req, res, next) => {
     next(error)
   }
 }
+
 
 module.exports = {
   createTripAdvancePayment,
