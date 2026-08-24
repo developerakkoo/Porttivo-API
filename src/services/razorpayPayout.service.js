@@ -1617,7 +1617,7 @@ const processRazorpayPayoutWebhook = async ({
   }
 
   const payoutQueryResult = Payout.findOne(payoutQuery)
-  const payout =
+  let payout =
     typeof payoutQueryResult?.sort === 'function'
       ? await payoutQueryResult.sort({ createdAt: -1 })
       : await payoutQueryResult
@@ -1630,6 +1630,44 @@ const processRazorpayPayoutWebhook = async ({
       lookup: payoutQuery
     })
     return null
+  }
+
+  const webhookEventId = String(
+    headers['x-razorpay-event-id'] ||
+      headers['X-Razorpay-Event-Id'] ||
+      entity.event_id ||
+      body.event_id ||
+      body.id ||
+      ''
+  ).trim()
+
+  if (webhookEventId) {
+    const claimedPayout = await Payout.findOneAndUpdate(
+      {
+        _id: payout._id,
+        provider: 'RAZORPAY',
+        'razorpay.lastWebhookEventId': { $ne: webhookEventId }
+      },
+      {
+        $set: {
+          lastWebhookAt: new Date(),
+          'razorpay.lastWebhookEventId': webhookEventId
+        }
+      },
+      { new: true }
+    )
+
+    if (!claimedPayout) {
+      logger.info('[RAZORPAY PAYOUT WEBHOOK] Duplicate event ignored', {
+        event: eventName,
+        payoutId,
+        referenceId,
+        eventId: webhookEventId
+      })
+      return null
+    }
+
+    payout = claimedPayout
   }
 
   const previousStatus = payout.status

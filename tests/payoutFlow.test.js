@@ -1588,6 +1588,267 @@ const payoutTests = [
     }
   },
   {
+    name: 'Razorpay webhook event IDs are deduplicated and new IDs still process',
+    async run() {
+      let saveCount = 0
+      let claimCount = 0
+      let payoutDoc = null
+      class MockPayout {
+        constructor(doc = {}) {
+          Object.assign(this, doc)
+          this._id = this._id || 'payout-event-1'
+        }
+
+        async save() {
+          saveCount += 1
+          payoutDoc = this
+          return this
+        }
+      }
+
+      MockPayout.findOne = () => ({
+        sort: async () => payoutDoc
+      })
+
+      MockPayout.findOneAndUpdate = async (_query, update) => {
+        const eventId = update?.$set?.['razorpay.lastWebhookEventId']
+        if (payoutDoc?.razorpay?.lastWebhookEventId === eventId) {
+          return null
+        }
+
+        claimCount += 1
+        payoutDoc = new MockPayout({
+          ...(payoutDoc || {}),
+          lastWebhookAt: update?.$set?.lastWebhookAt || payoutDoc?.lastWebhookAt || null,
+          razorpay: {
+            ...(payoutDoc?.razorpay || {}),
+            lastWebhookEventId: eventId
+          }
+        })
+        return payoutDoc
+      }
+
+      MockPayout.findById = async () => payoutDoc
+      MockPayout.countDocuments = async () => 0
+
+      payoutDoc = new MockPayout({
+        provider: 'RAZORPAY',
+        status: 'PROCESSING',
+        razorpay: {
+          payoutId: 'pout_event_1',
+          referenceId: 'ref_event_1',
+          response: {}
+        },
+        retry: { count: 0, maxRetry: 3, nextRetryAt: null },
+        failure: {},
+        async save() {
+          saveCount += 1
+          return this
+        }
+      })
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutWebhookSecret: 'whsec_event'
+          },
+          '../utils/logger': {
+            info: () => {},
+            warn: () => {},
+            error: () => {}
+          },
+          '../models/Payout': MockPayout,
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const originalFetch = global.fetch
+      global.fetch = async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          id: 'pout_event_1',
+          status: 'processed',
+          reference_id: 'ref_event_1'
+        })
+      })
+
+      const rawBody =
+        '{"event":"payout.processed","payload":{"payout":{"entity":{"id":"pout_event_1","reference_id":"ref_event_1","status":"processed"}}}}'
+      const signature = require('node:crypto')
+        .createHmac('sha256', 'whsec_event')
+        .update(rawBody)
+        .digest('hex')
+
+      try {
+        const first = await service.processRazorpayPayoutWebhook({
+          body: JSON.parse(rawBody),
+          headers: {
+            'x-razorpay-signature': signature,
+            'x-razorpay-event-id': 'evt_test_001'
+          },
+          rawBody
+        })
+        const afterFirst = saveCount
+
+        const duplicate = await service.processRazorpayPayoutWebhook({
+          body: JSON.parse(rawBody),
+          headers: {
+            'x-razorpay-signature': signature,
+            'x-razorpay-event-id': 'evt_test_001'
+          },
+          rawBody
+        })
+        const afterDuplicate = saveCount
+
+        const third = await service.processRazorpayPayoutWebhook({
+          body: JSON.parse(rawBody),
+          headers: {
+            'x-razorpay-signature': signature,
+            'x-razorpay-event-id': 'evt_test_002'
+          },
+          rawBody
+        })
+
+        assert.ok(first)
+        assert.equal(duplicate, null)
+        assert.ok(third)
+        assert.equal(claimCount, 2)
+        assert.equal(afterDuplicate, afterFirst)
+        assert.ok(saveCount > afterDuplicate)
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
+    name: 'simultaneous Razorpay webhooks with the same event ID only claim once',
+    async run() {
+      let saveCount = 0
+      let claimCount = 0
+      let inFlight = false
+      let payoutDoc = null
+      class MockPayout {
+        constructor(doc = {}) {
+          Object.assign(this, doc)
+          this._id = this._id || 'payout-event-2'
+        }
+
+        async save() {
+          saveCount += 1
+          payoutDoc = this
+          return this
+        }
+      }
+
+      MockPayout.findOne = () => ({
+        sort: async () => payoutDoc
+      })
+
+      MockPayout.findOneAndUpdate = async (_query, update) => {
+        const eventId = update?.$set?.['razorpay.lastWebhookEventId']
+        if (inFlight || payoutDoc?.razorpay?.lastWebhookEventId === eventId) {
+          return null
+        }
+
+        inFlight = true
+        claimCount += 1
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        payoutDoc = new MockPayout({
+          ...(payoutDoc || {}),
+          lastWebhookAt: update?.$set?.lastWebhookAt || payoutDoc?.lastWebhookAt || null,
+          razorpay: {
+            ...(payoutDoc?.razorpay || {}),
+            lastWebhookEventId: eventId
+          }
+        })
+        inFlight = false
+        return payoutDoc
+      }
+
+      MockPayout.findById = async () => payoutDoc
+      MockPayout.countDocuments = async () => 0
+
+      payoutDoc = new MockPayout({
+        provider: 'RAZORPAY',
+        status: 'PROCESSING',
+        razorpay: {
+          payoutId: 'pout_event_2',
+          referenceId: 'ref_event_2',
+          response: {}
+        },
+        retry: { count: 0, maxRetry: 3, nextRetryAt: null },
+        failure: {},
+        async save() {
+          saveCount += 1
+          return this
+        }
+      })
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutWebhookSecret: 'whsec_event_2'
+          },
+          '../utils/logger': {
+            info: () => {},
+            warn: () => {},
+            error: () => {}
+          },
+          '../models/Payout': MockPayout,
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const originalFetch = global.fetch
+      global.fetch = async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          id: 'pout_event_2',
+          status: 'processed',
+          reference_id: 'ref_event_2'
+        })
+      })
+
+      const rawBody =
+        '{"event":"payout.processed","payload":{"payout":{"entity":{"id":"pout_event_2","reference_id":"ref_event_2","status":"processed"}}}}'
+      const signature = require('node:crypto')
+        .createHmac('sha256', 'whsec_event_2')
+        .update(rawBody)
+        .digest('hex')
+
+      try {
+        const results = await Promise.all([
+          service.processRazorpayPayoutWebhook({
+            body: JSON.parse(rawBody),
+            headers: {
+              'x-razorpay-signature': signature,
+              'x-razorpay-event-id': 'evt_test_003'
+            },
+            rawBody
+          }),
+          service.processRazorpayPayoutWebhook({
+            body: JSON.parse(rawBody),
+            headers: {
+              'x-razorpay-signature': signature,
+              'x-razorpay-event-id': 'evt_test_003'
+            },
+            rawBody
+          })
+        ])
+
+        assert.equal(results.filter(Boolean).length, 1)
+        assert.equal(claimCount, 1)
+        assert.ok(saveCount >= 1)
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
     name: 'SUCCESS payouts are not regressed to PROCESSING by older Razorpay webhooks',
     async run() {
       const payoutDoc = {
