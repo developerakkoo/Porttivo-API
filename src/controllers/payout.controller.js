@@ -576,20 +576,69 @@ const handleRazorpayWebhook = async (req, res, next) => {
       })
     }
 
-    const payout = await razorpayService.handleRazorpayPayoutWebhook({
-      body: { ...(req.query || {}), ...(req.body || {}) },
-      headers: req.headers,
-      rawBody: req.rawBody || '',
-      fetchImpl: req.fetch || global.fetch
+    const webhookBody = { ...(req.query || {}), ...(req.body || {}) }
+    const rawBody = req.rawBody || ''
+    const verification = razorpayService.verifyRazorpayPayoutWebhook(
+      webhookBody,
+      req.headers || {},
+      rawBody
+    )
+
+    if (!verification.valid) {
+      if (verification.reason === 'missing_secret') {
+        logger.error('[RAZORPAY PAYOUT WEBHOOK] Missing webhook secret', {
+          event: verification.eventName || null,
+          payoutId: verification.payoutId || null,
+          referenceId: verification.referenceId || null,
+          signaturePresent: verification.signaturePresent
+        })
+
+        return res.status(500).json({
+          success: false,
+          message: 'Razorpay payout webhook is not configured'
+        })
+      }
+
+      logger.warn('[RAZORPAY PAYOUT WEBHOOK] Invalid signature', {
+        event: verification.eventName || null,
+        payoutId: verification.payoutId || null,
+        referenceId: verification.referenceId || null,
+        signaturePresent: verification.signaturePresent,
+        requestTimestamp: new Date().toISOString()
+      })
+
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Razorpay payout webhook signature'
+      })
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Razorpay payout webhook received'
     })
 
-    return res.status(200).json({
-      success: true,
-      message: 'Razorpay payout webhook processed successfully',
-      data: {
-        payout: serializePayout(payout)
-      }
+    setImmediate(() => {
+      Promise.resolve(
+        razorpayService.processRazorpayPayoutWebhook({
+          body: webhookBody,
+          headers: req.headers,
+          rawBody,
+          verifiedWebhook: verification,
+          fetchImpl: req.fetch || global.fetch
+        })
+      ).catch((error) => {
+        logger.error('[RAZORPAY PAYOUT WEBHOOK] Background processing failed', {
+          event: verification.eventName || null,
+          payoutId: verification.payoutId || null,
+          referenceId: verification.referenceId || null,
+          message: error.message,
+          stack: error.stack
+        })
+      })
     })
+
+    return
   } catch (error) {
     if (error.statusCode) {
       return res.status(error.statusCode).json({

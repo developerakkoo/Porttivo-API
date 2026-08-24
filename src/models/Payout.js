@@ -134,6 +134,21 @@ const payoutSchema = new mongoose.Schema(
       response: {
         type: mongoose.Schema.Types.Mixed,
         default: {}
+      },
+      lastWebhookEvent: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      lastWebhookStatus: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      lastWebhookEventId: {
+        type: String,
+        trim: true,
+        default: null
       }
     },
     status: {

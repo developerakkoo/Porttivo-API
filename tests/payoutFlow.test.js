@@ -1237,6 +1237,477 @@ const payoutTests = [
     }
   },
   {
+    name: 'verifyRazorpayPayoutWebhook accepts a signature computed from the exact raw body',
+    async run() {
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutWebhookSecret: 'whsec_test_exact'
+          },
+          '../utils/logger': {
+            info: () => {},
+            warn: () => {},
+            error: () => {}
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const rawBody =
+        '{"event":"payout.processed","payload":{"payout":{"entity":{"id":"pout_123","reference_id":"ref_123","status":"processed"}}}}'
+      const signature = require('node:crypto')
+        .createHmac('sha256', 'whsec_test_exact')
+        .update(rawBody)
+        .digest('hex')
+
+      const verification = service.verifyRazorpayPayoutWebhook(
+        JSON.parse(rawBody),
+        {
+          'x-razorpay-signature': signature
+        },
+        rawBody
+      )
+
+      assert.equal(verification.valid, true)
+      assert.equal(verification.payoutId, 'pout_123')
+      assert.equal(verification.referenceId, 'ref_123')
+      assert.equal(verification.eventName, 'payout.processed')
+    }
+  },
+  {
+    name: 'verifyRazorpayPayoutWebhook rejects when the raw body whitespace changes',
+    async run() {
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutWebhookSecret: 'whsec_test_whitespace'
+          },
+          '../utils/logger': {
+            info: () => {},
+            warn: () => {},
+            error: () => {}
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const rawBody = '{"event":"payout.pending","payload":{"payout":{"entity":{"id":"pout_456","status":"pending"}}}}'
+      const signature = require('node:crypto')
+        .createHmac('sha256', 'whsec_test_whitespace')
+        .update(rawBody)
+        .digest('hex')
+
+      const verification = service.verifyRazorpayPayoutWebhook(
+        JSON.parse(rawBody),
+        {
+          'x-razorpay-signature': signature
+        },
+        ` ${rawBody} `
+      )
+
+      assert.equal(verification.valid, false)
+    }
+  },
+  {
+    name: 'invalid Razorpay webhook signatures return 400',
+    async run() {
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {},
+          '../services/razorpayPayout.service': {
+            verifyRazorpayPayoutWebhook: () => ({
+              valid: false,
+              reason: 'signature_mismatch',
+              signaturePresent: true,
+              eventName: 'payout.processed',
+              payoutId: 'pout_1',
+              referenceId: 'ref_1'
+            }),
+            processRazorpayPayoutWebhook: async () => {
+              throw new Error('process should not run')
+            }
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        method: 'POST',
+        headers: {
+          'x-razorpay-signature': 'invalid'
+        },
+        body: {
+          event: 'payout.processed'
+        },
+        rawBody: '{"event":"payout.processed"}'
+      }
+      const res = createMockRes()
+
+      await controller.handleRazorpayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 400)
+      assert.equal(res.body.message, 'Invalid Razorpay payout webhook signature')
+    }
+  },
+  {
+    name: 'valid Razorpay webhooks return 200 before background processing completes',
+    async run() {
+      let processStarted = false
+      let processFinished = false
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {},
+          '../services/razorpayPayout.service': {
+            verifyRazorpayPayoutWebhook: () => ({
+              valid: true,
+              reason: null,
+              signaturePresent: true,
+              eventName: 'payout.processed',
+              payoutId: 'pout_1',
+              referenceId: 'ref_1'
+            }),
+            processRazorpayPayoutWebhook: async () => {
+              processStarted = true
+              await new Promise((resolve) => setTimeout(resolve, 100))
+              processFinished = true
+              return { status: 'SUCCESS' }
+            }
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        method: 'POST',
+        headers: {
+          'x-razorpay-signature': 'valid'
+        },
+        body: {
+          event: 'payout.processed'
+        },
+        rawBody: '{"event":"payout.processed"}'
+      }
+      const res = createMockRes()
+      const startedAt = Date.now()
+
+      await controller.handleRazorpayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      const elapsedMs = Date.now() - startedAt
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(res.body.message, 'Razorpay payout webhook received')
+      assert.ok(elapsedMs < 80)
+      assert.equal(processFinished, false)
+
+      await new Promise((resolve) => setTimeout(resolve, 140))
+      assert.equal(processStarted, true)
+      assert.equal(processFinished, true)
+    }
+  },
+  {
+    name: 'valid Razorpay webhooks do not return 404 when the payout record is missing',
+    async run() {
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {},
+          '../services/razorpayPayout.service': {
+            verifyRazorpayPayoutWebhook: () => ({
+              valid: true,
+              reason: null,
+              signaturePresent: true,
+              eventName: 'payout.processed',
+              payoutId: 'pout_missing',
+              referenceId: 'ref_missing'
+            }),
+            processRazorpayPayoutWebhook: async () => null
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        method: 'POST',
+        headers: {
+          'x-razorpay-signature': 'valid'
+        },
+        body: {
+          event: 'payout.processed'
+        },
+        rawBody: '{"event":"payout.processed"}'
+      }
+      const res = createMockRes()
+
+      await controller.handleRazorpayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(res.body.message, 'Razorpay payout webhook received')
+    }
+  },
+  {
+    name: 'unknown Razorpay payouts are logged and ignored after acknowledgment',
+    async run() {
+      const warnings = []
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutWebhookSecret: 'whsec_unknown'
+          },
+          '../utils/logger': {
+            info: () => {},
+            warn: (...args) => warnings.push(args),
+            error: () => {}
+          },
+          '../models/Payout': {
+            findOne: () => ({
+              sort: async () => null
+            })
+          },
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const rawBody =
+        '{"event":"payout.processed","payload":{"payout":{"entity":{"id":"pout_unknown","reference_id":"ref_unknown","status":"processed"}}}}'
+      const signature = require('node:crypto')
+        .createHmac('sha256', 'whsec_unknown')
+        .update(rawBody)
+        .digest('hex')
+
+      const result = await service.processRazorpayPayoutWebhook({
+        body: JSON.parse(rawBody),
+        headers: {
+          'x-razorpay-signature': signature
+        },
+        rawBody
+      })
+
+      assert.equal(result, null)
+      assert.ok(warnings.length >= 1)
+    }
+  },
+  {
+    name: 'duplicate Razorpay webhooks do not create duplicate payouts',
+    async run() {
+      let saveCount = 0
+      let createCount = 0
+      const payoutDoc = {
+        _id: 'payout-dup-1',
+        provider: 'RAZORPAY',
+        status: 'PROCESSING',
+        razorpay: {
+          payoutId: 'pout_dup_1',
+          referenceId: 'ref_dup_1'
+        },
+        async save() {
+          saveCount += 1
+          return this
+        }
+      }
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutWebhookSecret: 'whsec_dup'
+          },
+          '../utils/logger': {
+            info: () => {},
+            warn: () => {},
+            error: () => {}
+          },
+          '../models/Payout': {
+            findOne: () => ({
+              sort: async () => payoutDoc
+            }),
+            create: async () => {
+              createCount += 1
+              throw new Error('create should not be called')
+            }
+          },
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const originalFetch = global.fetch
+      global.fetch = async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          id: 'pout_dup_1',
+          status: 'processed',
+          reference_id: 'ref_dup_1'
+        })
+      })
+
+      const rawBody =
+        '{"event":"payout.processed","payload":{"payout":{"entity":{"id":"pout_dup_1","reference_id":"ref_dup_1","status":"processed"}}}}'
+      const signature = require('node:crypto')
+        .createHmac('sha256', 'whsec_dup')
+        .update(rawBody)
+        .digest('hex')
+
+      try {
+        await service.processRazorpayPayoutWebhook({
+          body: JSON.parse(rawBody),
+          headers: {
+            'x-razorpay-signature': signature
+          },
+          rawBody
+        })
+        await service.processRazorpayPayoutWebhook({
+          body: JSON.parse(rawBody),
+          headers: {
+            'x-razorpay-signature': signature
+          },
+          rawBody
+        })
+      } finally {
+        global.fetch = originalFetch
+      }
+
+      assert.equal(createCount, 0)
+      assert.ok(saveCount >= 2)
+      assert.equal(payoutDoc.status, 'SUCCESS')
+    }
+  },
+  {
+    name: 'SUCCESS payouts are not regressed to PROCESSING by older Razorpay webhooks',
+    async run() {
+      const payoutDoc = {
+        _id: 'payout-regress-1',
+        provider: 'RAZORPAY',
+        status: 'SUCCESS',
+        completedAt: new Date('2026-08-24T00:00:00.000Z'),
+        razorpay: {
+          payoutId: 'pout_regress_1',
+          referenceId: 'ref_regress_1',
+          response: {}
+        },
+        retry: { count: 0, maxRetry: 3, nextRetryAt: null },
+        failure: {},
+        async save() {
+          return this
+        }
+      }
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'),
+        {
+          '../config/env': {
+            razorpayPayoutWebhookSecret: 'whsec_regress'
+          },
+          '../utils/logger': {
+            info: () => {},
+            warn: () => {},
+            error: () => {}
+          },
+          '../models/Payout': {
+            findOne: () => ({
+              sort: async () => payoutDoc
+            })
+          },
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const originalFetch = global.fetch
+      global.fetch = async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          id: 'pout_regress_1',
+          status: 'pending',
+          reference_id: 'ref_regress_1'
+        })
+      })
+
+      const rawBody =
+        '{"event":"payout.pending","payload":{"payout":{"entity":{"id":"pout_regress_1","reference_id":"ref_regress_1","status":"pending"}}}}'
+      const signature = require('node:crypto')
+        .createHmac('sha256', 'whsec_regress')
+        .update(rawBody)
+        .digest('hex')
+
+      try {
+        const result = await service.processRazorpayPayoutWebhook({
+          body: JSON.parse(rawBody),
+          headers: {
+            'x-razorpay-signature': signature
+          },
+          rawBody
+        })
+
+        assert.equal(result.status, 'SUCCESS')
+      } finally {
+        global.fetch = originalFetch
+      }
+    }
+  },
+  {
+    name: 'GET /api/payouts/razorpay/webhook returns 200',
+    async run() {
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
+        {
+          '../services/cashfreePayout.service': {},
+          '../services/razorpayPayout.service': {
+            verifyRazorpayPayoutWebhook: () => {
+              throw new Error('GET should not verify signatures')
+            },
+            processRazorpayPayoutWebhook: async () => null
+          },
+          '../models/Payout': {},
+          '../models/PaymentSession': {}
+        }
+      )
+
+      const req = {
+        method: 'GET',
+        headers: {},
+        body: {},
+        rawBody: ''
+      }
+      const res = createMockRes()
+
+      await controller.handleRazorpayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(res.body.message, 'Razorpay payout webhook endpoint reachable')
+    }
+  },
+  {
+    name: 'Razorpay webhook route is registered before JWT authentication',
+    async run() {
+      const router = require(path.resolve(process.cwd(), 'src/routes/payout.routes.js'))
+      const layers = router.stack || []
+      const razorpayWebhookIndex = layers.findIndex((layer) => layer.route?.path === '/razorpay/webhook')
+      const authIndex = layers.findIndex((layer) => layer.name === 'authenticate')
+
+      assert.ok(razorpayWebhookIndex >= 0)
+      assert.ok(authIndex >= 0)
+      assert.ok(razorpayWebhookIndex < authIndex)
+    }
+  },
+  {
     name: 'Cashfree payout webhook marks a payout successful',
     async run() {
       const payoutDoc = {

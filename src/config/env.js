@@ -126,11 +126,9 @@ module.exports = {
     process.env.CASHFREE_WEBHOOK_URL ||
     buildApiUrl('/api/payments/cashfree/webhook'),
   razorpayMode: process.env.RAZORPAY_MODE || 'production',
-  razorpayKeyId: process.env.RAZORPAY_KEY_ID || 'rzp_live_TLF84Z0KLAXg6s',
-  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || 'UtVZjsQJiO9FsHhVOwuaXSB9',
-  razorpayWebhookSecret:
-    process.env.RAZORPAY_WEBHOOK_SECRET ||
-    '72pAaA_RJzvw_Jj',
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || '',
+  razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || '',
   razorpayApiBaseUrl:
     process.env.RAZORPAY_API_BASE_URL || 'https://api.razorpay.com/v1',
   razorpayCheckoutUrl:
@@ -144,20 +142,18 @@ module.exports = {
     buildApiUrl('/api/marketplace-payments/razorpay/webhook'),
   razorpayPayoutMode: process.env.RAZORPAY_PAYOUT_MODE || process.env.RAZORPAY_MODE || 'production',
   razorpayPayoutKeyId:
-    process.env.RAZORPAY_PAYOUT_KEY_ID || process.env.RAZORPAY_KEY_ID || 'rzp_live_TLF84Z0KLAXg6s',
+    process.env.RAZORPAY_PAYOUT_KEY_ID || process.env.RAZORPAY_KEY_ID || '',
   razorpayPayoutKeySecret:
-    process.env.RAZORPAY_PAYOUT_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET || 'UtVZjsQJiO9FsHhVOwuaXSB9',
+    process.env.RAZORPAY_PAYOUT_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET || '',
   razorpayPayoutWebhookSecret:
     process.env.RAZORPAY_PAYOUT_WEBHOOK_SECRET ||
-    process.env.RAZORPAY_WEBHOOK_SECRET ||
-    process.env.RAZORPAY_KEY_SECRET ||
-    'asdfghjklop0987654321dfvbn',
+    '',
   razorpayPayoutApiBaseUrl:
     process.env.RAZORPAY_PAYOUT_API_BASE_URL || 'https://api.razorpay.com/v1',
   razorpayPayoutAccountNumber:
     process.env.RAZORPAY_PAYOUT_ACCOUNT_NUMBER ||
     process.env.RAZORPAY_ACCOUNT_NUMBER ||
-    '50000210062',
+    '',
   razorpayPayoutWebhookUrl:
     process.env.RAZORPAY_PAYOUT_WEBHOOK_URL ||
     buildApiUrl('/api/payouts/razorpay/webhook'),

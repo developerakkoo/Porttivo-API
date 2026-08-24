@@ -235,9 +235,11 @@ const normalizeRazorpayPayoutStatus = status => {
       'captured',
       'paid',
       'processed',
+      'payout.processed',
       'success',
       'completed',
-      'succeeded'
+      'succeeded',
+      'payout.success'
     ].includes(normalized)
   ) {
     return 'SUCCESS'
@@ -248,20 +250,80 @@ const normalizeRazorpayPayoutStatus = status => {
       'failure',
       'reversed',
       'rejected',
-      'cancelled',
-      'canceled'
+      'payout.failed',
+      'payout.reversed',
+      'payout.rejected'
     ].includes(normalized)
   ) {
     return 'FAILED'
   }
+  if (['retry_pending', 'retry-pending', 'payout.retry_pending'].includes(normalized)) {
+    return 'RETRY_PENDING'
+  }
+  if (['cancelled', 'canceled', 'payout.cancelled', 'payout.canceled'].includes(normalized)) {
+    return 'CANCELLED'
+  }
   if (
-    ['processing', 'queued', 'pending', 'created', 'initiated'].includes(
-      normalized
-    )
+    [
+      'created',
+      'payout.created'
+    ].includes(normalized)
+  ) {
+    return 'CREATED'
+  }
+  if (
+    [
+      'processing',
+      'queued',
+      'pending',
+      'initiated',
+      'updated',
+      'payout.queued',
+      'payout.pending',
+      'payout.initiated',
+      'payout.updated'
+    ].includes(normalized)
   ) {
     return 'PROCESSING'
   }
   return 'PROCESSING'
+}
+
+const getRazorpayPayoutStatusRank = status => {
+  const normalized = normalizeRazorpayPayoutStatus(status)
+  const ranks = {
+    CREATED: 1,
+    PROCESSING: 2,
+    RETRY_PENDING: 3,
+    FAILED: 4,
+    CANCELLED: 5,
+    SUCCESS: 6
+  }
+
+  return ranks[normalized] || 0
+}
+
+const shouldApplyRazorpayPayoutStatusUpdate = (currentStatus, nextStatus) => {
+  const current = normalizeRazorpayPayoutStatus(currentStatus)
+  const next = normalizeRazorpayPayoutStatus(nextStatus)
+
+  if (!next) {
+    return false
+  }
+
+  if (current === 'CANCELLED') {
+    return next === 'CANCELLED'
+  }
+
+  if (current === 'SUCCESS') {
+    return next === 'SUCCESS'
+  }
+
+  if (current === 'FAILED') {
+    return next === 'FAILED' || next === 'SUCCESS'
+  }
+
+  return getRazorpayPayoutStatusRank(next) >= getRazorpayPayoutStatusRank(current)
 }
 
 const extractRazorpayMessage = payload => {
@@ -680,89 +742,90 @@ const extractPayoutEntity = payload => {
   return {}
 }
 
-const verifyWebhookSignature = ({
-  signature,
-  body,
-  rawBody,
-  secretCandidates = []
-} = {}) => {
-  const normalizedSignature = String(signature || '').trim()
-  if (!normalizedSignature) {
+const safeTimingSafeEqual = (left, right) => {
+  const leftBuffer = Buffer.from(String(left || ''), 'utf8')
+  const rightBuffer = Buffer.from(String(right || ''), 'utf8')
+  if (leftBuffer.length !== rightBuffer.length) {
     return false
   }
 
-  const candidates = []
-  const raw = typeof rawBody === 'string' ? rawBody.trim() : ''
-  if (raw) {
-    candidates.push(raw)
-  }
-
-  if (body && typeof body === 'object') {
-    try {
-      candidates.push(JSON.stringify(body))
-    } catch (error) {
-      // ignore
-    }
-    candidates.push(
-      `{${Object.keys(body)
-        .sort()
-        .map(
-          key =>
-            `${JSON.stringify(key)}:${
-              typeof body[key] === 'object'
-                ? JSON.stringify(body[key])
-                : JSON.stringify(body[key])
-            }`
-        )
-        .join(',')}}`
-    )
-  }
-
-  for (const secret of secretCandidates) {
-    const cleanedSecret = String(secret || '').trim()
-    if (!cleanedSecret) {
-      continue
-    }
-
-    for (const candidate of candidates) {
-      const expectedHex = crypto
-        .createHmac('sha256', cleanedSecret)
-        .update(candidate)
-        .digest('hex')
-      const expectedBase64 = crypto
-        .createHmac('sha256', cleanedSecret)
-        .update(candidate)
-        .digest('base64')
-
-      if (
-        [expectedHex, expectedBase64].some(
-          expected =>
-            expected === normalizedSignature ||
-            expected === normalizedSignature.toLowerCase()
-        )
-      ) {
-        return true
-      }
-    }
-  }
-
-  return false
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer)
 }
 
-const verifyRazorpayPayoutWebhook = (body, headers = {}, rawBody = '') => {
+const getRazorpayPayoutWebhookSignature = headers => {
   const signature = String(
-    headers['x-razorpay-signature'] ||
-      headers['X-Razorpay-Signature'] ||
-      headers.signature ||
+    headers?.['x-razorpay-signature'] ||
+      headers?.['X-Razorpay-Signature'] ||
+      headers?.signature ||
       ''
   ).trim()
 
-  return verifyWebhookSignature({
-    signature,
-    body,
+  return signature || null
+}
+
+const verifyRazorpayPayoutWebhookSignature = ({
+  rawBody = '',
+  signature = '',
+  secret = razorpayPayoutWebhookSecret
+} = {}) => {
+  const cleanedSecret = String(secret || '').trim()
+  if (!cleanedSecret) {
+    return {
+      valid: false,
+      reason: 'missing_secret',
+      message: 'Razorpay payout webhook secret is not configured'
+    }
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', cleanedSecret)
+    .update(String(rawBody || ''))
+    .digest('hex')
+
+  return {
+    valid: safeTimingSafeEqual(
+      String(expectedSignature).toLowerCase(),
+      String(signature || '').toLowerCase()
+    ),
+    expectedSignature
+  }
+}
+
+const verifyRazorpayPayoutWebhook = (body = {}, headers = {}, rawBody = '') => {
+  const signature = getRazorpayPayoutWebhookSignature(headers)
+  const entity = extractPayoutEntity(body)
+  const eventName = String(body?.event || entity?.status || '')
+    .trim()
+    .toLowerCase()
+  const payoutId = String(
+    entity?.id ||
+      entity?.payout_id ||
+      entity?.reference_id ||
+      entity?.fund_account_id ||
+      ''
+  ).trim()
+  const referenceId = String(entity?.reference_id || entity?.referenceId || '').trim()
+  const verification = verifyRazorpayPayoutWebhookSignature({
     rawBody,
-    secretCandidates: [razorpayPayoutWebhookSecret, razorpayPayoutKeySecret]
+    signature,
+    secret: razorpayPayoutWebhookSecret
   })
+
+  return {
+    valid: verification.valid,
+    reason: verification.reason || (verification.valid ? null : 'signature_mismatch'),
+    message:
+      verification.message ||
+      (verification.valid
+        ? null
+        : 'Invalid Razorpay payout webhook signature'),
+    signaturePresent: Boolean(signature),
+    eventName,
+    payoutId,
+    referenceId,
+    entity,
+    signature
+  }
 }
 
 const buildTransferRemarks = ({
@@ -1394,31 +1457,33 @@ const syncRazorpayPayoutStatus = async (
     response: sanitizeResponse(parsed.raw || remoteResponse || {})
   }
 
-  if (remoteStatus === 'SUCCESS') {
-    payout.status = 'SUCCESS'
-    payout.completedAt = payout.completedAt || new Date()
-    payout.failure = buildPayoutFailure({})
-    payout.retry = {
-      ...(payout.retry || {}),
-      nextRetryAt: null
+  if (shouldApplyRazorpayPayoutStatusUpdate(previousStatus, remoteStatus)) {
+    if (remoteStatus === 'SUCCESS') {
+      payout.status = 'SUCCESS'
+      payout.completedAt = payout.completedAt || new Date()
+      payout.failure = buildPayoutFailure({})
+      payout.retry = {
+        ...(payout.retry || {}),
+        nextRetryAt: null
+      }
+    } else if (remoteStatus === 'FAILED') {
+      payout.status = 'FAILED'
+      payout.completedAt = payout.completedAt || new Date()
+      payout.failure = buildPayoutFailure({
+        code: parsed.code || 'PAYOUT_FAILED',
+        message: parsed.message || 'Payout failed',
+        reason: parsed.message || 'Payout failed',
+        isRetryable: false
+      })
+    } else {
+      payout.status = 'PROCESSING'
+      payout.failure = buildPayoutFailure({
+        code: parsed.code || 'PAYOUT_PROCESSING',
+        message: parsed.message || 'Payout processing',
+        reason: parsed.message || 'Payout processing',
+        isRetryable: true
+      })
     }
-  } else if (remoteStatus === 'FAILED') {
-    payout.status = 'FAILED'
-    payout.completedAt = payout.completedAt || new Date()
-    payout.failure = buildPayoutFailure({
-      code: parsed.code || 'PAYOUT_FAILED',
-      message: parsed.message || 'Payout failed',
-      reason: parsed.message || 'Payout failed',
-      isRetryable: false
-    })
-  } else {
-    payout.status = 'PROCESSING'
-    payout.failure = buildPayoutFailure({
-      code: parsed.code || 'PAYOUT_PROCESSING',
-      message: parsed.message || 'Payout processing',
-      reason: parsed.message || 'Payout processing',
-      isRetryable: true
-    })
   }
 
   console.log('Mongo status before update:', previousStatus)
@@ -1486,35 +1551,53 @@ const verifyRazorpayCheckoutPayload = body => {
   })
 }
 
-const handleRazorpayPayoutWebhook = async ({
+const processRazorpayPayoutWebhook = async ({
   body = {},
   headers = {},
   rawBody = '',
+  verifiedWebhook = null,
   fetchImpl = getFetchImpl()
 } = {}) => {
-  if (!verifyRazorpayPayoutWebhook(body, headers, rawBody)) {
+  const verification =
+    verifiedWebhook && verifiedWebhook.valid !== undefined
+      ? verifiedWebhook
+      : verifyRazorpayPayoutWebhook(body, headers, rawBody)
+
+  if (!verification.valid) {
+    if (verification.reason === 'missing_secret') {
+      logger.error('[RAZORPAY PAYOUT WEBHOOK] Missing webhook secret', {
+        event: verification.eventName || null,
+        payoutId: verification.payoutId || null,
+        referenceId: verification.referenceId || null,
+        signaturePresent: verification.signaturePresent
+      })
+      const error = new Error(
+        verification.message || 'Razorpay payout webhook is not configured'
+      )
+      error.statusCode = 500
+      throw error
+    }
+
     const error = new Error('Invalid Razorpay payout webhook signature')
     error.statusCode = 400
     throw error
   }
 
-  const entity = extractPayoutEntity(body)
-  const payoutId = String(
-    entity.id ||
-      entity.payout_id ||
-      entity.reference_id ||
-      entity.fund_account_id ||
-      ''
-  ).trim()
-  const referenceId = String(
-    entity.reference_id || entity.referenceId || ''
-  ).trim()
-  const eventName = String(body.event || entity.status || '')
-    .trim()
-    .toLowerCase()
+  const entity = verification.entity || {}
+  const payoutId = verification.payoutId
+  const referenceId = verification.referenceId
+  const eventName = verification.eventName || 'unknown'
   const webhookStatus = normalizeRazorpayPayoutStatus(
     entity.status || eventName || body.event || body.status
   )
+
+  logger.info('[RAZORPAY PAYOUT WEBHOOK] Received', {
+    event: eventName,
+    payoutId,
+    referenceId,
+    signatureValid: true,
+    status: webhookStatus
+  })
 
   const payoutQuery = payoutId
     ? { 'razorpay.payoutId': payoutId, provider: 'RAZORPAY' }
@@ -1522,22 +1605,42 @@ const handleRazorpayPayoutWebhook = async ({
     ? { 'razorpay.referenceId': referenceId, provider: 'RAZORPAY' }
     : entity.fund_account_id
     ? { 'razorpay.fundAccountId': entity.fund_account_id, provider: 'RAZORPAY' }
-    : {}
+    : null
 
-  const payout = await Payout.findOne(payoutQuery).sort({ createdAt: -1 })
-  if (!payout) {
-    console.log('Incoming webhook payoutId:', payoutId)
-    const error = new Error('Payout record not found')
-    error.statusCode = 404
-    throw error
+  if (!payoutQuery) {
+    logger.warn('[RAZORPAY PAYOUT WEBHOOK] No payout lookup key found', {
+      event: eventName,
+      payoutId,
+      referenceId
+    })
+    return null
   }
 
-  const mongoPayoutId = payout.razorpay?.payoutId || null
-  const mongoStatusBeforeUpdate = payout.status
-  console.log('Incoming webhook payoutId:', payoutId)
-  console.log('Mongo payoutId:', mongoPayoutId)
-  console.log('Webhook status:', webhookStatus)
-  console.log('Mongo status before update:', mongoStatusBeforeUpdate)
+  const payoutQueryResult = Payout.findOne(payoutQuery)
+  const payout =
+    typeof payoutQueryResult?.sort === 'function'
+      ? await payoutQueryResult.sort({ createdAt: -1 })
+      : await payoutQueryResult
+
+  if (!payout) {
+    logger.warn('[RAZORPAY PAYOUT WEBHOOK] Payout record not found', {
+      event: eventName,
+      payoutId,
+      referenceId,
+      lookup: payoutQuery
+    })
+    return null
+  }
+
+  const previousStatus = payout.status
+  logger.info('[RAZORPAY PAYOUT WEBHOOK] Processing payout', {
+    event: eventName,
+    payoutId,
+    referenceId,
+    internalPayoutId: payout._id?.toString?.() || null,
+    previousStatus,
+    incomingStatus: webhookStatus
+  })
 
   payout.lastWebhookAt = new Date()
   payout.razorpay = {
@@ -1545,6 +1648,14 @@ const handleRazorpayPayoutWebhook = async ({
     payoutId: payoutId || payout.razorpay?.payoutId || null,
     referenceId: referenceId || payout.razorpay?.referenceId || null,
     transferMode: entity.mode || payout.razorpay?.transferMode || 'IMPS',
+    lastWebhookEvent: eventName,
+    lastWebhookStatus: webhookStatus,
+    lastWebhookEventId:
+      entity.event_id ||
+      body.event_id ||
+      body.id ||
+      payout.razorpay?.lastWebhookEventId ||
+      null,
     statusDetails:
       entity.status_details ||
       entity.statusDetails ||
@@ -1557,22 +1668,19 @@ const handleRazorpayPayoutWebhook = async ({
     }
   }
 
-  let updatedPayout = payout
-  if (updatedPayout.razorpay?.payoutId) {
-    updatedPayout = await syncRazorpayPayoutStatus(updatedPayout, { fetchImpl })
-  } else {
+  if (shouldApplyRazorpayPayoutStatusUpdate(previousStatus, webhookStatus)) {
     if (webhookStatus === 'SUCCESS') {
-      updatedPayout.status = 'SUCCESS'
-      updatedPayout.completedAt = new Date()
-      updatedPayout.failure = buildPayoutFailure({})
-      updatedPayout.retry = {
-        ...(updatedPayout.retry || {}),
+      payout.status = 'SUCCESS'
+      payout.completedAt = payout.completedAt || new Date()
+      payout.failure = buildPayoutFailure({})
+      payout.retry = {
+        ...(payout.retry || {}),
         nextRetryAt: null
       }
     } else if (webhookStatus === 'FAILED') {
-      updatedPayout.status = 'FAILED'
-      updatedPayout.completedAt = new Date()
-      updatedPayout.failure = buildPayoutFailure({
+      payout.status = 'FAILED'
+      payout.completedAt = payout.completedAt || new Date()
+      payout.failure = buildPayoutFailure({
         code: entity.error_code || entity.code || 'PAYOUT_FAILED',
         message:
           entity.status_message ||
@@ -1587,21 +1695,45 @@ const handleRazorpayPayoutWebhook = async ({
         isRetryable: false
       })
     } else {
-      updatedPayout.status = 'PROCESSING'
-      updatedPayout.failure = buildPayoutFailure({
+      payout.status = 'PROCESSING'
+      payout.failure = buildPayoutFailure({
         code: entity.error_code || entity.code || 'PAYOUT_PROCESSING',
         message: entity.status_message || entity.reason || 'Payout processing',
         reason: entity.status_message || entity.reason || 'Payout processing',
         isRetryable: true
       })
     }
-
-    updatedPayout = await savePayoutWithLogs(updatedPayout)
   }
 
-  console.log('Mongo status after update:', updatedPayout.status)
-  return updatedPayout
+  const savedPayout = await savePayoutWithLogs(payout)
+
+  if (savedPayout?.razorpay?.payoutId) {
+    try {
+      const syncedPayout = await syncRazorpayPayoutStatus(savedPayout, { fetchImpl })
+      logger.info('[RAZORPAY PAYOUT WEBHOOK] Background sync complete', {
+        event: eventName,
+        payoutId,
+        referenceId,
+        internalPayoutId: syncedPayout?._id?.toString?.() || null,
+        status: syncedPayout?.status || null
+      })
+      return syncedPayout
+    } catch (syncError) {
+      logger.error('[RAZORPAY PAYOUT WEBHOOK] Background sync failed', {
+        event: eventName,
+        payoutId,
+        referenceId,
+        message: syncError.message,
+        stack: syncError.stack
+      })
+    }
+  }
+
+  return savedPayout
 }
+
+const handleRazorpayPayoutWebhook = async (args = {}) =>
+  processRazorpayPayoutWebhook(args)
 
 const getPayoutSummary = async () => {
   const [created, processing, success, failed, retryPending, cancelled, total] =
@@ -1791,10 +1923,13 @@ module.exports = {
   makeTransferId,
   normalizeMoney,
   processDuePayoutRetries,
+  processRazorpayPayoutWebhook,
   patchPayeeRazorpayBeneficiary,
   syncRazorpayBeneficiaryForPayee,
   startRazorpayPayoutTransfer,
   syncRazorpayPayoutStatus,
+  verifyRazorpayPayoutWebhook,
+  verifyRazorpayPayoutWebhookSignature,
   verifyRazorpayCheckoutPayload,
   verifyRazorpayPaymentSignature,
   // Proxy / utility functions
