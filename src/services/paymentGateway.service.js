@@ -924,9 +924,7 @@ const verifyRazorpayPaymentSignatureNew = ({
   )
 }
 
-module.exports = {
-  verifyRazorpayPaymentSignature
-}
+
 
 module.exports = {
   DEFAULT_CURRENCY,
