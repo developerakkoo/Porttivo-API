@@ -230,8 +230,10 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
       ...(req.query || {}),
       ...(req.body || {})
     }
+    const gatewayMetadata = getGatewayPayloadMetadata('RAZORPAY', body)
     const orderId = String(
-      body.razorpay_order_id ||
+      gatewayMetadata.providerOrderId ||
+        body.razorpay_order_id ||
         body.order_id ||
         body.orderId ||
         body.txnid ||
@@ -239,7 +241,20 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
         body.merchant_transaction_id ||
         ''
     ).trim()
-    const paymentId = String(body.udf1 || body.paymentSessionId || '').trim()
+    const paymentEntity =
+      body.payload?.payment?.entity ||
+      (body.payment && typeof body.payment === 'object' ? body.payment.entity || body.payment : null) ||
+      {}
+    const notes =
+      paymentEntity.notes && typeof paymentEntity.notes === 'object'
+        ? paymentEntity.notes
+        : {}
+    const paymentId = String(
+      notes.paymentSessionId ||
+        body.udf1 ||
+        body.paymentSessionId ||
+        ''
+    ).trim()
 
     logger.info(`[${requestId}] Marketplace Razorpay webhook received`, {
       orderId,
@@ -275,13 +290,12 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
         orderId,
         paymentId
       })
-      return res.status(404).json({
-        success: false,
-        message: 'Payment record not found'
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received'
       })
     }
 
-    const gatewayMetadata = getGatewayPayloadMetadata('RAZORPAY', body)
     const signatureOk = verifyGatewayWebhook({
       provider: 'RAZORPAY',
       body,
@@ -681,10 +695,10 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
     // Does an actual payment document exist?
     const hasPayment = !!latestPayment
 
-    // Existing payment statuses that must block
-    // another payment attempt.
-    const paymentInProgress =
-      hasPayment && ['PENDING', 'PROCESSING', 'SUCCESS'].includes(paymentStatus)
+    // Block duplicate checkout only after gateway submission or success.
+    // PENDING = order created, buyer may still open Razorpay.
+    const paymentBlockingInitiate =
+      hasPayment && ['PROCESSING', 'SUCCESS'].includes(paymentStatus)
 
     const canInitiatePayment =
       isMarketplaceBookingTrip(trip) &&
@@ -693,7 +707,7 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
       !!booking &&
       booking.status === 'CONFIRMED' &&
       Number(booking.agreedPrice) > 0 &&
-      !paymentInProgress
+      !paymentBlockingInitiate
 
     // --------------------------------------------------
     // 9. Frontend-friendly response

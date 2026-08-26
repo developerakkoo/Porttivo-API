@@ -91,10 +91,13 @@ const createMarketplacePaymentRequestForTrip = async ({
     }
 
     const existingRequestFields = existingPayment.paymentRequest?.fields || {}
-    if (existingRequestFields.txnid && existingPayment.paymentRequest?.actionUrl) {
+    const hasCheckoutReady =
+      existingPayment.paymentRequest?.actionUrl &&
+      (existingRequestFields.order_id || existingRequestFields.txnid)
+    if (hasCheckoutReady) {
       logger.info('[MARKETPLACE_PAYMENT] Reusing existing payment request', {
         paymentId: existingPayment._id?.toString(),
-        txnid: existingRequestFields.txnid
+        orderId: existingRequestFields.order_id || existingRequestFields.txnid
       })
       return existingPayment
     }

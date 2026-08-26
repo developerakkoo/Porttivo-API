@@ -654,6 +654,19 @@ const handleGatewayWebhook = async (req, res, next) => {
     }
 
     if (!payment) {
+      // Marketplace trip payments use MarketplacePayment, but Razorpay dashboard
+      // often sends all events to the generic /api/payments/razorpay/webhook URL.
+      if (provider === 'RAZORPAY') {
+        logger.info(
+          `[${requestId}] PaymentSession not found — delegating to marketplace Razorpay handler`,
+          { merchantTransactionId }
+        )
+        const {
+          handleMarketplaceRazorpayWebhook
+        } = require('./marketplacePayment.controller')
+        return handleMarketplaceRazorpayWebhook(req, res, next)
+      }
+
       logger.warn(`[${requestId}] Payment session not found`, {
         provider,
         merchantTransactionId
