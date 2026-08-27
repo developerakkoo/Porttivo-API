@@ -158,6 +158,15 @@ const createTripAdvancePayment = async (req, res, next) => {
     }).sort({ createdAt: -1 })
 
     if (existingPendingPayment && existingPendingPayment.providerOrderId) {
+      const pendingFields =
+        existingPendingPayment.paymentRequest?.fields || {}
+      const pendingKeyId =
+        pendingFields.key || gatewayConfig.keyId || null
+      const pendingAmount =
+        pendingFields.amount != null
+          ? Number(pendingFields.amount)
+          : Math.round(Number(existingPendingPayment.amount) * 100)
+
       return res.status(200).json({
         success: true,
 
@@ -169,13 +178,16 @@ const createTripAdvancePayment = async (req, res, next) => {
           paymentSessionId: existingPendingPayment.publicId,
 
           razorpay: {
-            keyId: gatewayConfig.keyId,
+            keyId: pendingKeyId,
 
             orderId: existingPendingPayment.providerOrderId,
 
-            amount: Math.round(Number(existingPendingPayment.amount) * 100),
+            amount: pendingAmount,
 
-            currency: existingPendingPayment.currency || 'INR'
+            currency:
+              pendingFields.currency ||
+              existingPendingPayment.currency ||
+              'INR'
           }
         }
       })
@@ -345,13 +357,20 @@ const createTripAdvancePayment = async (req, res, next) => {
         },
 
         razorpay: {
-          keyId: gatewayConfig.keyId,
+          keyId:
+            paymentRequest.fields?.key ||
+            gatewayConfig.keyId ||
+            null,
 
           orderId: razorpayOrderId,
 
-          amount: Math.round(Number(normalizedAmount) * 100),
+          amount:
+            paymentRequest.fields?.amount != null
+              ? Number(paymentRequest.fields.amount)
+              : Math.round(Number(normalizedAmount) * 100),
 
-          currency: 'INR'
+          currency:
+            paymentRequest.fields?.currency || 'INR'
         }
       }
     })

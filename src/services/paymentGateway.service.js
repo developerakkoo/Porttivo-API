@@ -661,7 +661,8 @@ const getProviderConfig = (provider) => {
       provider: 'RAZORPAY',
       displayName: buildGatewayDisplayName('RAZORPAY'),
       configured: Boolean(razorpayKeyId && razorpayKeySecret),
-      mode: razorpayMode || 'sandbox'
+      mode: razorpayMode || 'sandbox',
+      keyId: razorpayKeyId
     }
   }
 
