@@ -19,6 +19,9 @@ const {
   createAutomaticPayoutForPayment
 } = require('../services/cashfreePayout.service')
 const {
+  isPayeePayoutReady
+} = require('../services/razorpayPayout.service')
+const {
   createMarketplacePaymentRequestForTrip
 } = require('../services/marketplacePayment.service')
 
@@ -121,6 +124,21 @@ const assertMarketplacePayableTrip = async (tripId, user) => {
     }
   }
 
+  const recipientId = toObjectIdString(
+    booking.sellerId?._id || booking.sellerId || trip.transporterId?._id || trip.transporterId
+  )
+  const recipientPayoutReadiness = await isPayeePayoutReady(recipientId)
+  if (!recipientPayoutReadiness?.ready) {
+    return {
+      error:
+        "Payment cannot proceed because the recipient transporter's Razorpay beneficiary details have not been added or are not active",
+      reason:
+        recipientPayoutReadiness?.reason ||
+        'RECIPIENT_RAZORPAY_BENEFICIARY_NOT_READY',
+      statusCode: 400
+    }
+  }
+
   const finalAmount = Number(booking.agreedPrice)
   if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
     return {
@@ -137,6 +155,7 @@ const assertMarketplacePayableTrip = async (tripId, user) => {
     actorId,
     finalAmount,
     milestoneOneCompleted,
+    recipientPayoutReadiness,
     existingPayment
   }
 }
@@ -150,7 +169,8 @@ const initiateMarketplaceTripRazorpayPayment = async (req, res, next) => {
     if (context.error) {
       return res.status(context.statusCode || 400).json({
         success: false,
-        message: context.error
+        message: context.error,
+        reason: context.reason || undefined
       })
     }
 
@@ -689,7 +709,7 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
     const payoutStatus = latestPayout?.status || null
 
     // --------------------------------------------------
-    // 8. Duplicate payment protection
+    // 8. Duplicate payment protection & Beneficiary check
     // --------------------------------------------------
 
     // Does an actual payment document exist?
@@ -700,6 +720,20 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
     const paymentBlockingInitiate =
       hasPayment && ['PROCESSING', 'SUCCESS'].includes(paymentStatus)
 
+    const recipientId = toObjectIdString(
+      booking?.sellerId?._id ||
+        booking?.sellerId ||
+        trip.transporterId?._id ||
+        trip.transporterId
+    )
+    const recipientPayoutReadiness = recipientId
+      ? await isPayeePayoutReady(recipientId)
+      : null
+    const recipientBeneficiaryReady = Boolean(recipientPayoutReadiness?.ready)
+    const recipientBeneficiaryReason =
+      recipientPayoutReadiness?.reason ||
+      (recipientId ? 'RAZORPAY_BENEFICIARY_NOT_READY' : null)
+
     const canInitiatePayment =
       isMarketplaceBookingTrip(trip) &&
       trip.status === 'ACTIVE' &&
@@ -707,7 +741,8 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
       !!booking &&
       booking.status === 'CONFIRMED' &&
       Number(booking.agreedPrice) > 0 &&
-      !paymentBlockingInitiate
+      !paymentBlockingInitiate &&
+      recipientBeneficiaryReady
 
     // --------------------------------------------------
     // 9. Frontend-friendly response
@@ -757,6 +792,10 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
           milestoneOneCompleted,
 
           paymentStatus,
+
+          recipientBeneficiaryReady,
+
+          recipientBeneficiaryReason,
 
           canInitiatePayment
         }

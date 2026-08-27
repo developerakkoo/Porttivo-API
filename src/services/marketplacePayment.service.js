@@ -8,6 +8,7 @@ const {
   buildPaymentInitiationRequest,
   makeTransactionId
 } = require('../services/paymentGateway.service')
+const { isPayeePayoutReady } = require('./razorpayPayout.service')
 const { marketplaceRazorpayWebhookUrl } = require('../config/env')
 
 const toObjectIdString = (value) => {
@@ -65,6 +66,16 @@ const createMarketplacePaymentRequestForTrip = async ({
     throw new Error('Final negotiated price is missing for this booking')
   }
 
+  const recipientTransporterId = toObjectIdString(
+    booking.sellerId || trip.transporterId
+  )
+  const payoutReadiness = await isPayeePayoutReady(recipientTransporterId)
+  if (!payoutReadiness?.ready) {
+    throw new Error(
+      "Payment cannot proceed because the recipient transporter's Razorpay beneficiary details have not been added or are not active"
+    )
+  }
+
   const buyer = normalizeMarketplaceBuyer(booking, payerOverrides)
   if (!buyer.email) {
     throw new Error('Buyer email is required to initiate Razorpay payment')
@@ -74,6 +85,7 @@ const createMarketplacePaymentRequestForTrip = async ({
     tripId: trip._id?.toString(),
     bookingId: booking._id?.toString(),
     buyerId: buyer.userId,
+    recipientId: recipientTransporterId,
     amount: finalAmount
   })
 
@@ -192,7 +204,7 @@ const createMarketplacePaymentRequestForTrip = async ({
   }
 }
 
-const buildMarketplacePaymentSnapshot = ({ trip, booking, payment }) => {
+const buildMarketplacePaymentSnapshot = ({ trip, booking, payment, payeePayoutReadiness }) => {
   if (!trip) {
     return null
   }
@@ -205,6 +217,10 @@ const buildMarketplacePaymentSnapshot = ({ trip, booking, payment }) => {
   const marketplaceTrip = isMarketplaceBookingTrip(trip) && Boolean(bookingId)
   const tripStarted = trip.status === 'ACTIVE'
   const paymentStatus = booking?.paymentStatus || payment?.status || 'PENDING'
+  const recipientBeneficiaryReady = payeePayoutReadiness
+    ? Boolean(payeePayoutReadiness.ready)
+    : false
+  const recipientBeneficiaryReason = payeePayoutReadiness?.reason || (sellerId ? 'RAZORPAY_BENEFICIARY_NOT_READY' : null)
 
   return {
     marketplaceTrip,
@@ -236,6 +252,8 @@ const buildMarketplacePaymentSnapshot = ({ trip, booking, payment }) => {
       milestoneOneCompleted,
       bookingConfirmed: booking?.status === 'CONFIRMED',
       hasAgreedPrice: Number.isFinite(agreedPrice) && agreedPrice > 0,
+      recipientBeneficiaryReady,
+      recipientBeneficiaryReason,
       canInitiatePayment:
         marketplaceTrip &&
         tripStarted &&
@@ -243,7 +261,8 @@ const buildMarketplacePaymentSnapshot = ({ trip, booking, payment }) => {
         booking?.status === 'CONFIRMED' &&
         Number.isFinite(agreedPrice) &&
         agreedPrice > 0 &&
-        paymentStatus !== 'SUCCESS'
+        paymentStatus !== 'SUCCESS' &&
+        recipientBeneficiaryReady
     }
   }
 }
@@ -259,7 +278,7 @@ const fetchMarketplacePaymentSnapshotByTrip = async (tripInput) => {
   }
 
   if (!isMarketplaceBookingTrip(trip) || !trip.bookingId) {
-    return buildMarketplacePaymentSnapshot({ trip, booking: null, payment: null })
+    return buildMarketplacePaymentSnapshot({ trip, booking: null, payment: null, payeePayoutReadiness: null })
   }
 
   const bookingId = trip.bookingId._id || trip.bookingId
@@ -270,7 +289,10 @@ const fetchMarketplacePaymentSnapshotByTrip = async (tripInput) => {
     MarketplacePayment.findOne({ tripId: trip._id }).sort({ createdAt: -1 })
   ])
 
-  return buildMarketplacePaymentSnapshot({ trip, booking, payment })
+  const sellerId = toObjectIdString(booking?.sellerId || trip.transporterId)
+  const payeePayoutReadiness = sellerId ? await isPayeePayoutReady(sellerId) : null
+
+  return buildMarketplacePaymentSnapshot({ trip, booking, payment, payeePayoutReadiness })
 }
 
 module.exports = {

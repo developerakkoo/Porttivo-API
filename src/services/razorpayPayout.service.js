@@ -1920,6 +1920,43 @@ const getRazorpayTransaction = async (
   )
   return result.data || {}
 }
+const isPayeePayoutReady = async payeeId => {
+  const { payee, modelName } = await findPayeeRecordById(payeeId)
+
+  if (!payee) {
+    return {
+      ready: false,
+      reason: 'PAYEE_NOT_FOUND',
+      message: 'Payee record not found'
+    }
+  }
+
+  const beneficiary = payee.razorpayBeneficiary || {}
+
+  if (
+    !beneficiary.contactId ||
+    !beneficiary.fundAccountId ||
+    String(beneficiary.status || '').toUpperCase() !== 'ACTIVE'
+  ) {
+    return {
+      ready: false,
+      reason: 'RAZORPAY_BENEFICIARY_NOT_READY',
+      message:
+        "Payee's Razorpay beneficiary details have not been added or are not active"
+    }
+  }
+
+  return {
+    ready: true,
+    contactId: beneficiary.contactId,
+    fundAccountId: beneficiary.fundAccountId,
+    payee,
+    modelName
+  }
+}
+
+const isTransporterPayoutReady = isPayeePayoutReady
+
 const isDriverPayoutReady = async driverId => {
   const { payee } = await findPayeeRecordById(driverId)
 
@@ -1982,5 +2019,7 @@ module.exports = {
   getRazorpayPayout,
   listRazorpayTransactions,
   getRazorpayTransaction,
-  isDriverPayoutReady
+  isDriverPayoutReady,
+  isPayeePayoutReady,
+  isTransporterPayoutReady
 }

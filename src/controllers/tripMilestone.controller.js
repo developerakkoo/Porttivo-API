@@ -296,27 +296,35 @@ const updateMilestone = async (req, res, next) => {
           .populate('sellerId', 'name company mobile email')
 
         if (booking) {
-          const payment = await createMarketplacePaymentRequestForTrip({
-            trip,
-            booking,
-            initiatedBy: {
-              userId: userId || null,
-              userType: toAuditUserType(userType)
-            },
-            payerOverrides: {
-              email: booking.buyerId?.email,
-              name: booking.buyerId?.name || booking.buyerId?.company,
-              mobile: booking.buyerId?.mobile
-            }
-          })
+          try {
+            const payment = await createMarketplacePaymentRequestForTrip({
+              trip,
+              booking,
+              initiatedBy: {
+                userId: userId || null,
+                userType: toAuditUserType(userType)
+              },
+              payerOverrides: {
+                email: booking.buyerId?.email,
+                name: booking.buyerId?.name || booking.buyerId?.company,
+                mobile: booking.buyerId?.mobile
+              }
+            })
 
-          logger.info('Marketplace payment request auto-created on milestone 1', {
-            tripId: trip._id?.toString(),
-            bookingId: booking._id?.toString(),
-            paymentId: payment._id?.toString(),
-            status: payment.status,
-            amount: payment.amount
-          })
+            logger.info('Marketplace payment request auto-created on milestone 1', {
+              tripId: trip._id?.toString(),
+              bookingId: booking._id?.toString(),
+              paymentId: payment._id?.toString(),
+              status: payment.status,
+              amount: payment.amount
+            })
+          } catch (autoPaymentError) {
+            logger.info('Marketplace auto-payment deferred on milestone 1', {
+              tripId: trip._id?.toString(),
+              bookingId: booking._id?.toString(),
+              message: autoPaymentError.message
+            })
+          }
         }
 
         const paymentSnapshot = await fetchMarketplacePaymentSnapshotByTrip(trip)
