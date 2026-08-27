@@ -56,7 +56,7 @@ router.use(authenticate);
 
 // Trip CRUD routes
 router.post('/:tripId/advance/pay', createTripAdvancePayment);
-router.post('/trips/:tripId/advance/verify', verifyTripAdvancePayment);
+router.post('/:tripId/advance/verify', verifyTripAdvancePayment);
 router.get('/advance/payments', getTransporterTripAdvancePayments);
 router.post('/customer/book', bookCustomerTrip);
 router.get('/customer/my-trips', getCustomerTrips);
@@ -84,7 +84,6 @@ router.get('/group/:groupId', getTripGroup);
 router.get('/:id', getTripById);
 router.put('/:id', updateTrip);
 router.put('/:id/cancel', cancelTrip);
-router.post('/:tripId/advance/pay', createTripAdvancePayment)
 // Trip status routes
 router.put('/:id/accept-driver', acceptTripByDriver);
 router.put('/:id/start', startTrip);

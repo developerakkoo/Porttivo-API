@@ -13,6 +13,7 @@ const {
   getQueuedTrips,
   getTripHistory,
 } = require('../controllers/driver.controller');
+const { getDriverTripAdvancePayments } = require('../controllers/tripAdvancePayment.controller');
 
 // All routes require authentication
 router.use(authenticate);
@@ -158,5 +159,20 @@ router.get('/trips/history', (req, res, next) => {
   }
   next();
 }, getTripHistory);
+
+/**
+ * @route   GET /api/drivers/advance/payments
+ * @desc    Get driver's trips with advance payment/payout status
+ * @access  Private (Driver only)
+ */
+router.get('/advance/payments', (req, res, next) => {
+  if (req.user.userType !== 'driver') {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. This endpoint is for drivers only.',
+    });
+  }
+  next();
+}, getDriverTripAdvancePayments);
 
 module.exports = router;
