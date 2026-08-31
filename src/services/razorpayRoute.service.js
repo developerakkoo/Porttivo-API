@@ -3,7 +3,8 @@ const crypto = require('crypto')
 const {
   razorpayApiBaseUrl,
   razorpayKeyId,
-  razorpayKeySecret
+  razorpayKeySecret,
+  razorpayPaymentLinkWebhookUrl
 } = require('../config/env')
 
 const buildAuthHeader = () => {
@@ -139,6 +140,7 @@ const createPaymentLinkWithTransfer = async ({
   routeAccountId,
   notes = {},
   expireBy,
+  callbackUrl,
   fetchImpl = global.fetch
 }) => {
   if (!routeAccountId) {
@@ -187,6 +189,10 @@ const createPaymentLinkWithTransfer = async ({
     },
 
     reminder_enable: true,
+
+    callback_url: callbackUrl || razorpayPaymentLinkWebhookUrl,
+
+    callback_method: 'get',
 
     notes: {
       source: 'PORTTIVO',

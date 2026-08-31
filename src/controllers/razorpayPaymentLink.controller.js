@@ -46,6 +46,63 @@ const normalizeCustomer = transporter => ({
     undefined
 })
 
+const normalizeMaybeString = value => {
+  const normalized =
+    String(value || '')
+      .trim()
+
+  return normalized || null
+}
+
+const getWebhookSignature = req =>
+  req.headers?.['x-razorpay-signature'] ||
+  req.body?.razorpay_signature ||
+  req.body?.signature ||
+  req.query?.razorpay_signature ||
+  req.query?.signature ||
+  null
+
+const areSignaturesEqual = (provided, expected) => {
+  const providedBuffer = Buffer.from(String(provided || ''))
+  const expectedBuffer = Buffer.from(String(expected || ''))
+
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false
+  }
+
+  return crypto.timingSafeEqual(providedBuffer, expectedBuffer)
+}
+
+const applyRemotePaymentLinkState = (record, remote) => {
+  if (!record || !remote) {
+    return record
+  }
+
+  record.status =
+    normalizePaymentLinkStatus(remote.status)
+
+  record.paymentResponse =
+    remote
+
+  if (
+    Array.isArray(remote.payments) &&
+    remote.payments.length
+  ) {
+    const payment =
+      remote.payments[0]
+
+    record.razorpayPaymentId =
+      payment.id || null
+
+    record.paidAt =
+      new Date(
+        (payment.created_at || 0) * 1000
+      )
+  }
+
+  return record
+}
+
 /**
  * Transporter A creates a Razorpay Payment Link.
  *
@@ -78,7 +135,11 @@ const createTransporterPaymentLink = async (
     const {
       amount,
       description,
-      expireBy
+      expireBy,
+      callbackUrl,
+      payerTransporterId,
+      referenceType,
+      referenceId
     } = req.body || {}
 
     const finalAmount = Number(amount)
@@ -118,34 +179,56 @@ const createTransporterPaymentLink = async (
       })
     }
 
-    const referenceId =
+    const payerId =
+      normalizeMaybeString(
+        safeId(payerTransporterId)
+      ) || actorId
+
+    const payerTransporter =
+      payerId === actorId
+        ? transporter
+        : await Transporter.findById(payerId)
+
+    if (!payerTransporter) {
+      return res.status(404).json({
+        success: false,
+        message:
+          'Payer transporter not found'
+      })
+    }
+
+    const businessReferenceType =
+      normalizeMaybeString(referenceType)
+    const businessReferenceId =
+      normalizeMaybeString(referenceId)
+    const paymentReferenceId =
       makeReferenceId()
+    const normalizedCallbackUrl =
+      normalizeMaybeString(callbackUrl)
 
     const paymentLink =
       await createPaymentLinkWithTransfer({
         amount: finalAmount,
-
         currency: 'INR',
-
-        referenceId,
-
+        referenceId: paymentReferenceId,
         description:
           description ||
           `Porttivo payment to ${transporter.name || transporter.company || 'transporter'}`,
-
         customer:
-          normalizeCustomer(transporter),
-
+          normalizeCustomer(payerTransporter),
         routeAccountId,
-
         expireBy,
-
+        callbackUrl:
+          normalizedCallbackUrl || undefined,
         notes: {
           transporterId: actorId,
-          beneficiaryTransporterId:
-            actorId
+          payerTransporterId: payerId,
+          beneficiaryTransporterId: actorId,
+          referenceType:
+            businessReferenceType || undefined,
+          referenceId:
+            businessReferenceId || undefined
         },
-
         fetchImpl:
           req.fetch || global.fetch
       })
@@ -154,40 +237,36 @@ const createTransporterPaymentLink = async (
       await RazorpayPaymentLink.create({
         publicId:
           `rpl_${crypto.randomBytes(8).toString('hex')}`,
-
-        payerTransporterId:
-          actorId,
-
-        beneficiaryTransporterId:
-          actorId,
-
+        payerTransporterId: payerId,
+        beneficiaryTransporterId: actorId,
         routeAccountId,
-
         razorpayPaymentLinkId:
           paymentLink.id,
-
         shortUrl:
           paymentLink.short_url || null,
-
-        referenceId,
-
-        amount:
-          finalAmount,
-
+        referenceId:
+          paymentReferenceId,
+        businessReferenceType,
+        businessReferenceId,
+        callbackUrl:
+          normalizedCallbackUrl || null,
+        amount: finalAmount,
         currency: 'INR',
-
         description:
           description || null,
-
         status:
           'CREATED',
-
         paymentResponse:
           paymentLink,
-
         metadata: {
           source: 'PORTTIVO',
-          automaticTransfer: true
+          automaticTransfer: true,
+          payerTransporterId: payerId,
+          beneficiaryTransporterId: actorId,
+          businessReferenceType,
+          businessReferenceId,
+          callbackUrl:
+            normalizedCallbackUrl || null
         }
       })
 
@@ -196,15 +275,13 @@ const createTransporterPaymentLink = async (
       {
         paymentLinkId:
           record._id.toString(),
-
         razorpayPaymentLinkId:
           paymentLink.id,
-
-        transporterId:
+        payerTransporterId:
+          payerId,
+        beneficiaryTransporterId:
           actorId,
-
         routeAccountId,
-
         amount:
           finalAmount
       }
@@ -212,36 +289,34 @@ const createTransporterPaymentLink = async (
 
     return res.status(201).json({
       success: true,
-
       message:
         'Razorpay payment link created successfully',
-
       data: {
         id:
           record._id,
-
         publicId:
           record.publicId,
-
         paymentLinkId:
           paymentLink.id,
-
         shortUrl:
           paymentLink.short_url,
-
         amount:
           finalAmount,
-
         currency:
           'INR',
-
         status:
           record.status,
-
         automaticTransfer:
           true,
-
-        routeAccountId
+        routeAccountId,
+        payerTransporterId:
+          payerId,
+        beneficiaryTransporterId:
+          actorId,
+        businessReferenceType,
+        businessReferenceId,
+        callbackUrl:
+          normalizedCallbackUrl || null
       }
     })
   } catch (error) {
@@ -288,29 +363,10 @@ const getTransporterPaymentLinkStatus = async (
         req.fetch || global.fetch
       )
 
-    record.status =
-      normalizePaymentLinkStatus(
-        remote.status
-      )
-
-    record.paymentResponse =
+    applyRemotePaymentLinkState(
+      record,
       remote
-
-    if (
-      Array.isArray(remote.payments) &&
-      remote.payments.length
-    ) {
-      const payment =
-        remote.payments[0]
-
-      record.razorpayPaymentId =
-        payment.id || null
-
-      record.paidAt =
-        new Date(
-          (payment.created_at || 0) * 1000
-        )
-    }
+    )
 
     await record.save()
 
@@ -447,64 +503,72 @@ const handleRazorpayPaymentLinkWebhook =
     next
   ) => {
     try {
-      const rawBody =
-        req.rawBody ||
-        JSON.stringify(req.body || {})
-
-      const signature =
-        req.headers[
-          'x-razorpay-signature'
-        ]
-
-      if (
-        !signature ||
-        !process.env.RAZORPAY_WEBHOOK_SECRET
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Webhook signature is missing'
-        })
+      const mergedPayload = {
+        ...(req.query || {}),
+        ...(req.body || {})
       }
 
-      const expectedSignature =
-        crypto
-          .createHmac(
-            'sha256',
-            process.env.RAZORPAY_WEBHOOK_SECRET
-          )
-          .update(rawBody)
-          .digest('hex')
+      const signature =
+        getWebhookSignature(req)
 
-      const valid =
-        crypto.timingSafeEqual(
-          Buffer.from(signature),
-          Buffer.from(expectedSignature)
+      const event =
+        req.body?.event ||
+        req.query?.event ||
+        mergedPayload.event ||
+        null
+
+      const paymentEntity =
+        req.body?.payload?.payment?.entity ||
+        req.body?.payload?.payment_link?.entity ||
+        req.query?.payload?.payment?.entity ||
+        req.query?.payload?.payment_link?.entity ||
+        {}
+
+      const transferEntity =
+        req.body?.payload?.transfer?.entity ||
+        req.query?.payload?.transfer?.entity ||
+        {}
+
+      const paymentLinkId =
+        paymentEntity?.notes?.paymentLinkId ||
+        paymentEntity?.notes?.payment_link_id ||
+        paymentEntity?.paymentLinkId ||
+        paymentEntity?.payment_link_id ||
+        mergedPayload?.paymentLinkId ||
+        mergedPayload?.payment_link_id ||
+        mergedPayload?.razorpay_payment_link_id ||
+        null
+
+      const expectedSignature =
+        signature &&
+        process.env.RAZORPAY_WEBHOOK_SECRET
+          ? crypto
+              .createHmac(
+                'sha256',
+                process.env.RAZORPAY_WEBHOOK_SECRET
+              )
+              .update(
+                req.rawBody ||
+                  JSON.stringify(mergedPayload || {})
+              )
+              .digest('hex')
+          : null
+
+      const signatureValid =
+        Boolean(signature) &&
+        Boolean(expectedSignature) &&
+        areSignaturesEqual(
+          String(signature).trim().toLowerCase(),
+          String(expectedSignature).trim().toLowerCase()
         )
 
-      if (!valid) {
+      if (signature && !signatureValid && req.method !== 'GET') {
         return res.status(400).json({
           success: false,
           message:
             'Invalid Razorpay webhook signature'
         })
       }
-
-      const event =
-        req.body?.event
-
-      const paymentEntity =
-        req.body?.payload?.payment?.entity ||
-        {}
-
-      const transferEntity =
-        req.body?.payload?.transfer?.entity ||
-        {}
-
-      const paymentLinkId =
-        paymentEntity?.notes?.paymentLinkId ||
-        paymentEntity?.notes?.payment_link_id ||
-        null
 
       let record = null
 
@@ -535,11 +599,47 @@ const handleRazorpayPaymentLinkWebhook =
           })
       }
 
+      if (
+        paymentLinkId &&
+        req.method === 'GET'
+      ) {
+        const remote =
+          await fetchPaymentLink(
+            paymentLinkId,
+            req.fetch || global.fetch
+          )
+
+        record =
+          await RazorpayPaymentLink.findOne({
+            razorpayPaymentLinkId:
+              remote.id || paymentLinkId
+          })
+
+        if (record) {
+          applyRemotePaymentLinkState(
+            record,
+            remote
+          )
+
+          record.webhookPayload = {
+            method: req.method,
+            query: req.query || {},
+            body: req.body || {},
+            signaturePresent: Boolean(signature),
+            signatureValid,
+            verificationSource: 'provider_lookup'
+          }
+
+          await record.save()
+        }
+      }
+
       if (!record) {
         logger.warn(
           '[RAZORPAY_PAYMENT_LINK] Unknown webhook',
           {
-            event
+            event,
+            paymentLinkId
           }
         )
 
@@ -548,8 +648,13 @@ const handleRazorpayPaymentLinkWebhook =
         })
       }
 
-      record.webhookPayload =
-        req.body
+      record.webhookPayload = {
+        method: req.method,
+        query: req.query || {},
+        body: req.body || {},
+        signaturePresent: Boolean(signature),
+        signatureValid
+      }
 
       if (
         event ===

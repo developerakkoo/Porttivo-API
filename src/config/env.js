@@ -137,6 +137,9 @@ module.exports = {
   razorpayWebhookUrl:
     process.env.RAZORPAY_WEBHOOK_URL ||
     buildApiUrl('/api/payments/razorpay/webhook'),
+  razorpayPaymentLinkWebhookUrl:
+    process.env.RAZORPAY_PAYMENT_LINK_WEBHOOK_URL ||
+    buildApiUrl('/api/razorpay-payment-links/razorpay/webhook'),
   marketplaceRazorpayWebhookUrl:
     process.env.MARKETPLACE_RAZORPAY_WEBHOOK_URL ||
     buildApiUrl('/api/marketplace-payments/razorpay/webhook'),

@@ -6,6 +6,7 @@ const { createMockRes } = require('../tests/helpers/http');
 const paymentScreenTests = require('../tests/paymentScreen.test');
 const payoutFlowTests = require('../tests/payoutFlow.test');
 const marketplacePaymentBeneficiaryTests = require('../tests/marketplacePaymentBeneficiary.test');
+const razorpayPaymentLinkTests = require('../tests/razorpayPaymentLink.test');
 
 const buildTripCreateController = (overrides = {}) =>
   loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
@@ -86,6 +87,7 @@ const tests = [
   ...paymentScreenTests,
   ...payoutFlowTests,
   ...marketplacePaymentBeneficiaryTests,
+  ...razorpayPaymentLinkTests,
   {
     name: 'active customer trips include driver location and trip progress',
     async run() {

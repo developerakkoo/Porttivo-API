@@ -22,6 +22,7 @@ const {
  * IMPORTANT:
  * This route must be reachable without JWT authentication.
  */
+router.get( '/razorpay/webhook', handleRazorpayPaymentLinkWebhook )
 router.post( '/razorpay/webhook', handleRazorpayPaymentLinkWebhook )
 router.use(authenticate) 
 

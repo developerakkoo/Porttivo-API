@@ -31,6 +31,31 @@ const razorpayPaymentLinkSchema = new mongoose.Schema(
       trim: true
     },
 
+    payerTransporterId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Transporter',
+      default: null,
+      index: true
+    },
+
+    businessReferenceType: {
+      type: String,
+      default: null,
+      trim: true
+    },
+
+    businessReferenceId: {
+      type: String,
+      default: null,
+      trim: true,
+      index: true
+    },
+
+    callbackUrl: {
+      type: String,
+      default: null
+    },
+
     razorpayPaymentLinkId: {
       type: String,
       required: true,
@@ -156,6 +181,11 @@ razorpayPaymentLinkSchema.index({
 razorpayPaymentLinkSchema.index({
   beneficiaryTransporterId: 1,
   status: 1
+})
+
+razorpayPaymentLinkSchema.index({
+  payerTransporterId: 1,
+  createdAt: -1
 })
 
 module.exports = mongoose.model(
