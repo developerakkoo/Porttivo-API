@@ -29,7 +29,7 @@ function parseRoutesInput(rawRoutes) {
     const dest = normalizeLocationInput(entry.destination)
     const err = validateLocationInput(dest, 'destination', {
       required: true,
-      requireCoordinates: false
+      requireCoordinates: true
     })
     if (err) {
       return { ok: false, message: `route ${i + 1}: ${err}` }

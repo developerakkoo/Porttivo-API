@@ -1469,6 +1469,121 @@ const tests = [
     },
   },
   {
+    name: 'acceptBooking is idempotent when booking already has a trip',
+    async run() {
+      let tripCreates = 0;
+      const bookingState = {
+        _id: 'booking-1',
+        postId: 'post-1',
+        assignmentId: 'assignment-1',
+        buyerId: 'buyer-1',
+        sellerId: 'seller-1',
+        vehicleId: 'vehicle-1',
+        lastPriceProposal: { proposedPrice: 4700, proposedBy: 'buyer-1' },
+        estimatedPrice: 5000,
+        status: 'CONFIRMED',
+        tripId: 'trip-1',
+        async save() {
+          return this;
+        },
+        populate() {
+          return this;
+        },
+        async lean() {
+          return this;
+        },
+      };
+
+      const bookingController = loadWithMocks(path.resolve(process.cwd(), 'src/controllers/vehicleBooking.controller.js'), {
+        '../models/Notification': {},
+        '../models/VehicleBooking': {
+          findById: () => bookingState,
+        },
+        '../models/VehicleRouteAvailability': {
+          findOneAndUpdate: async () => ({}),
+          findById: () => ({ session: async () => ({}) }),
+        },
+        '../models/VehicleRouteAssignment': {
+          findOne: () => ({
+            session: async () => ({ _id: 'assignment-1' }),
+          }),
+          findByIdAndUpdate: async () => ({}),
+          countDocuments: async () => 0,
+        },
+        '../models/TransporterMessage': {
+          create: async (payload) => payload,
+          updateMany: async () => {},
+          find: async () => [],
+        },
+        '../models/Vehicle': {},
+        '../models/Transporter': {},
+        '../services/bookingToTrip.service': {
+          createTripFromBooking: async (booking) => {
+            tripCreates += 1;
+            booking.tripId = 'trip-new';
+            return { _id: 'trip-new' };
+          },
+        },
+        '../services/socket.service': {
+          getIO: () => ({
+            to: () => ({
+              emit: () => {},
+            }),
+            emit: () => {},
+          }),
+        },
+        '../models/VehicleBookingAudit': {
+          VehicleBookingAudit: {
+            logAction: async () => {},
+          },
+          BOOKING_AUDIT_ACTIONS: {
+            CONFIRMED: 'CONFIRMED',
+            REJECTED: 'REJECTED',
+            CANCELLED: 'CANCELLED',
+            BOOKING_SUBMITTED: 'BOOKING_SUBMITTED',
+            PRICE_PROPOSED: 'PRICE_PROPOSED',
+            PRICE_ACCEPTED: 'PRICE_ACCEPTED',
+            INQUIRY_CREATED: 'INQUIRY_CREATED',
+            STATUS_CHANGED: 'STATUS_CHANGED',
+          },
+        },
+        '../utils/transporterActor': {
+          getTransporterActorId: () => 'seller-1',
+        },
+        '../utils/marketplaceChatPayload': {
+          buildChatMessageSocketPayload: () => ({}),
+        },
+        '../utils/marketplaceNotification': {
+          buildMarketplaceMessageNotificationFields: () => ({ title: '', message: '', data: {} }),
+        },
+        mongoose: {
+          ...mongoose,
+          startSession: async () => ({
+            startTransaction: () => {},
+            commitTransaction: async () => {},
+            abortTransaction: async () => {},
+            endSession: () => {},
+          }),
+        },
+      });
+
+      const confirmReq = {
+        params: { id: 'booking-1' },
+        user: { id: 'seller-1' },
+      };
+      const confirmRes = createMockRes();
+
+      await bookingController.acceptBooking(confirmReq, confirmRes, (error) => {
+        throw error;
+      });
+
+      assert.equal(confirmRes.statusCode, 200);
+      assert.equal(tripCreates, 0);
+      assert.equal(bookingState.tripId, 'trip-1');
+      assert.match(confirmRes.body.message || '', /already confirmed/i);
+    },
+  },
+  {
     name: 'reviewCashReceipt approves cashback and credits driver wallet',
     async run() {
       let creditCall = null;

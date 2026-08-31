@@ -714,6 +714,19 @@ const acceptProposal = async (req, res, next) => {
       .populate('vehicleId', 'vehicleNumber vehicleType')
       .lean()
 
+    try {
+      const io = getIO()
+      const payload = { booking: populatedBooking }
+      io.to(`chat:${id}`).emit('booking:price-accepted', payload)
+      io.to(`transporter:${booking.buyerId}`).emit('booking:price-accepted', payload)
+      io.to(`transporter:${booking.sellerId}`).emit('booking:price-accepted', payload)
+    } catch (err) {
+      console.warn(
+        'Socket emit failed (booking:price-accepted):',
+        err.message || err
+      )
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Price offer accepted',
@@ -855,6 +868,23 @@ const acceptBooking = async (req, res, next) => {
       })
     }
 
+    const populateConfirmedBooking = () =>
+      VehicleBooking.findById(id)
+        .populate('buyerId', 'name mobile company')
+        .populate('sellerId', 'name mobile company')
+        .populate('vehicleId', 'vehicleNumber vehicleType')
+        .lean()
+
+    // Idempotent: already confirmed with a trip — do not create another.
+    if (booking.status === 'CONFIRMED' && booking.tripId) {
+      const populatedBookingEarly = await populateConfirmedBooking()
+      return res.status(200).json({
+        success: true,
+        message: 'Booking already confirmed',
+        data: { booking: populatedBookingEarly }
+      })
+    }
+
     // 🔒 Valid status check
     if (!['REQUESTED', 'NEGOTIATING'].includes(booking.status)) {
       return res.status(400).json({
@@ -888,6 +918,24 @@ const acceptBooking = async (req, res, next) => {
     let updatedPost = null
 
     try {
+      let liveBooking = booking
+      const liveQuery = VehicleBooking.findById(id)
+      if (liveQuery && typeof liveQuery.session === 'function') {
+        const locked = await liveQuery.session(session)
+        if (locked) liveBooking = locked
+      }
+
+      if (liveBooking.status === 'CONFIRMED' && liveBooking.tripId) {
+        populatedBooking = await populateConfirmedBooking()
+        await session.abortTransaction()
+        session.endSession()
+        return res.status(200).json({
+          success: true,
+          message: 'Booking already confirmed',
+          data: { booking: populatedBooking }
+        })
+      }
+
       const assignmentExists = await VehicleRouteAssignment.findOne({
         _id: booking.assignmentId,
         isReleased: { $ne: true }
@@ -901,6 +949,9 @@ const acceptBooking = async (req, res, next) => {
       booking.status = 'CONFIRMED'
       booking.acceptedAt = new Date()
       booking.confirmedAt = new Date()
+      if (liveBooking.tripId && !booking.tripId) {
+        booking.tripId = liveBooking.tripId
+      }
 
       await consumeConfirmedBookingSlot(booking.postId, session)
 

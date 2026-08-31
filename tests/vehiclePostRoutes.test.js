@@ -19,17 +19,38 @@ test('parseRoutesInput rejects non-array', () => {
 
 test('parseRoutesInput parses destination + rates and treats empty rate as null', () => {
   const r = parseRoutesInput([
-    { destination: 'Mumbai', exportRate: 45000, importRate: '' },
-    { destination: { formattedAddress: 'Delhi' }, exportRate: '', importRate: 30000 }
+    {
+      destination: {
+        formattedAddress: 'Mumbai',
+        coordinates: [72.8777, 19.076]
+      },
+      exportRate: 45000,
+      importRate: ''
+    },
+    {
+      destination: {
+        formattedAddress: 'Delhi',
+        coordinates: [77.209, 28.6139]
+      },
+      exportRate: '',
+      importRate: 30000
+    }
   ])
   assert.equal(r.ok, true)
   assert.equal(r.routes.length, 2)
   assert.equal(r.routes[0].destination.formattedAddress, 'Mumbai')
+  assert.deepEqual(r.routes[0].destination.coordinates, [72.8777, 19.076])
   assert.equal(r.routes[0].exportRate, 45000)
   assert.equal(r.routes[0].importRate, null)
   assert.equal(r.routes[1].destination.formattedAddress, 'Delhi')
   assert.equal(r.routes[1].exportRate, null)
   assert.equal(r.routes[1].importRate, 30000)
+})
+
+test('parseRoutesInput rejects route without coordinates', () => {
+  const r = parseRoutesInput([{ destination: 'Pune', exportRate: 45000 }])
+  assert.equal(r.ok, false)
+  assert.match(r.message, /coordinates/)
 })
 
 test('parseRoutesInput requires a destination', () => {
@@ -38,7 +59,15 @@ test('parseRoutesInput requires a destination', () => {
 })
 
 test('parseRoutesInput rejects negative rate', () => {
-  const r = parseRoutesInput([{ destination: 'Pune', exportRate: -1 }])
+  const r = parseRoutesInput([
+    {
+      destination: {
+        formattedAddress: 'Pune',
+        coordinates: [73.8567, 18.5204]
+      },
+      exportRate: -1
+    }
+  ])
   assert.equal(r.ok, false)
 })
 
