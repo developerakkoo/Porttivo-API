@@ -45,6 +45,7 @@ const notificationRoutes = require('./src/routes/notification.routes');
 const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
 const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
 const marketplacePaymentRoutes = require('./src/routes/marketplacePayment.routes');
+const razorpayPaymentLinkRoutes = require('./src/routes/razorpayPaymentLink.routes');
 const paymentRoutes = require('./src/routes/payment.routes');
 const payoutRoutes = require('./src/routes/payout.routes');
 const messageRoutes = require('./src/routes/message.routes');
@@ -161,6 +162,7 @@ app.use('/api/vehicle-bookings', vehicleBookingRoutes);
 app.use('/api/marketplace-payments', marketplacePaymentRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/payouts', payoutRoutes);
+app.use('/api/razorpay-payment-links', razorpayPaymentLinkRoutes)
 app.use('/api/messages', messageRoutes);
 app.use('/api/requirements', requirementRoutes);
 app.use('/api/quotes', quoteRoutes);

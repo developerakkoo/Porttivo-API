@@ -1,10 +1,10 @@
-const mongoose = require('mongoose');
-const { validateMobile, validateEmail } = require('../utils/validation');
+const mongoose = require('mongoose')
+const { validateMobile, validateEmail } = require('../utils/validation')
 const {
   OPERATING_COUNTRIES,
-  DEFAULT_OPERATING_COUNTRY,
-} = require('../constants/operatingCountries');
-const bcrypt = require('bcryptjs');
+  DEFAULT_OPERATING_COUNTRY
+} = require('../constants/operatingCountries')
+const bcrypt = require('bcryptjs')
 
 const transporterSchema = new mongoose.Schema(
   {
@@ -16,14 +16,14 @@ const transporterSchema = new mongoose.Schema(
       trim: true,
       validate: {
         validator: function (v) {
-          return validateMobile(v);
+          return validateMobile(v)
         },
-        message: 'Mobile number must be 10 digits',
-      },
+        message: 'Mobile number must be 10 digits'
+      }
     },
     name: {
       type: String,
-      trim: true,
+      trim: true
     },
     email: {
       type: String,
@@ -31,15 +31,15 @@ const transporterSchema = new mongoose.Schema(
       lowercase: true,
       validate: {
         validator: function (v) {
-          if (v == null || v === '') return true;
-          return validateEmail(v);
+          if (v == null || v === '') return true
+          return validateEmail(v)
         },
-        message: 'Please provide a valid email',
-      },
+        message: 'Please provide a valid email'
+      }
     },
     company: {
       type: String,
-      trim: true,
+      trim: true
     },
     operatingCountry: {
       type: String,
@@ -48,189 +48,195 @@ const transporterSchema = new mongoose.Schema(
       default: DEFAULT_OPERATING_COUNTRY,
       enum: {
         values: OPERATING_COUNTRIES,
-        message: 'Operating country must be a supported ISO country code',
-      },
+        message: 'Operating country must be a supported ISO country code'
+      }
     },
     pin: {
       type: String,
-      select: false, // Don't return PIN by default
+      select: false // Don't return PIN by default
     },
     hasAccess: {
       type: Boolean,
-      default: true,
+      default: true
     },
     status: {
       type: String,
       enum: ['active', 'inactive', 'blocked', 'pending'],
-      default: 'active',
+      default: 'active'
     },
     walletBalance: {
       type: Number,
-      default: 0,
+      default: 0
     },
     // Aggregate rating shown on marketplace quote cards. Null until rated.
     rating: {
       type: Number,
       default: null,
       min: 0,
-      max: 5,
+      max: 5
     },
     ratingCount: {
       type: Number,
       default: 0,
-      min: 0,
+      min: 0
     },
     cashfreeBeneId: {
       type: String,
       trim: true,
       default: null,
-      index: true,
+      index: true
     },
     cashfreeBeneficiary: {
       beneId: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       name: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       email: {
         type: String,
         trim: true,
         lowercase: true,
-        default: null,
+        default: null
       },
       phone: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       status: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       // Full bank account and IFSC are stored at Cashfree only, never here.
       bankAccountLast4: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       address: {
         type: mongoose.Schema.Types.Mixed,
-        default: {},
+        default: {}
       },
       verification: {
         type: mongoose.Schema.Types.Mixed,
-        default: {},
+        default: {}
       },
       providerResponse: {
         type: mongoose.Schema.Types.Mixed,
-        default: {},
+        default: {}
       },
       removalResponse: {
         type: mongoose.Schema.Types.Mixed,
-        default: {},
+        default: {}
       },
       verifiedAt: {
         type: Date,
-        default: null,
+        default: null
       },
       deletedAt: {
         type: Date,
-        default: null,
+        default: null
       },
       createdAt: {
         type: Date,
-        default: null,
+        default: null
       },
       updatedAt: {
         type: Date,
-        default: null,
-      },
+        default: null
+      }
     },
     razorpayBeneficiary: {
       contactId: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       fundAccountId: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       status: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       bankAccountLast4: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       accountType: {
         type: String,
         trim: true,
-        default: 'bank_account',
+        default: 'bank_account'
       },
       referenceId: {
         type: String,
         trim: true,
-        default: null,
+        default: null
       },
       providerResponse: {
         type: mongoose.Schema.Types.Mixed,
-        default: {},
+        default: {}
       },
       verifiedAt: {
         type: Date,
-        default: null,
+        default: null
       },
       createdAt: {
         type: Date,
-        default: null,
+        default: null
       },
       updatedAt: {
         type: Date,
-        default: null,
-      },
+        default: null
+      }
     },
+    razorpayRouteAccountId: {
+      type: String,
+      trim: true,
+      default: null,
+      index: true
+    }
   },
   {
-    timestamps: true,
+    timestamps: true
   }
-);
+)
 
 // Hash PIN before saving
 transporterSchema.pre('save', async function () {
   if (!this.isModified('pin') || !this.pin) {
-    return;
+    return
   }
 
   try {
-    const salt = await bcrypt.genSalt(10);
-    this.pin = await bcrypt.hash(this.pin, salt);
+    const salt = await bcrypt.genSalt(10)
+    this.pin = await bcrypt.hash(this.pin, salt)
   } catch (error) {
-    throw error;
+    throw error
   }
-});
+})
 
 // Method to compare PIN
 transporterSchema.methods.comparePin = async function (candidatePin) {
   if (!this.pin) {
-    return false;
+    return false
   }
-  return await bcrypt.compare(candidatePin, this.pin);
-};
+  return await bcrypt.compare(candidatePin, this.pin)
+}
 
 // Method to check if PIN is set
 transporterSchema.methods.hasPinSet = function () {
-  return !!this.pin;
-};
+  return !!this.pin
+}
 
-module.exports = mongoose.model('Transporter', transporterSchema);
+module.exports = mongoose.model('Transporter', transporterSchema)
