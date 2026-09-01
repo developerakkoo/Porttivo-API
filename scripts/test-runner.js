@@ -7,6 +7,7 @@ const paymentScreenTests = require('../tests/paymentScreen.test');
 const payoutFlowTests = require('../tests/payoutFlow.test');
 const marketplacePaymentBeneficiaryTests = require('../tests/marketplacePaymentBeneficiary.test');
 const razorpayPaymentLinkTests = require('../tests/razorpayPaymentLink.test');
+const transporterPaymentHistoryTests = require('../tests/transporterPaymentHistory.test');
 
 const buildTripCreateController = (overrides = {}) =>
   loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
@@ -88,6 +89,7 @@ const tests = [
   ...payoutFlowTests,
   ...marketplacePaymentBeneficiaryTests,
   ...razorpayPaymentLinkTests,
+  ...transporterPaymentHistoryTests,
   {
     name: 'active customer trips include driver location and trip progress',
     async run() {

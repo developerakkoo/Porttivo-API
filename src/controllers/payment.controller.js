@@ -21,6 +21,7 @@ const {
 } = require('../services/cashfreePayout.service')
 
 const Payout = require('../models/Payout')
+const { getTransporterUnifiedPaymentHistory } = require('../services/paymentHistory.service')
 
 const toObjectIdString = value => {
   if (!value) return null
@@ -908,116 +909,33 @@ const handleGatewayWebhook = async (req, res, next) => {
 const getTransporterPaymentHistory = async (req, res, next) => {
   try {
     const transporterId = req.user.id
-
+    const direction = req.query.direction || req.query.type || 'ALL'
+    const status = req.query.status || req.query.paymentStatus || null
+    const provider = req.query.provider || null
+    const category = req.query.category || null
+    const fromDate = req.query.fromDate || null
+    const toDate = req.query.toDate || null
+    const search = req.query.search || null
     const page = Math.max(Number(req.query.page) || 1, 1)
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
-    const skip = (page - 1) * limit
 
-    const filter = {
-      $or: [
-        // New payments (recommended)
-        {
-          'metadata.transporterId': mongoose.Types.ObjectId.isValid(
-            transporterId
-          )
-            ? new mongoose.Types.ObjectId(transporterId)
-            : transporterId
-        },
-
-        // Existing payments
-        {
-          'initiatedBy.userId': mongoose.Types.ObjectId.isValid(transporterId)
-            ? new mongoose.Types.ObjectId(transporterId)
-            : transporterId,
-          'initiatedBy.userType': 'transporter'
-        }
-      ]
-    }
-
-    if (req.query.status) {
-      filter.status = String(req.query.status).trim().toUpperCase()
-    }
-
-    if (req.query.provider) {
-      filter.provider = String(req.query.provider).trim().toUpperCase()
-    }
-
-    if (req.query.fromDate || req.query.toDate) {
-      filter.createdAt = {}
-
-      if (req.query.fromDate) {
-        filter.createdAt.$gte = new Date(req.query.fromDate)
-      }
-
-      if (req.query.toDate) {
-        const end = new Date(req.query.toDate)
-        end.setHours(23, 59, 59, 999)
-        filter.createdAt.$lte = end
-      }
-    }
-
-    const total = await PaymentSession.countDocuments(filter)
-
-    const payments = await PaymentSession.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean()
-
-    const paymentIds = payments.map(payment => payment._id)
-
-    const payouts = await Payout.find({
-      paymentId: { $in: paymentIds }
-    }).lean()
-
-    const payoutMap = new Map()
-
-    payouts.forEach(payout => {
-      payoutMap.set(String(payout.paymentId), payout)
+    const result = await getTransporterUnifiedPaymentHistory({
+      transporterId,
+      direction,
+      status,
+      provider,
+      category,
+      fromDate,
+      toDate,
+      search,
+      page,
+      limit
     })
 
-    const results = payments.map(payment => {
-      const payout = payoutMap.get(String(payment._id))
-
-      return {
-        paymentId: payment._id,
-
-        referenceId: payment.referenceId,
-
-        purpose: payment.purpose,
-
-        providerTransactionId: payment.providerTransactionId,
-
-        provider: payment.provider,
-
-        amount: payment.amount,
-
-        paymentStatus: payment.status,
-
-        paymentDate: payment.completedAt || payment.createdAt,
-
-        payoutStatus: payout ? payout.status : 'NOT_CREATED',
-
-              payout: payout
-                ? {
-                    id: payout._id,
-                    status: payout.status,
-                    transferId: payout.cashfree?.transferId || null
-                  }
-                : null
-      }
-    })
     return res.status(200).json({
       success: true,
-      data: {
-        page,
-        limit,
-        total,
-        count: results.length,
-        hasNext: page * limit < total,
-        hasPrevious: page > 1,
-        payments: results
-      }
+      message: 'Transporter payment history retrieved successfully',
+      data: result
     })
   } catch (error) {
     next(error)
@@ -1035,6 +953,41 @@ const getAdminPaymentHistory = async (req, res, next) => {
       return res.status(403).json({
         success: false,
         message: 'Access denied'
+      })
+    }
+
+    const transporterId = req.query.transporterId
+      ? String(req.query.transporterId).trim()
+      : null
+
+    if (transporterId) {
+      const direction = req.query.direction || req.query.type || 'ALL'
+      const status = req.query.status || req.query.paymentStatus || null
+      const provider = req.query.provider || null
+      const category = req.query.category || null
+      const fromDate = req.query.fromDate || null
+      const toDate = req.query.toDate || null
+      const search = req.query.search || null
+      const page = Math.max(Number(req.query.page) || 1, 1)
+      const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+
+      const result = await getTransporterUnifiedPaymentHistory({
+        transporterId,
+        direction,
+        status,
+        provider,
+        category,
+        fromDate,
+        toDate,
+        search,
+        page,
+        limit
+      })
+
+      return res.status(200).json({
+        success: true,
+        message: 'Transporter payment history retrieved successfully',
+        data: result
       })
     }
 
