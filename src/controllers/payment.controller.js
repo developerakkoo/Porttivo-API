@@ -4,6 +4,7 @@ const { nanoid } = require('nanoid')
 const PaymentSession = require('../models/PaymentSession')
 const logger = require('../utils/logger')
 const { cashfreeWebhookStrictValidation } = require('../config/env')
+const RazorpayPaymentLink = require('../models/RazorpayPaymentLink')
 const {
   buildPaymentInitiationRequest,
   getAvailableGatewayOptions,
@@ -250,6 +251,91 @@ const findCashfreePaymentByGatewayPayload = async (payload = {}) => {
       provider: 'CASHFREE',
       merchantTransactionId
     })
+  }
+
+  return null
+}
+
+const findRazorpayPaymentLinkSessionByGatewayPayload = async (payload = {}) => {
+  const paymentEntity =
+    payload?.payload?.payment?.entity ||
+    payload?.payload?.payment_link?.entity ||
+    payload?.payment?.entity ||
+    payload?.payment_link?.entity ||
+    {}
+
+  const notes =
+    paymentEntity?.notes && typeof paymentEntity.notes === 'object'
+      ? paymentEntity.notes
+      : {}
+
+  const paymentSessionId = String(
+    notes.paymentSessionId ||
+      notes.payment_session_id ||
+      payload.paymentSessionId ||
+      payload.payment_session_id ||
+      payload.udf1 ||
+      ''
+  ).trim()
+
+  if (paymentSessionId && mongoose.Types.ObjectId.isValid(paymentSessionId)) {
+    const paymentById = await PaymentSession.findById(paymentSessionId)
+    if (paymentById) {
+      return paymentById
+    }
+  }
+
+  const paymentLinkId = String(
+    notes.paymentLinkId ||
+      notes.payment_link_id ||
+      paymentEntity.paymentLinkId ||
+      paymentEntity.payment_link_id ||
+      payload.paymentLinkId ||
+      payload.payment_link_id ||
+      payload.razorpay_payment_link_id ||
+      ''
+  ).trim()
+
+  if (paymentLinkId) {
+    const paymentLinkRecord = await RazorpayPaymentLink.findOne({
+      razorpayPaymentLinkId: paymentLinkId
+    })
+
+    if (paymentLinkRecord?.paymentSessionId) {
+      const linkedPaymentSessionId = String(
+        paymentLinkRecord.paymentSessionId
+      ).trim()
+
+      if (
+        linkedPaymentSessionId &&
+        mongoose.Types.ObjectId.isValid(linkedPaymentSessionId)
+      ) {
+        const paymentById = await PaymentSession.findById(
+          linkedPaymentSessionId
+        )
+        if (paymentById) {
+          return paymentById
+        }
+      }
+    }
+
+    const metadataPaymentSessionId = String(
+      paymentLinkRecord?.metadata?.paymentSessionId ||
+        paymentLinkRecord?.metadata?.payout?.paymentSessionId ||
+        ''
+    ).trim()
+
+    if (
+      metadataPaymentSessionId &&
+      mongoose.Types.ObjectId.isValid(metadataPaymentSessionId)
+    ) {
+      const paymentById = await PaymentSession.findById(
+        metadataPaymentSessionId
+      )
+      if (paymentById) {
+        return paymentById
+      }
+    }
   }
 
   return null
@@ -652,6 +738,10 @@ const handleGatewayWebhook = async (req, res, next) => {
         provider,
         providerOrderId: gatewayMetadata.providerOrderId
       })
+    }
+
+    if (!payment && provider === 'RAZORPAY') {
+      payment = await findRazorpayPaymentLinkSessionByGatewayPayload(body)
     }
 
     if (!payment) {

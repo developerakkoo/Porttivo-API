@@ -871,6 +871,137 @@ const paymentTests = [
     }
   },
   {
+    name: 'Razorpay payment_link.paid webhooks resolve PaymentSession and create payout once',
+    async run() {
+      const paymentDoc = {
+        _id: '64f1c2b3a4d5e6f708091011',
+        provider: 'RAZORPAY',
+        status: 'CREATED',
+        referenceType: 'RAZORPAY_PAYMENT_LINK',
+        referenceId: 'PTV-TEST-LINK',
+        purpose: 'Transporter payment',
+        amount: 1250,
+        currency: 'INR',
+        merchantTransactionId: 'PTV-TEST-LINK',
+        payer: {
+          userId: 'payer-1',
+          userType: 'transporter',
+          name: 'Alpha Logistics',
+          email: 'alpha@example.com',
+          mobile: '9999999999'
+        },
+        metadata: {
+          source: 'RAZORPAY_PAYMENT_LINK',
+          payout: {
+            payeeId: 'transporter-a',
+            payeeType: 'TRANSPORTER',
+            transferMode: 'IMPS',
+            paymentSessionId: '64f1c2b3a4d5e6f708091011'
+          }
+        },
+        paymentResponse: {},
+        callbackPayload: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      const payoutCalls = []
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/payment.controller.js'),
+        {
+          '../services/paymentGateway.service.js': {
+            buildPaymentInitiationRequest: async () => ({}),
+            getAvailableGatewayOptions: () => [],
+            getGatewayPayloadMetadata: () => ({
+              provider: 'RAZORPAY',
+              status: 'SUCCESS',
+              providerTransactionId: 'pay_link_1'
+            }),
+            getProviderConfig: () => ({
+              provider: 'RAZORPAY',
+              displayName: 'Razorpay',
+              configured: true,
+              mode: 'sandbox'
+            }),
+            makeTransactionId: () => 'RZP-TEST',
+            normalizeMoney: (value) => Number(value).toFixed(2),
+            normalizeProvider: (value) => String(value).toUpperCase(),
+            resolvePayerProfile: () => ({
+              userId: 'payer-1',
+              userType: 'transporter',
+              name: 'Alpha Logistics',
+              email: 'alpha@example.com',
+              mobile: '9999999999'
+            }),
+            verifyGatewayWebhook: () => true
+          },
+          '../services/cashfreePayout.service': {
+            createAutomaticPayoutForPayment: async (payment) => {
+              payoutCalls.push(payment)
+              return {
+                _id: 'payout-link-1',
+                provider: 'RAZORPAY',
+                status: 'PROCESSING',
+                razorpay: {
+                  payoutId: 'pout_link_1',
+                  referenceId: 'ref_link_1'
+                }
+              }
+            }
+          },
+          '../models/PaymentSession': {
+            findById: async (id) => (id === paymentDoc._id ? paymentDoc : null),
+            findOne: async () => null
+          },
+          '../models/RazorpayPaymentLink': {
+            findOne: async () => null
+          }
+        }
+      )
+
+      const body = {
+        event: 'payment_link.paid',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_link_1',
+              status: 'paid',
+              notes: {
+                paymentSessionId: paymentDoc._id,
+                paymentLinkId: 'plink_1'
+              }
+            }
+          }
+        }
+      }
+
+      const req = {
+        params: { provider: 'RAZORPAY' },
+        query: {},
+        body,
+        headers: {},
+        rawBody: JSON.stringify(body)
+      }
+      const res = createMockRes()
+
+      await controller.handleGatewayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      await controller.handleGatewayWebhook(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(paymentDoc.status, 'SUCCESS')
+      assert.equal(paymentDoc.providerTransactionId, 'pay_link_1')
+      assert.equal(payoutCalls.length, 1)
+      assert.equal(paymentDoc.metadata.payout.provider, 'RAZORPAY')
+      assert.equal(paymentDoc.metadata.payout.transferId, 'pout_link_1')
+    }
+  },
+  {
     name: 'Cashfree return GET is acknowledged without failing the payment',
     async run() {
       const paymentDoc = {
