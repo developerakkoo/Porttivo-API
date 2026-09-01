@@ -7,7 +7,8 @@ const {
   createPaymentLinkWithTransfer,
   fetchPaymentLink,
   cancelPaymentLink,
-  makeReferenceId
+  makeReferenceId,
+  createPaymentLink
 } = require('../services/razorpayRoute.service')
 
 const {
@@ -166,18 +167,18 @@ const createTransporterPaymentLink = async (
       })
     }
 
-    const routeAccountId =
-      transporter.razorpayRouteAccountId
+    // const routeAccountId =
+    //   transporter.razorpayRouteAccountId
 
-    if (!routeAccountId) {
-      return res.status(400).json({
-        success: false,
-        message:
-          'Razorpay Route Linked Account is not configured for this transporter',
-        reason:
-          'RAZORPAY_ROUTE_ACCOUNT_NOT_CONFIGURED'
-      })
-    }
+    // if (!routeAccountId) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message:
+    //       'Razorpay Route Linked Account is not configured for this transporter',
+    //     reason:
+    //       'RAZORPAY_ROUTE_ACCOUNT_NOT_CONFIGURED'
+    //   })
+    // }
 
     const payerId =
       normalizeMaybeString(

@@ -8,36 +8,29 @@ const {
 } = require('../config/env')
 
 const buildAuthHeader = () => {
-  const token = Buffer.from(
-    `${razorpayKeyId}:${razorpayKeySecret}`
-  ).toString('base64')
+  const token = Buffer.from(`${razorpayKeyId}:${razorpayKeySecret}`).toString(
+    'base64'
+  )
 
   return `Basic ${token}`
 }
 
 const razorpayRequest = async (
   path,
-  {
-    method = 'GET',
-    body = null,
-    fetchImpl = global.fetch
-  } = {}
+  { method = 'GET', body = null, fetchImpl = global.fetch } = {}
 ) => {
   if (typeof fetchImpl !== 'function') {
     throw new Error('Fetch is not available')
   }
 
-  const response = await fetchImpl(
-    `${razorpayApiBaseUrl}${path}`,
-    {
-      method,
-      headers: {
-        Authorization: buildAuthHeader(),
-        'Content-Type': 'application/json'
-      },
-      body: body ? JSON.stringify(body) : undefined
-    }
-  )
+  const response = await fetchImpl(`${razorpayApiBaseUrl}${path}`, {
+    method,
+    headers: {
+      Authorization: buildAuthHeader(),
+      'Content-Type': 'application/json'
+    },
+    body: body ? JSON.stringify(body) : undefined
+  })
 
   const text = await response.text()
 
@@ -112,14 +105,11 @@ const createLinkedAccount = async ({
     business_type: 'individual'
   }
 
-  return razorpayRequest(
-    '/accounts',
-    {
-      method: 'POST',
-      body: payload,
-      fetchImpl
-    }
-  )
+  return razorpayRequest('/accounts', {
+    method: 'POST',
+    body: payload,
+    fetchImpl
+  })
 }
 
 /**
@@ -144,9 +134,7 @@ const createPaymentLinkWithTransfer = async ({
   fetchImpl = global.fetch
 }) => {
   if (!routeAccountId) {
-    throw new Error(
-      'Razorpay Route account ID is required'
-    )
+    throw new Error('Razorpay Route account ID is required')
   }
 
   if (currency !== 'INR') {
@@ -166,21 +154,14 @@ const createPaymentLinkWithTransfer = async ({
 
     reference_id: referenceId || makeReferenceId(),
 
-    description:
-      description || 'Porttivo transporter payment',
+    description: description || 'Porttivo transporter payment',
 
     customer: {
-      name:
-        customer?.name ||
-        'Porttivo Transporter',
+      name: customer?.name || 'Porttivo Transporter',
 
-      contact:
-        customer?.contact ||
-        undefined,
+      contact: customer?.contact || undefined,
 
-      email:
-        customer?.email ||
-        undefined
+      email: customer?.email || undefined
     },
 
     notify: {
@@ -213,9 +194,7 @@ const createPaymentLinkWithTransfer = async ({
               source: 'PORTTIVO'
             },
 
-            linked_account_notes: [
-              'source'
-            ]
+            linked_account_notes: ['source']
           }
         ]
       }
@@ -226,24 +205,16 @@ const createPaymentLinkWithTransfer = async ({
     payload.expire_by = expireBy
   }
 
-  return razorpayRequest(
-    '/payment_links',
-    {
-      method: 'POST',
-      body: payload,
-      fetchImpl
-    }
-  )
+  return razorpayRequest('/payment_links', {
+    method: 'POST',
+    body: payload,
+    fetchImpl
+  })
 }
 
-const fetchPaymentLink = async (
-  paymentLinkId,
-  fetchImpl = global.fetch
-) => {
+const fetchPaymentLink = async (paymentLinkId, fetchImpl = global.fetch) => {
   if (!paymentLinkId) {
-    throw new Error(
-      'Payment Link ID is required'
-    )
+    throw new Error('Payment Link ID is required')
   }
 
   return razorpayRequest(
@@ -255,10 +226,7 @@ const fetchPaymentLink = async (
   )
 }
 
-const cancelPaymentLink = async (
-  paymentLinkId,
-  fetchImpl = global.fetch
-) => {
+const cancelPaymentLink = async (paymentLinkId, fetchImpl = global.fetch) => {
   return razorpayRequest(
     `/payment_links/${encodeURIComponent(paymentLinkId)}/cancel`,
     {
@@ -268,6 +236,61 @@ const cancelPaymentLink = async (
   )
 }
 
+// createPaymentLink
+const createPaymentLink = async ({
+  amount,
+  currency = 'INR',
+  referenceId,
+  description,
+  customer,
+  expireBy,
+  callbackUrl,
+  notes,
+  fetchImpl
+}) => {
+  const amountInPaise = normalizeAmountInPaise(amount)
+
+  const payload = {
+    amount: amountInPaise,
+    currency,
+    accept_partial: false,
+    reference_id: referenceId,
+    description,
+    customer,
+    notify: {
+      sms: false,
+      email: true
+    },
+    reminder_enable: true,
+    notes
+  }
+
+  if (expireBy) {
+    payload.expire_by = expireBy
+  }
+
+  if (callbackUrl) {
+    payload.callback_url = callbackUrl
+    payload.callback_method = 'get'
+  }
+
+  const result = await razorpayRequest('/payment_links', {
+    method: 'POST',
+    body: payload,
+    fetchImpl
+  })
+
+  if (!result.ok) {
+    throw new Error(
+      result.data?.error?.description ||
+        result.data?.message ||
+        'Razorpay Payment Link creation failed'
+    )
+  }
+
+  return result.data
+}
+
 module.exports = {
   razorpayRequest,
   createLinkedAccount,
@@ -275,5 +298,6 @@ module.exports = {
   fetchPaymentLink,
   cancelPaymentLink,
   normalizeAmountInPaise,
-  makeReferenceId
+  makeReferenceId,
+  createPaymentLink
 }
