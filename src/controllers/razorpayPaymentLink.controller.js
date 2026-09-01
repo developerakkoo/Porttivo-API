@@ -1,7 +1,12 @@
+const mongoose = require('mongoose')
 const crypto = require('crypto')
 
 const Transporter = require('../models/Transporter')
+const PaymentSession = require('../models/PaymentSession')
 const RazorpayPaymentLink = require('../models/RazorpayPaymentLink')
+const {
+  createAutomaticPayoutForPayment
+} = require('../services/razorpayPayout.service')
 
 const {
   createPaymentLinkWithTransfer,
@@ -44,6 +49,45 @@ const normalizeMaybeString = value => {
   const normalized = String(value || '').trim()
 
   return normalized || null
+}
+
+const buildRazorpayPaymentLinkPayoutMetadata = ({
+  payeeId,
+  payeeType = 'TRANSPORTER',
+  referenceType = null,
+  referenceId = null,
+  paymentSessionId = null,
+  paymentLinkReferenceId = null,
+  transferMode = 'IMPS'
+} = {}) => ({
+  payeeId,
+  payeeType,
+  referenceType,
+  referenceId,
+  paymentSessionId,
+  paymentLinkReferenceId,
+  transferMode
+})
+
+const extractLinkedPaymentSessionId = ({
+  record = null,
+  paymentEntity = null,
+  mergedPayload = null
+} = {}) => {
+  const notes =
+    paymentEntity?.notes && typeof paymentEntity.notes === 'object'
+      ? paymentEntity.notes
+      : {}
+
+  return normalizeMaybeString(
+    record?.paymentSessionId ||
+      record?.metadata?.paymentSessionId ||
+      record?.metadata?.payout?.paymentSessionId ||
+      notes.paymentSessionId ||
+      notes.payment_session_id ||
+      mergedPayload?.paymentSessionId ||
+      mergedPayload?.payment_session_id
+  )
 }
 
 const getWebhookSignature = req =>
@@ -165,36 +209,94 @@ const createTransporterPaymentLink = async (req, res, next) => {
     const businessReferenceId = normalizeMaybeString(referenceId)
     const paymentReferenceId = makeReferenceId()
     const normalizedCallbackUrl = normalizeMaybeString(callbackUrl)
+    const payoutMetadata = buildRazorpayPaymentLinkPayoutMetadata({
+      payeeId: actorId,
+      referenceType: businessReferenceType,
+      referenceId: businessReferenceId,
+      paymentLinkReferenceId: paymentReferenceId,
+      transferMode: 'IMPS'
+    })
 
-    const paymentLink = await createPaymentLink({
-      amount: finalAmount,
-      currency: 'INR',
-      referenceId: paymentReferenceId,
-
-      description:
+    const paymentSession = await PaymentSession.create({
+      publicId: `pay_${crypto.randomBytes(8).toString('hex')}`,
+      referenceType: businessReferenceType || 'RAZORPAY_PAYMENT_LINK',
+      referenceId: businessReferenceId || paymentReferenceId,
+      purpose:
         description ||
-        `Porttivo payment to ${
+        `Porttivo payment link for ${
           transporter.name || transporter.company || 'transporter'
         }`,
-
-      customer: normalizeCustomer(payerTransporter),
-
-      expireBy,
-
-      callbackUrl: normalizedCallbackUrl || undefined,
-
-      notes: {
-        transporterId: actorId,
-        payerTransporterId: payerId,
-        beneficiaryTransporterId: actorId,
-
-        referenceType: businessReferenceType || undefined,
-
-        referenceId: businessReferenceId || undefined
+      provider: 'RAZORPAY',
+      status: 'CREATED',
+      amount: finalAmount,
+      currency: 'INR',
+      merchantTransactionId: paymentReferenceId,
+      payer: {
+        userId: payerTransporter?._id || null,
+        userType: 'TRANSPORTER',
+        name: payerTransporter?.name || null,
+        email: payerTransporter?.email || null,
+        mobile: payerTransporter?.mobile || null
       },
-
-      fetchImpl: req.fetch || global.fetch
+      metadata: {
+        source: 'RAZORPAY_PAYMENT_LINK',
+        paymentLinkReferenceId: paymentReferenceId,
+        payout: {
+          ...payoutMetadata,
+          payeeId: actorId,
+          paymentSessionId: null
+        }
+      },
+      initiatedBy: {
+        userId: req.user?.id || null,
+        userType: req.user?.userType || null
+      },
+      initiatedAt: new Date()
     })
+
+    let paymentLink
+
+    try {
+      paymentLink = await createPaymentLink({
+        amount: finalAmount,
+        currency: 'INR',
+        referenceId: paymentReferenceId,
+
+        description:
+          description ||
+          `Porttivo payment to ${
+            transporter.name || transporter.company || 'transporter'
+          }`,
+
+        customer: normalizeCustomer(payerTransporter),
+
+        expireBy,
+
+        callbackUrl: normalizedCallbackUrl || undefined,
+
+        notes: {
+          transporterId: actorId,
+          payerTransporterId: payerId,
+          beneficiaryTransporterId: actorId,
+          paymentSessionId: paymentSession._id.toString(),
+          paymentSessionPublicId: paymentSession.publicId,
+          payout: {
+            ...payoutMetadata,
+            payeeId: actorId,
+            paymentSessionId: paymentSession._id.toString()
+          },
+
+          referenceType: businessReferenceType || undefined,
+
+          referenceId: businessReferenceId || undefined
+        },
+
+        fetchImpl: req.fetch || global.fetch
+      })
+    } catch (error) {
+      await PaymentSession.deleteOne({ _id: paymentSession._id })
+      throw error
+    }
 
     const record = await RazorpayPaymentLink.create({
       publicId: `rpl_${crypto.randomBytes(8).toString('hex')}`,
@@ -202,6 +304,8 @@ const createTransporterPaymentLink = async (req, res, next) => {
       payerTransporterId: payerId,
 
       beneficiaryTransporterId: actorId,
+
+      paymentSessionId: paymentSession._id,
 
       razorpayPaymentLinkId: paymentLink.id,
 
@@ -228,13 +332,49 @@ const createTransporterPaymentLink = async (req, res, next) => {
       metadata: {
         source: 'PORTTIVO',
         automaticTransfer: false,
+        paymentSessionId: paymentSession._id.toString(),
         payerTransporterId: payerId,
         beneficiaryTransporterId: actorId,
         businessReferenceType,
         businessReferenceId,
-        callbackUrl: normalizedCallbackUrl || null
+        callbackUrl: normalizedCallbackUrl || null,
+        payout: {
+          ...payoutMetadata,
+          payeeId: actorId,
+          paymentSessionId: paymentSession._id.toString(),
+          paymentLinkId: paymentLink.id
+        }
       }
     })
+
+    paymentSession.paymentGatewayUrl = paymentLink.short_url || null
+    paymentSession.paymentRequest = {
+      provider: 'RAZORPAY',
+      actionUrl: paymentLink.short_url || null,
+      method: 'GET',
+      fields: {
+        payment_link_id: paymentLink.id,
+        reference_id: paymentReferenceId
+      },
+      rawResponse: paymentLink
+    }
+    paymentSession.paymentResponse = paymentLink
+    paymentSession.metadata = {
+      ...(paymentSession.metadata || {}),
+      paymentLink: {
+        paymentLinkId: paymentLink.id,
+        shortUrl: paymentLink.short_url || null,
+        recordId: record._id?.toString() || null
+      },
+      payout: {
+        ...(paymentSession.metadata?.payout || {}),
+        ...payoutMetadata,
+        payeeId: actorId,
+        paymentSessionId: paymentSession._id.toString(),
+        paymentLinkId: paymentLink.id
+      }
+    }
+    await paymentSession.save()
 
     logger.info('[RAZORPAY_PAYMENT_LINK] Created', {
       paymentLinkId: record._id.toString(),
@@ -256,6 +396,7 @@ const createTransporterPaymentLink = async (req, res, next) => {
         publicId: record.publicId,
         paymentLinkId: paymentLink.id,
         shortUrl: paymentLink.short_url,
+        paymentSessionId: paymentSession._id,
         amount: finalAmount,
         currency: 'INR',
         status: record.status,
@@ -470,6 +611,7 @@ const handleRazorpayPaymentLinkWebhook = async (req, res, next) => {
     }
 
     let record = null
+    let paymentSession = null
 
     if (paymentLinkId) {
       record = await RazorpayPaymentLink.findOne({
@@ -487,6 +629,29 @@ const handleRazorpayPaymentLinkWebhook = async (req, res, next) => {
       record = await RazorpayPaymentLink.findOne({
         razorpayTransferId: transferEntity.id
       })
+    }
+
+    const linkedPaymentSessionId = extractLinkedPaymentSessionId({
+      record,
+      paymentEntity,
+      mergedPayload
+    })
+
+    if (
+      linkedPaymentSessionId &&
+      mongoose.Types.ObjectId.isValid(linkedPaymentSessionId)
+    ) {
+      paymentSession = await PaymentSession.findById(linkedPaymentSessionId)
+    }
+
+    if (!paymentSession && record?.paymentSessionId) {
+      const recordPaymentSessionId = normalizeMaybeString(record.paymentSessionId)
+      if (
+        recordPaymentSessionId &&
+        mongoose.Types.ObjectId.isValid(recordPaymentSessionId)
+      ) {
+        paymentSession = await PaymentSession.findById(recordPaymentSessionId)
+      }
     }
 
     if (paymentLinkId && req.method === 'GET') {
@@ -515,7 +680,7 @@ const handleRazorpayPaymentLinkWebhook = async (req, res, next) => {
       }
     }
 
-    if (!record) {
+    if (!record && !paymentSession) {
       logger.warn('[RAZORPAY_PAYMENT_LINK] Unknown webhook', {
         event,
         paymentLinkId
@@ -526,45 +691,128 @@ const handleRazorpayPaymentLinkWebhook = async (req, res, next) => {
       })
     }
 
-    record.webhookPayload = {
-      method: req.method,
-      query: req.query || {},
-      body: req.body || {},
-      signaturePresent: Boolean(signature),
-      signatureValid
+    const isPaidEvent =
+      event === 'payment_link.paid' || event === 'payment.captured'
+
+    if (record) {
+      record.webhookPayload = {
+        method: req.method,
+        query: req.query || {},
+        body: req.body || {},
+        signaturePresent: Boolean(signature),
+        signatureValid
+      }
+
+      if (isPaidEvent) {
+        record.status = 'PAID'
+        record.razorpayPaymentId = paymentEntity.id || record.razorpayPaymentId
+        record.paidAt = new Date()
+        record.transferStatus = 'PENDING'
+      }
+
+      if (event === 'transfer.processed') {
+        record.transferStatus = 'PROCESSED'
+        record.razorpayTransferId = transferEntity.id || record.razorpayTransferId
+        record.transferredAmount = Number(transferEntity.amount || 0) / 100
+        record.transferredAt = new Date()
+      }
+
+      if (event === 'transfer.failed') {
+        record.transferStatus = 'FAILED'
+        record.razorpayTransferId = transferEntity.id || record.razorpayTransferId
+      }
+
+      if (event === 'transfer.reversed') {
+        record.transferStatus = 'REVERSED'
+      }
+
+      await record.save()
     }
 
-    if (event === 'payment_link.paid' || event === 'payment.captured') {
-      record.status = 'PAID'
+    let payout = null
 
-      record.razorpayPaymentId = paymentEntity.id || record.razorpayPaymentId
+    if (paymentSession) {
+      const previousPaymentStatus = paymentSession.status
 
-      record.paidAt = new Date()
+      paymentSession.paymentResponse = {
+        ...(paymentSession.paymentResponse || {}),
+        ...mergedPayload,
+        verified: true
+      }
+      paymentSession.callbackPayload = mergedPayload
+      paymentSession.providerTransactionId =
+        paymentEntity.id || paymentSession.providerTransactionId
+      paymentSession.providerOrderId =
+        paymentLinkId ||
+        paymentSession.providerOrderId ||
+        paymentSession.metadata?.payout?.paymentLinkId ||
+        null
 
-      record.transferStatus = 'PENDING'
+      if (isPaidEvent) {
+        paymentSession.status = 'SUCCESS'
+        paymentSession.completedAt = new Date()
+        paymentSession.failedAt = null
+        paymentSession.failureReason = null
+      }
+
+      await paymentSession.save()
+
+      if (isPaidEvent) {
+        const payoutAlreadyLinked = Boolean(
+          paymentSession.metadata?.payout?.id ||
+            record?.metadata?.payout?.id
+        )
+
+        if (previousPaymentStatus !== 'SUCCESS' || !payoutAlreadyLinked) {
+          payout = await createAutomaticPayoutForPayment(paymentSession, {
+            fetchImpl: req.fetch || global.fetch
+          })
+        } else {
+          payout = null
+        }
+      }
     }
 
-    if (event === 'transfer.processed') {
-      record.transferStatus = 'PROCESSED'
+    if (payout) {
+      const payoutTransferId =
+        payout.provider === 'RAZORPAY'
+          ? payout.razorpay?.payoutId || null
+          : payout.cashfree?.transferId || null
+      const payoutReferenceId =
+        payout.provider === 'RAZORPAY'
+          ? payout.razorpay?.referenceId || null
+          : payout.cashfree?.referenceId || null
 
-      record.razorpayTransferId = transferEntity.id || record.razorpayTransferId
+      if (paymentSession) {
+        paymentSession.metadata = {
+          ...(paymentSession.metadata || {}),
+          payout: {
+            ...(paymentSession.metadata?.payout || {}),
+            id: payout._id?.toString() || null,
+            provider: payout.provider || paymentSession.provider || null,
+            status: payout.status,
+            transferId: payoutTransferId,
+            referenceId: payoutReferenceId
+          }
+        }
+        await paymentSession.save()
+      }
 
-      record.transferredAmount = Number(transferEntity.amount || 0) / 100
-
-      record.transferredAt = new Date()
+      if (record) {
+        record.metadata = {
+          ...(record.metadata || {}),
+          payout: {
+            ...(record.metadata?.payout || {}),
+            id: payout._id?.toString() || null,
+            provider: payout.provider || record.metadata?.payout?.provider || null,
+            status: payout.status,
+            transferId: payoutTransferId,
+            referenceId: payoutReferenceId
+          }
+        }
+        await record.save()
+      }
     }
-
-    if (event === 'transfer.failed') {
-      record.transferStatus = 'FAILED'
-
-      record.razorpayTransferId = transferEntity.id || record.razorpayTransferId
-    }
-
-    if (event === 'transfer.reversed') {
-      record.transferStatus = 'REVERSED'
-    }
-
-    await record.save()
 
     return res.status(200).json({
       success: true,

@@ -24,6 +24,13 @@ const razorpayPaymentLinkSchema = new mongoose.Schema(
       index: true
     },
 
+    paymentSessionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PaymentSession',
+      default: null,
+      index: true
+    },
+
     routeAccountId: {
       type: String,
       default: null,

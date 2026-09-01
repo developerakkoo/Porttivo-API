@@ -15,6 +15,19 @@ const buildController = (overrides = {}) =>
         overrides.Transporter || {
           findById: async () => null
         },
+      '../models/PaymentSession':
+        overrides.PaymentSession || {
+          create: async payload => ({
+            ...payload,
+            _id: 'payment-session-1',
+            publicId: 'pay_session_1',
+            save: async function save() {
+              return this
+            }
+          }),
+          findById: async () => null,
+          deleteOne: async () => ({ deletedCount: 0 })
+        },
       '../models/RazorpayPaymentLink':
         overrides.RazorpayPaymentLink || {
           create: async () => null,
@@ -22,10 +35,14 @@ const buildController = (overrides = {}) =>
         },
       '../services/razorpayRoute.service':
         overrides.razorpayRouteService || {
-          createPaymentLinkWithTransfer: async () => null,
+          createPaymentLink: async () => null,
           fetchPaymentLink: async () => null,
           cancelPaymentLink: async () => null,
           makeReferenceId: () => 'PTV-test-ref'
+        },
+      '../services/razorpayPayout.service':
+        overrides.razorpayPayoutService || {
+          createAutomaticPayoutForPayment: async () => null
         },
       '../utils/logger': {
         info: () => {},
@@ -82,7 +99,7 @@ module.exports = [
           }
         },
         razorpayRouteService: {
-          createPaymentLinkWithTransfer: async payload => {
+          createPaymentLink: async payload => {
             capturedPayload = payload
             return {
               id: 'plink_1',
@@ -129,7 +146,12 @@ module.exports = [
       assert.equal(capturedPayload.notes.beneficiaryTransporterId, 'actor-1')
       assert.equal(capturedPayload.notes.referenceType, 'TRIP')
       assert.equal(capturedPayload.notes.referenceId, 'TRIP-1001')
+      assert.equal(capturedPayload.notes.paymentSessionId, 'payment-session-1')
+      assert.equal(capturedPayload.notes.payout.payeeId, 'actor-1')
       assert.equal(capturedPayload.callbackUrl, 'https://app.example/razorpay/callback')
+      assert.equal(createdRecords[0].paymentSessionId.toString(), 'payment-session-1')
+      assert.equal(createdRecords[0].metadata.payout.payeeId, 'actor-1')
+      assert.equal(res.body.data.paymentSessionId.toString(), 'payment-session-1')
     }
   },
   {
@@ -159,7 +181,7 @@ module.exports = [
           }
         },
         razorpayRouteService: {
-          createPaymentLinkWithTransfer: async () => null,
+          createPaymentLink: async () => null,
           fetchPaymentLink: async () => ({
             id: 'plink_1',
             status: 'paid',
@@ -196,6 +218,131 @@ module.exports = [
       assert.equal(record.paymentResponse.id, 'plink_1')
       assert.equal(record.webhookPayload.method, 'GET')
       assert.equal(record.webhookPayload.signaturePresent, false)
+    }
+  },
+  {
+    name: 'payment_link.paid webhook marks the payment session success and creates payout once',
+    async run() {
+      const payoutCalls = []
+      const paymentSessionId = '64f1c2b3a4d5e6f708091011'
+      const paymentSessionDoc = {
+        _id: paymentSessionId,
+        publicId: 'pay_session_1',
+        status: 'CREATED',
+        amount: 1250,
+        currency: 'INR',
+        referenceType: 'TRIP',
+        referenceId: 'TRIP-1001',
+        provider: 'RAZORPAY',
+        metadata: {
+          payout: {
+            payeeId: 'actor-1',
+            payeeType: 'TRANSPORTER',
+            transferMode: 'IMPS',
+            paymentSessionId
+          }
+        },
+        paymentResponse: {},
+        callbackPayload: null,
+        save: async function save() {
+          return this
+        }
+      }
+
+      const record = {
+        _id: 'record-1',
+        razorpayPaymentLinkId: 'plink_1',
+        payerTransporterId: 'payer-1',
+        beneficiaryTransporterId: 'actor-1',
+        paymentSessionId,
+        status: 'CREATED',
+        transferStatus: 'NOT_STARTED',
+        metadata: {
+          payout: {
+            payeeId: 'actor-1',
+            paymentSessionId,
+            paymentLinkId: 'plink_1'
+          }
+        },
+        paymentResponse: {},
+        webhookPayload: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      const controller = buildController({
+        PaymentSession: {
+          create: async () => paymentSessionDoc,
+          findById: async id => (id === paymentSessionId ? paymentSessionDoc : null),
+          deleteOne: async () => ({ deletedCount: 0 })
+        },
+        RazorpayPaymentLink: {
+          create: async () => record,
+          findOne: async query => {
+            if (query?.razorpayPaymentLinkId === 'plink_1') {
+              return record
+            }
+
+            return null
+          }
+        },
+        razorpayPayoutService: {
+          createAutomaticPayoutForPayment: async paymentInput => {
+            payoutCalls.push(paymentInput)
+            return {
+              _id: 'payout-1',
+              provider: 'RAZORPAY',
+              status: 'SUCCESS',
+              razorpay: {
+                payoutId: 'pout_1',
+                referenceId: 'ref_1'
+              }
+            }
+          }
+        }
+      })
+
+      const body = {
+        event: 'payment_link.paid',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_1',
+              notes: {
+                paymentLinkId: 'plink_1',
+                paymentSessionId
+              }
+            }
+          }
+        }
+      }
+
+      const req = {
+        method: 'POST',
+        body,
+        headers: {},
+        rawBody: JSON.stringify(body),
+        query: {}
+      }
+      const res = createMockRes()
+
+      await controller.handleRazorpayPaymentLinkWebhook(req, res, error => {
+        throw error
+      })
+
+      await controller.handleRazorpayPaymentLinkWebhook(req, res, error => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(paymentSessionDoc.status, 'SUCCESS')
+      assert.equal(paymentSessionDoc.providerTransactionId, 'pay_1')
+      assert.equal(record.status, 'PAID')
+      assert.equal(record.razorpayPaymentId, 'pay_1')
+      assert.equal(record.metadata.payout.id, 'payout-1')
+      assert.equal(paymentSessionDoc.metadata.payout.id, 'payout-1')
+      assert.equal(payoutCalls.length, 1)
     }
   },
   {
