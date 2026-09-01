@@ -170,44 +170,64 @@ const createTransporterPaymentLink = async (req, res, next) => {
       amount: finalAmount,
       currency: 'INR',
       referenceId: paymentReferenceId,
+
       description:
         description ||
         `Porttivo payment to ${
           transporter.name || transporter.company || 'transporter'
         }`,
+
       customer: normalizeCustomer(payerTransporter),
+
       expireBy,
+
       callbackUrl: normalizedCallbackUrl || undefined,
+
       notes: {
-        source: 'PORTTIVO',
         transporterId: actorId,
         payerTransporterId: payerId,
         beneficiaryTransporterId: actorId,
+
         referenceType: businessReferenceType || undefined,
+
         referenceId: businessReferenceId || undefined
       },
+
       fetchImpl: req.fetch || global.fetch
     })
 
     const record = await RazorpayPaymentLink.create({
       publicId: `rpl_${crypto.randomBytes(8).toString('hex')}`,
+
       payerTransporterId: payerId,
+
       beneficiaryTransporterId: actorId,
-      routeAccountId,
+
       razorpayPaymentLinkId: paymentLink.id,
+
       shortUrl: paymentLink.short_url || null,
+
       referenceId: paymentReferenceId,
+
       businessReferenceType,
+
       businessReferenceId,
+
       callbackUrl: normalizedCallbackUrl || null,
+
       amount: finalAmount,
+
       currency: 'INR',
+
       description: description || null,
+
       status: 'CREATED',
+
       paymentResponse: paymentLink,
+
       metadata: {
         source: 'PORTTIVO',
-        automaticTransfer: true,
+        automaticTransfer: false,
         payerTransporterId: payerId,
         beneficiaryTransporterId: actorId,
         businessReferenceType,
@@ -218,10 +238,13 @@ const createTransporterPaymentLink = async (req, res, next) => {
 
     logger.info('[RAZORPAY_PAYMENT_LINK] Created', {
       paymentLinkId: record._id.toString(),
+
       razorpayPaymentLinkId: paymentLink.id,
+
       payerTransporterId: payerId,
+
       beneficiaryTransporterId: actorId,
-      routeAccountId,
+
       amount: finalAmount
     })
 
@@ -236,8 +259,8 @@ const createTransporterPaymentLink = async (req, res, next) => {
         amount: finalAmount,
         currency: 'INR',
         status: record.status,
-        automaticTransfer: true,
-        routeAccountId,
+        automaticTransfer: false,
+        // routeAccountId,
         payerTransporterId: payerId,
         beneficiaryTransporterId: actorId,
         businessReferenceType,
