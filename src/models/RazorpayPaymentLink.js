@@ -26,9 +26,9 @@ const razorpayPaymentLinkSchema = new mongoose.Schema(
 
     routeAccountId: {
       type: String,
-      required: true,
-      index: true,
-      trim: true
+      default: null,
+      trim: true,
+      index: true
     },
 
     payerTransporterId: {
@@ -126,13 +126,7 @@ const razorpayPaymentLinkSchema = new mongoose.Schema(
 
     transferStatus: {
       type: String,
-      enum: [
-        'NOT_STARTED',
-        'PENDING',
-        'PROCESSED',
-        'FAILED',
-        'REVERSED'
-      ],
+      enum: ['NOT_STARTED', 'PENDING', 'PROCESSED', 'FAILED', 'REVERSED'],
       default: 'NOT_STARTED',
       index: true
     },

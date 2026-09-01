@@ -245,8 +245,8 @@ const createPaymentLink = async ({
   customer,
   expireBy,
   callbackUrl,
-  notes,
-  fetchImpl
+  notes = {},
+  fetchImpl = global.fetch
 }) => {
   const amountInPaise = normalizeAmountInPaise(amount)
 
@@ -254,15 +254,33 @@ const createPaymentLink = async ({
     amount: amountInPaise,
     currency,
     accept_partial: false,
-    reference_id: referenceId,
-    description,
-    customer,
+    reference_id: referenceId || makeReferenceId(),
+    description:
+      description || 'Porttivo transporter payment',
+
+    customer: {
+      name:
+        customer?.name ||
+        'Porttivo Transporter',
+
+      contact:
+        customer?.contact || undefined,
+
+      email:
+        customer?.email || undefined
+    },
+
     notify: {
       sms: false,
-      email: true
+      email: Boolean(customer?.email)
     },
+
     reminder_enable: true,
-    notes
+
+    notes: {
+      source: 'PORTTIVO',
+      ...notes
+    }
   }
 
   if (expireBy) {
@@ -274,21 +292,11 @@ const createPaymentLink = async ({
     payload.callback_method = 'get'
   }
 
-  const result = await razorpayRequest('/payment_links', {
+  return razorpayRequest('/payment_links', {
     method: 'POST',
     body: payload,
     fetchImpl
   })
-
-  if (!result.ok) {
-    throw new Error(
-      result.data?.error?.description ||
-        result.data?.message ||
-        'Razorpay Payment Link creation failed'
-    )
-  }
-
-  return result.data
 }
 
 module.exports = {
