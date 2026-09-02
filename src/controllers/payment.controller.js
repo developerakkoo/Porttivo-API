@@ -1003,8 +1003,11 @@ const getTransporterPaymentHistory = async (req, res, next) => {
     const status = req.query.status || req.query.paymentStatus || null
     const provider = req.query.provider || null
     const category = req.query.category || null
-    const fromDate = req.query.fromDate || null
-    const toDate = req.query.toDate || null
+    const period = req.query.period || null
+    const fromDate = req.query.fromDate || req.query.startDate || req.query.from || null
+    const toDate = req.query.toDate || req.query.endDate || req.query.to || null
+    const startTime = req.query.startTime || req.query.fromTime || null
+    const endTime = req.query.endTime || req.query.toTime || null
     const search = req.query.search || null
     const page = Math.max(Number(req.query.page) || 1, 1)
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
@@ -1015,8 +1018,11 @@ const getTransporterPaymentHistory = async (req, res, next) => {
       status,
       provider,
       category,
+      period,
       fromDate,
       toDate,
+      startTime,
+      endTime,
       search,
       page,
       limit
@@ -1055,8 +1061,11 @@ const getAdminPaymentHistory = async (req, res, next) => {
       const status = req.query.status || req.query.paymentStatus || null
       const provider = req.query.provider || null
       const category = req.query.category || null
-      const fromDate = req.query.fromDate || null
-      const toDate = req.query.toDate || null
+      const period = req.query.period || null
+      const fromDate = req.query.fromDate || req.query.startDate || req.query.from || null
+      const toDate = req.query.toDate || req.query.endDate || req.query.to || null
+      const startTime = req.query.startTime || req.query.fromTime || null
+      const endTime = req.query.endTime || req.query.toTime || null
       const search = req.query.search || null
       const page = Math.max(Number(req.query.page) || 1, 1)
       const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
@@ -1067,8 +1076,11 @@ const getAdminPaymentHistory = async (req, res, next) => {
         status,
         provider,
         category,
+        period,
         fromDate,
         toDate,
+        startTime,
+        endTime,
         search,
         page,
         limit

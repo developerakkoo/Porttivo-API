@@ -21,6 +21,198 @@ const normalizeFilterValue = (val) => {
   return normalized
 }
 
+const parseDateTimeString = (dateVal, timeVal, isEnd = false) => {
+  if (!dateVal) return null
+  if (dateVal instanceof Date) return isNaN(dateVal.getTime()) ? null : dateVal
+
+  const dateStr = safeString(dateVal)
+  if (!dateStr) return null
+
+  // Check if dateStr is YYYY-MM-DD
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(dateStr)
+
+  if (timeVal && safeString(timeVal)) {
+    const timeStr = safeString(timeVal)
+    const baseDate = isDateOnly ? dateStr : dateStr.split('T')[0].split(' ')[0]
+    const formattedTime = timeStr.includes(':')
+      ? (timeStr.split(':').length === 2 ? `${timeStr}:00` : timeStr)
+      : timeStr
+    const combinedStr = `${baseDate}T${formattedTime}`
+    const parsed = new Date(combinedStr)
+    if (!isNaN(parsed.getTime())) return parsed
+  }
+
+  if (isDateOnly) {
+    if (isEnd) {
+      const parsed = new Date(`${dateStr}T23:59:59.999`)
+      if (!isNaN(parsed.getTime())) return parsed
+      const fallback = new Date(dateStr)
+      fallback.setHours(23, 59, 59, 999)
+      return fallback
+    } else {
+      const parsed = new Date(`${dateStr}T00:00:00.000`)
+      if (!isNaN(parsed.getTime())) return parsed
+      return new Date(dateStr)
+    }
+  }
+
+  const parsed = new Date(dateStr)
+  if (isNaN(parsed.getTime())) return null
+
+  if (isEnd && !dateStr.includes('T') && !dateStr.includes(':')) {
+    parsed.setHours(23, 59, 59, 999)
+  }
+
+  return parsed
+}
+
+/**
+ * Helper function to calculate date range based on period, fromDate, toDate, startTime, and endTime.
+ */
+const resolveDateRange = ({ period, fromDate, toDate, startTime, endTime }) => {
+  let computedFromDate = null
+  let computedToDate = null
+  const normalizedPeriod = safeString(period).toLowerCase()
+  const now = new Date()
+
+  if (normalizedPeriod && normalizedPeriod !== 'custom') {
+    switch (normalizedPeriod) {
+      case 'today':
+      case 'day':
+      case 'daily': {
+        const start = new Date(now)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(now)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case 'yesterday': {
+        const start = new Date(now)
+        start.setDate(start.getDate() - 1)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(now)
+        end.setDate(end.getDate() - 1)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case 'this_week':
+      case 'week':
+      case 'weekly': {
+        const start = new Date(now)
+        const day = start.getDay()
+        const diffToMon = day === 0 ? -6 : 1 - day
+        start.setDate(start.getDate() + diffToMon)
+        start.setHours(0, 0, 0, 0)
+
+        const end = new Date(now)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case 'last_week': {
+        const start = new Date(now)
+        const day = start.getDay()
+        const diffToMon = day === 0 ? -6 : 1 - day
+        start.setDate(start.getDate() + diffToMon - 7)
+        start.setHours(0, 0, 0, 0)
+
+        const end = new Date(start)
+        end.setDate(end.getDate() + 6)
+        end.setHours(23, 59, 59, 999)
+
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case 'this_month':
+      case 'month':
+      case 'monthly': {
+        const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0)
+        const end = new Date(now)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case 'last_month': {
+        const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0)
+        const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case 'this_year':
+      case 'year':
+      case 'yearly': {
+        const start = new Date(now.getFullYear(), 0, 1, 0, 0, 0, 0)
+        const end = new Date(now)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case '7days':
+      case '7_days':
+      case 'last_7_days': {
+        const start = new Date(now)
+        start.setDate(start.getDate() - 6)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(now)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case '30days':
+      case '30_days':
+      case 'last_30_days': {
+        const start = new Date(now)
+        start.setDate(start.getDate() - 29)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(now)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      case '90days':
+      case '90_days':
+      case 'last_90_days': {
+        const start = new Date(now)
+        start.setDate(start.getDate() - 89)
+        start.setHours(0, 0, 0, 0)
+        const end = new Date(now)
+        end.setHours(23, 59, 59, 999)
+        computedFromDate = start
+        computedToDate = end
+        break
+      }
+      default:
+        break
+    }
+  }
+
+  if (fromDate) {
+    computedFromDate = parseDateTimeString(fromDate, startTime, false)
+  }
+  if (toDate) {
+    computedToDate = parseDateTimeString(toDate, endTime, true)
+  }
+
+  const activePeriod = normalizedPeriod || (computedFromDate || computedToDate ? 'custom' : null)
+
+  return {
+    fromDate: computedFromDate,
+    toDate: computedToDate,
+    period: activePeriod
+  }
+}
+
 /**
  * Fetch and aggregate complete payment history for a transporter (Received & Transferred).
  */
@@ -30,8 +222,11 @@ const getTransporterUnifiedPaymentHistory = async ({
   status = null,
   provider = null,
   category = null,
+  period = null,
   fromDate = null,
   toDate = null,
+  startTime = null,
+  endTime = null,
   search = null,
   page = 1,
   limit = 20
@@ -47,15 +242,19 @@ const getTransporterUnifiedPaymentHistory = async ({
   const normalizedProvider = normalizeFilterValue(provider)
   const normalizedCategory = normalizeFilterValue(category)
 
+  const {
+    fromDate: resolvedFromDate,
+    toDate: resolvedToDate,
+    period: activePeriod
+  } = resolveDateRange({ period, fromDate, toDate, startTime, endTime })
+
   // Construct date filters
   const dateFilter = {}
-  if (fromDate) {
-    dateFilter.$gte = new Date(fromDate)
+  if (resolvedFromDate) {
+    dateFilter.$gte = resolvedFromDate
   }
-  if (toDate) {
-    const end = new Date(toDate)
-    end.setHours(23, 59, 59, 999)
-    dateFilter.$lte = end
+  if (resolvedToDate) {
+    dateFilter.$lte = resolvedToDate
   }
   const hasDateFilter = Object.keys(dateFilter).length > 0
 
@@ -306,6 +505,20 @@ const getTransporterUnifiedPaymentHistory = async ({
   // Apply filters in memory across aggregated dataset
   let filtered = items
 
+  // Date & Time filter in memory
+  if (resolvedFromDate) {
+    filtered = filtered.filter((i) => {
+      const itemDate = new Date(i.paymentDate || i.createdAt)
+      return !isNaN(itemDate.getTime()) && itemDate >= resolvedFromDate
+    })
+  }
+  if (resolvedToDate) {
+    filtered = filtered.filter((i) => {
+      const itemDate = new Date(i.paymentDate || i.createdAt)
+      return !isNaN(itemDate.getTime()) && itemDate <= resolvedToDate
+    })
+  }
+
   // Direction filter
   if (normalizedDirection === 'RECEIVED') {
     filtered = filtered.filter((i) => i.direction === 'RECEIVED')
@@ -391,6 +604,16 @@ const getTransporterUnifiedPaymentHistory = async ({
     totalPages: Math.ceil(total / limitNum) || 1,
     hasNext: pageNum * limitNum < total,
     hasPrevious: pageNum > 1,
+    filters: {
+      period: activePeriod,
+      fromDate: resolvedFromDate ? resolvedFromDate.toISOString() : null,
+      toDate: resolvedToDate ? resolvedToDate.toISOString() : null,
+      direction: normalizedDirection,
+      status: normalizedStatus,
+      provider: normalizedProvider,
+      category: normalizedCategory,
+      search: search || null
+    },
     summary: {
       totalReceivedAmount,
       totalTransferredAmount,

@@ -695,6 +695,70 @@ const transporterPaymentHistoryTests = [
         assert.ok(first >= second, 'Results should be sorted newest first')
       }
     }
+  },
+
+  {
+    name: 'getTransporterUnifiedPaymentHistory correctly filters by period (today/this_month)',
+    async run () {
+      const todayPs = makePaymentSession({ createdAt: new Date(), completedAt: new Date() })
+      const oldPs = makePaymentSession({ createdAt: new Date('2025-01-01T00:00:00Z'), completedAt: new Date('2025-01-01T01:00:00Z') })
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/paymentHistory.service.js'),
+        buildMockModels({
+          paymentSessions: [todayPs, oldPs],
+          payouts: [],
+          paymentLinks: [],
+          marketplacePayments: []
+        })
+      )
+
+      const resultToday = await service.getTransporterUnifiedPaymentHistory({
+        transporterId: TRANSPORTER_ID,
+        period: 'today',
+        page: 1,
+        limit: 100
+      })
+
+      assert.equal(resultToday.filters.period, 'today')
+      assert.ok(resultToday.filters.fromDate, 'should have resolved fromDate')
+      assert.ok(resultToday.filters.toDate, 'should have resolved toDate')
+      assert.equal(resultToday.payments.length, 1)
+      assert.equal(String(resultToday.payments[0].paymentId), String(todayPs._id))
+    }
+  },
+
+  {
+    name: 'getTransporterUnifiedPaymentHistory correctly filters by custom date range and time',
+    async run () {
+      const item1 = makePaymentSession({ createdAt: new Date('2026-08-05T08:00:00Z'), completedAt: new Date('2026-08-05T08:00:00Z') })
+      const item2 = makePaymentSession({ createdAt: new Date('2026-08-05T14:00:00Z'), completedAt: new Date('2026-08-05T14:00:00Z') })
+      const item3 = makePaymentSession({ createdAt: new Date('2026-08-05T20:00:00Z'), completedAt: new Date('2026-08-05T20:00:00Z') })
+
+      const service = loadWithMocks(
+        path.resolve(process.cwd(), 'src/services/paymentHistory.service.js'),
+        buildMockModels({
+          paymentSessions: [item1, item2, item3],
+          payouts: [],
+          paymentLinks: [],
+          marketplacePayments: []
+        })
+      )
+
+      const result = await service.getTransporterUnifiedPaymentHistory({
+        transporterId: TRANSPORTER_ID,
+        fromDate: '2026-08-05',
+        toDate: '2026-08-05',
+        startTime: '10:00:00',
+        endTime: '18:00:00',
+        page: 1,
+        limit: 100
+      })
+
+      assert.equal(result.filters.period, 'custom')
+      assert.equal(result.payments.length, 1)
+      assert.equal(String(result.payments[0].paymentId), String(item2._id))
+    }
   }
 ]
 
