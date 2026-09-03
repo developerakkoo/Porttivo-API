@@ -157,6 +157,20 @@ module.exports = {
     process.env.RAZORPAY_PAYOUT_ACCOUNT_NUMBER ||
     process.env.RAZORPAY_ACCOUNT_NUMBER ||
     '50000210062',
+  razorpayPayoutMode: process.env.RAZORPAY_PAYOUT_MODE || process.env.RAZORPAY_MODE || 'production',
+  razorpayPayoutKeyId:
+    process.env.RAZORPAY_PAYOUT_KEY_ID || process.env.RAZORPAY_KEY_ID || 'rzp_live_TLF84Z0KLAXg6s',
+  razorpayPayoutKeySecret:
+    process.env.RAZORPAY_PAYOUT_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET || 'UtVZjsQJiO9FsHhVOwuaXSB9',
+  razorpayPayoutWebhookSecret:
+    process.env.RAZORPAY_PAYOUT_WEBHOOK_SECRET ||
+    'sadfghjghfd_1234gfFDS',
+  razorpayPayoutApiBaseUrl:
+    process.env.RAZORPAY_PAYOUT_API_BASE_URL || 'https://api.razorpay.com/v1',
+  razorpayPayoutAccountNumber:
+    process.env.RAZORPAY_PAYOUT_ACCOUNT_NUMBER ||
+    process.env.RAZORPAY_ACCOUNT_NUMBER ||
+    '50000210062',
   razorpayPayoutWebhookUrl:
     process.env.RAZORPAY_PAYOUT_WEBHOOK_URL ||
     buildApiUrl('/api/payouts/razorpay/webhook'),
@@ -168,4 +182,10 @@ module.exports = {
     process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
     './src/config/firebase-service-account.json',
   firebaseServiceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '',
+  msg91AuthKey: process.env.MSG91_AUTH_KEY || '553539AYYp5Q0n2zC6a66ef07P1',
+  msg91TemplateId: process.env.MSG91_OTP_TEMPLATE_ID || '6a66ea098ceab899a2052f93',
+  msg91ApiBaseUrl: process.env.MSG91_API_BASE_URL || 'https://control.msg91.com/api/v5/otp',
+  msg91DefaultCountryCode: process.env.MSG91_DEFAULT_COUNTRY_CODE || '91',
+  msg91EnableTestOtp: String(process.env.MSG91_ENABLE_TEST_OTP || '').trim().toLowerCase() === 'true',
+  msg91TestOtp: process.env.MSG91_TEST_OTP || '123456',
 };

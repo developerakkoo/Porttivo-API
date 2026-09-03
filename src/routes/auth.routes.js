@@ -1,7 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
-const { sendOTP, register, registerPumpOwner, customerMobileAuth, pinLogin, companyUserLogin, refreshToken, logout } = require('../controllers/auth.controller');
+const {
+  sendOTP,
+  verifyOTP,
+  resendOTP,
+  register,
+  registerPumpOwner,
+  customerMobileAuth,
+  pinLogin,
+  companyUserLogin,
+  refreshToken,
+  logout,
+} = require('../controllers/auth.controller');
 const { adminLogin } = require('../controllers/admin.controller');
 
 /**
@@ -27,10 +38,24 @@ router.post('/customer/mobile', customerMobileAuth);
 
 /**
  * @route   POST /api/auth/send-otp
- * @desc    Send OTP (simplified - returns tokens directly)
+ * @desc    Send OTP via MSG91
  * @access  Public
  */
 router.post('/send-otp', sendOTP);
+
+/**
+ * @route   POST /api/auth/verify-otp
+ * @desc    Verify OTP via MSG91 and issue tokens
+ * @access  Public
+ */
+router.post('/verify-otp', verifyOTP);
+
+/**
+ * @route   POST /api/auth/resend-otp
+ * @desc    Resend OTP via MSG91
+ * @access  Public
+ */
+router.post('/resend-otp', resendOTP);
 
 /**
  * @route   POST /api/auth/pin-login

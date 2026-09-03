@@ -22,16 +22,72 @@ const {
   validatePin,
 } = require('../utils/validation');
 const { normalizeOperatingCountry } = require('../constants/operatingCountries');
+const msg91Service = require('../services/msg91.service');
 
 /**
- * Send OTP endpoint (simplified - returns tokens directly)
+ * Helper to verify account eligibility before sending or verifying OTP
+ */
+const checkUserEligibility = async (normalizedUserType, cleanedMobile) => {
+  if (normalizedUserType === 'transporter') {
+    const transporter = await Transporter.findOne({ mobile: cleanedMobile });
+    if (!transporter) {
+      return { eligible: false, statusCode: 404, message: 'Transporter not registered. Please contact admin for registration.' };
+    }
+    if (transporter.status === 'blocked') {
+      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+    }
+    return { eligible: true, user: transporter };
+  } else if (normalizedUserType === 'driver') {
+    const driver = await Driver.findOne({ mobile: cleanedMobile });
+    if (!driver || !driver.transporterId) {
+      return { eligible: false, statusCode: 404, message: 'You are not linked to any transporter yet.' };
+    }
+    if (driver.status === 'blocked') {
+      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+    }
+    return { eligible: true, user: driver };
+  } else if (normalizedUserType === 'pump_owner') {
+    const pumpOwner = await PumpOwner.findOne({ mobile: cleanedMobile });
+    if (!pumpOwner) {
+      return { eligible: false, statusCode: 404, message: 'Pump owner not registered. Please contact admin for registration.' };
+    }
+    if (pumpOwner.status === 'blocked') {
+      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+    }
+    if (pumpOwner.status === 'inactive' || pumpOwner.status === 'pending') {
+      return { eligible: false, statusCode: 403, message: 'Your account is not active. Please contact admin for activation.' };
+    }
+    return { eligible: true, user: pumpOwner };
+  } else if (normalizedUserType === 'pump_staff') {
+    const pumpStaff = await PumpStaff.findOne({ mobile: cleanedMobile }).populate('pumpOwnerId', 'name pumpName');
+    if (!pumpStaff) {
+      return { eligible: false, statusCode: 404, message: 'Pump staff not registered. Please contact your pump owner for registration.' };
+    }
+    if (pumpStaff.status === 'blocked' || pumpStaff.status === 'disabled') {
+      return { eligible: false, statusCode: 403, message: 'Your account has been blocked or disabled.' };
+    }
+    if (pumpStaff.status === 'inactive') {
+      return { eligible: false, statusCode: 403, message: 'Your account is not active. Please contact your pump owner.' };
+    }
+    return { eligible: true, user: pumpStaff };
+  } else if (normalizedUserType === 'customer') {
+    const customer = await Customer.findOne({ mobile: cleanedMobile });
+    if (customer && customer.status === 'blocked') {
+      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+    }
+    return { eligible: true, user: customer || null };
+  }
+  return { eligible: false, statusCode: 400, message: 'Invalid user type' };
+};
+
+/**
+ * Send OTP endpoint via MSG91
  * POST /api/auth/send-otp
  */
 const sendOTP = async (req, res, next) => {
   try {
     const { mobile, userType } = req.body;
 
-    // Validation
     if (!mobile) {
       return res.status(400).json({
         success: false,
@@ -63,272 +119,325 @@ const sendOTP = async (req, res, next) => {
 
     const normalizedUserType = userType.toLowerCase();
 
-    try {
-      if (normalizedUserType === 'transporter') {
-        // Find transporter
-        let transporter = await Transporter.findOne({ mobile: cleanedMobile });
-
-        if (!transporter) {
-          return res.status(404).json({
-            success: false,
-            message: 'Transporter not registered. Please contact admin for registration.',
-          });
-        }
-
-        // Check if transporter is blocked
-        if (transporter.status === 'blocked') {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account has been blocked. Please contact support.',
-          });
-        }
-
-        // Generate tokens
-        const tokens = generateTokens({
-          id: transporter._id,
-          mobile: transporter.mobile,
-          userType: 'transporter',
-        });
-
-        // Return success response
-        return res.status(200).json({
-          success: true,
-          message: 'Login successful',
-          data: {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: {
-              id: transporter._id,
-              mobile: transporter.mobile,
-              name: transporter.name,
-              email: transporter.email,
-              company: transporter.company,
-              operatingCountry: transporter.operatingCountry,
-              userType: 'transporter',
-              status: transporter.status,
-              hasAccess: transporter.hasAccess,
-              hasPinSet: transporter.hasPinSet(),
-            },
-          },
-        });
-      } else if (normalizedUserType === 'driver') {
-        // Find driver - must be created by transporter (no auto-create)
-        const driver = await Driver.findOne({ mobile: cleanedMobile });
-
-        if (!driver) {
-          return res.status(404).json({
-            success: false,
-            message: 'You are not linked to any transporter yet.',
-          });
-        }
-
-        // Check if driver is linked to a transporter
-        if (!driver.transporterId) {
-          return res.status(404).json({
-            success: false,
-            message: 'You are not linked to any transporter yet.',
-          });
-        }
-
-        // Check if driver is blocked
-        if (driver.status === 'blocked') {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account has been blocked. Please contact support.',
-          });
-        }
-
-        // On first app install: update pending -> active
-        if (driver.status === 'pending') {
-          driver.status = 'active';
-          driver.appInstalled = true;
-          driver.lastSeen = new Date();
-          await driver.save();
-        } else {
-          driver.lastSeen = new Date();
-          await driver.save({ validateBeforeSave: false });
-        }
-
-        // Generate tokens
-        const tokens = generateTokens({
-          id: driver._id,
-          mobile: driver.mobile,
-          userType: 'driver',
-        });
-
-        // Determine hasAccess based on status
-        const hasAccess = driver.status === 'active';
-
-        // Return success response
-        return res.status(200).json({
-          success: true,
-          message: 'Login successful',
-          data: {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: {
-              id: driver._id,
-              mobile: driver.mobile,
-              name: driver.name,
-              userType: 'driver',
-              status: driver.status,
-              hasAccess: hasAccess,
-              language: driver.language,
-              transporterId: driver.transporterId,
-            },
-          },
-        });
-      } else if (normalizedUserType === 'pump_owner') {
-        // Find pump owner
-        let pumpOwner = await PumpOwner.findOne({ mobile: cleanedMobile });
-
-        if (!pumpOwner) {
-          return res.status(404).json({
-            success: false,
-            message: 'Pump owner not registered. Please contact admin for registration.',
-          });
-        }
-
-        // Check if pump owner is blocked
-        if (pumpOwner.status === 'blocked') {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account has been blocked. Please contact support.',
-          });
-        }
-
-        // Check if pump owner is inactive or pending
-        if (pumpOwner.status === 'inactive' || pumpOwner.status === 'pending') {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account is not active. Please contact admin for activation.',
-          });
-        }
-
-        // Generate tokens
-        const tokens = generateTokens({
-          id: pumpOwner._id,
-          mobile: pumpOwner.mobile,
-          userType: 'pump_owner',
-        });
-
-        // Return success response
-        return res.status(200).json({
-          success: true,
-          message: 'Login successful',
-          data: {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: {
-              id: pumpOwner._id,
-              mobile: pumpOwner.mobile,
-              name: pumpOwner.name,
-              email: pumpOwner.email,
-              pumpName: pumpOwner.pumpName,
-              userType: 'pump_owner',
-              status: pumpOwner.status,
-              walletBalance: pumpOwner.walletBalance,
-              commissionRate: pumpOwner.commissionRate,
-            },
-          },
-        });
-      } else if (normalizedUserType === 'pump_staff') {
-        const pumpStaff = await PumpStaff.findOne({ mobile: cleanedMobile })
-          .populate('pumpOwnerId', 'name pumpName');
-
-        if (!pumpStaff) {
-          return res.status(404).json({
-            success: false,
-            message: 'Pump staff not registered. Please contact your pump owner for registration.',
-          });
-        }
-
-        if (pumpStaff.status === 'blocked' || pumpStaff.status === 'disabled') {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account has been blocked or disabled.',
-          });
-        }
-
-        if (pumpStaff.status === 'inactive') {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account is not active. Please contact your pump owner.',
-          });
-        }
-
-        const tokens = generateTokens({
-          id: pumpStaff._id,
-          mobile: pumpStaff.mobile,
-          userType: 'pump_staff',
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: 'Login successful',
-          data: {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: {
-              id: pumpStaff._id,
-              mobile: pumpStaff.mobile,
-              name: pumpStaff.name,
-              userType: 'pump_staff',
-              status: pumpStaff.status,
-              pumpOwnerId: pumpStaff.pumpOwnerId?._id || pumpStaff.pumpOwnerId,
-              pumpName: pumpStaff.pumpOwnerId?.pumpName,
-            },
-          },
-        });
-      } else if (normalizedUserType === 'customer') {
-        const customer = await Customer.findOne({ mobile: cleanedMobile });
-
-        if (!customer) {
-          return res.status(404).json({
-            success: false,
-            message: 'Customer not registered. Please use customer mobile auth to continue.',
-          });
-        }
-
-        if (customer.status === 'blocked') {
-          return res.status(403).json({
-            success: false,
-            message: 'Your account has been blocked. Please contact support.',
-          });
-        }
-
-        const tokens = generateTokens({
-          id: customer._id,
-          mobile: customer.mobile,
-          userType: 'customer',
-        });
-
-        return res.status(200).json({
-          success: true,
-          message: 'Login successful',
-          data: {
-            accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
-            user: {
-              id: customer._id,
-              mobile: customer.mobile,
-              name: customer.name,
-              email: customer.email,
-              userType: 'customer',
-              status: customer.status,
-              isRegistered: customer.isRegistered,
-            },
-          },
-        });
-      }
-    } catch (dbError) {
-      console.error('Database error:', dbError);
-      return res.status(500).json({
+    // Check account eligibility in DB before sending OTP
+    const check = await checkUserEligibility(normalizedUserType, cleanedMobile);
+    if (!check.eligible) {
+      return res.status(check.statusCode).json({
         success: false,
-        message: 'Database error occurred',
-        error: dbError.message,
+        message: check.message,
       });
     }
+
+    // Call MSG91 to send OTP
+    const otpResult = await msg91Service.sendOtp(cleanedMobile);
+
+    if (!otpResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: otpResult.message || 'Failed to send OTP',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: otpResult.message || 'OTP sent successfully',
+      data: {
+        mobile: cleanedMobile,
+        userType: normalizedUserType,
+        requestId: otpResult.requestId || null,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Verify OTP endpoint via MSG91
+ * POST /api/auth/verify-otp
+ */
+const verifyOTP = async (req, res, next) => {
+  try {
+    const { mobile, userType, otp } = req.body;
+
+    if (!mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Mobile number is required',
+      });
+    }
+
+    if (!userType) {
+      return res.status(400).json({
+        success: false,
+        message: 'User type is required',
+      });
+    }
+
+    if (!otp) {
+      return res.status(400).json({
+        success: false,
+        message: 'OTP is required',
+      });
+    }
+
+    if (!validateUserType(userType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"',
+      });
+    }
+
+    const cleanedMobile = cleanMobile(mobile);
+    if (!validateMobile(cleanedMobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid mobile number format. Must be 10 digits',
+      });
+    }
+
+    const normalizedUserType = userType.toLowerCase();
+
+    // Check account eligibility in DB
+    const check = await checkUserEligibility(normalizedUserType, cleanedMobile);
+    if (!check.eligible) {
+      return res.status(check.statusCode).json({
+        success: false,
+        message: check.message,
+      });
+    }
+
+    // Verify OTP via MSG91
+    const verifyResult = await msg91Service.verifyOtp(cleanedMobile, otp);
+
+    if (!verifyResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: verifyResult.message || 'Invalid or expired OTP',
+      });
+    }
+
+    // Return JWT tokens and user profile on successful verification
+    if (normalizedUserType === 'transporter') {
+      const transporter = check.user;
+      const tokens = generateTokens({
+        id: transporter._id,
+        mobile: transporter.mobile,
+        userType: 'transporter',
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          user: {
+            id: transporter._id,
+            mobile: transporter.mobile,
+            name: transporter.name,
+            email: transporter.email,
+            company: transporter.company,
+            operatingCountry: transporter.operatingCountry,
+            userType: 'transporter',
+            status: transporter.status,
+            hasAccess: transporter.hasAccess,
+            hasPinSet: transporter.hasPinSet(),
+          },
+        },
+      });
+    } else if (normalizedUserType === 'driver') {
+      const driver = check.user;
+
+      if (driver.status === 'pending') {
+        driver.status = 'active';
+        driver.appInstalled = true;
+        driver.lastSeen = new Date();
+        await driver.save();
+      } else {
+        driver.lastSeen = new Date();
+        await driver.save({ validateBeforeSave: false });
+      }
+
+      const tokens = generateTokens({
+        id: driver._id,
+        mobile: driver.mobile,
+        userType: 'driver',
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          user: {
+            id: driver._id,
+            mobile: driver.mobile,
+            name: driver.name,
+            userType: 'driver',
+            status: driver.status,
+            hasAccess: driver.status === 'active',
+            language: driver.language,
+            transporterId: driver.transporterId,
+          },
+        },
+      });
+    } else if (normalizedUserType === 'pump_owner') {
+      const pumpOwner = check.user;
+      const tokens = generateTokens({
+        id: pumpOwner._id,
+        mobile: pumpOwner.mobile,
+        userType: 'pump_owner',
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          user: {
+            id: pumpOwner._id,
+            mobile: pumpOwner.mobile,
+            name: pumpOwner.name,
+            email: pumpOwner.email,
+            pumpName: pumpOwner.pumpName,
+            userType: 'pump_owner',
+            status: pumpOwner.status,
+            walletBalance: pumpOwner.walletBalance,
+            commissionRate: pumpOwner.commissionRate,
+          },
+        },
+      });
+    } else if (normalizedUserType === 'pump_staff') {
+      const pumpStaff = check.user;
+      const tokens = generateTokens({
+        id: pumpStaff._id,
+        mobile: pumpStaff.mobile,
+        userType: 'pump_staff',
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          user: {
+            id: pumpStaff._id,
+            mobile: pumpStaff.mobile,
+            name: pumpStaff.name,
+            userType: 'pump_staff',
+            status: pumpStaff.status,
+            pumpOwnerId: pumpStaff.pumpOwnerId?._id || pumpStaff.pumpOwnerId,
+            pumpName: pumpStaff.pumpOwnerId?.pumpName,
+          },
+        },
+      });
+    } else if (normalizedUserType === 'customer') {
+      let customer = check.user;
+      let isRegistered = true;
+
+      if (!customer) {
+        customer = await Customer.create({
+          mobile: cleanedMobile,
+          isRegistered: false,
+        });
+        isRegistered = false;
+      }
+
+      const tokens = generateTokens({
+        id: customer._id,
+        mobile: customer.mobile,
+        userType: 'customer',
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          user: {
+            id: customer._id,
+            mobile: customer.mobile,
+            name: customer.name,
+            email: customer.email,
+            userType: 'customer',
+            status: customer.status,
+            isRegistered: customer.isRegistered,
+          },
+        },
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Resend OTP endpoint via MSG91
+ * POST /api/auth/resend-otp
+ */
+const resendOTP = async (req, res, next) => {
+  try {
+    const { mobile, userType, retryType } = req.body;
+
+    if (!mobile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Mobile number is required',
+      });
+    }
+
+    if (!userType) {
+      return res.status(400).json({
+        success: false,
+        message: 'User type is required',
+      });
+    }
+
+    if (!validateUserType(userType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"',
+      });
+    }
+
+    const cleanedMobile = cleanMobile(mobile);
+    if (!validateMobile(cleanedMobile)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid mobile number format. Must be 10 digits',
+      });
+    }
+
+    const normalizedUserType = userType.toLowerCase();
+
+    // Check account eligibility in DB
+    const check = await checkUserEligibility(normalizedUserType, cleanedMobile);
+    if (!check.eligible) {
+      return res.status(check.statusCode).json({
+        success: false,
+        message: check.message,
+      });
+    }
+
+    // Call MSG91 to resend OTP
+    const resendResult = await msg91Service.resendOtp(cleanedMobile, retryType || 'text');
+
+    if (!resendResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: resendResult.message || 'Failed to resend OTP',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: resendResult.message || 'OTP resent successfully',
+    });
   } catch (error) {
     next(error);
   }
@@ -1013,6 +1122,8 @@ const logout = async (req, res, next) => {
 
 module.exports = {
   sendOTP,
+  verifyOTP,
+  resendOTP,
   register,
   registerPumpOwner,
   customerMobileAuth,
