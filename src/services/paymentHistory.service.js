@@ -317,10 +317,42 @@ const getTransporterUnifiedPaymentHistory = async ({
   if (hasDateFilter) poFilter.createdAt = dateFilter
 
   const allPayouts = await Payout.find(poFilter).lean()
-  const standalonePayouts = allPayouts.filter(
-    po =>
-      !po.paymentId || !psIds.some(id => String(id) === String(po.paymentId))
-  )
+  const standalonePayouts = allPayouts.filter(po => {
+    // Already represented by PaymentSession
+    if (po.paymentId && psIds.some(id => String(id) === String(po.paymentId))) {
+      return false
+    }
+
+    // Already represented by MarketplacePayment
+    if (po.paymentId && marketplacePaymentIds.has(String(po.paymentId))) {
+      return false
+    }
+
+    // Driver Advance / trip payout already represented
+    if (
+      safeString(po.referenceType).toUpperCase() === 'TRIP' &&
+      po.referenceId &&
+      paymentSessions.some(
+        ps =>
+          safeString(ps.referenceType).toUpperCase() === 'TRIP' &&
+          String(ps.referenceId) === String(po.referenceId)
+      )
+    ) {
+      return false
+    }
+
+    // Marketplace payout already represented by marketplace payment
+    if (
+      po.referenceType &&
+      safeString(po.referenceType).toUpperCase() === 'BOOKING' &&
+      po.referenceId &&
+      marketplaceBookingIds.has(String(po.referenceId))
+    ) {
+      return false
+    }
+
+    return true
+  })
 
   // 3. Fetch MarketplacePayments
   const mpFilter = {
@@ -334,7 +366,23 @@ const getTransporterUnifiedPaymentHistory = async ({
   if (hasDateFilter) mpFilter.createdAt = dateFilter
 
   const marketplacePayments = await MarketplacePayment.find(mpFilter).lean()
+  const marketplacePaymentIds = new Set(
+    marketplacePayments.map(mp => String(mp._id))
+  )
 
+  const marketplaceTripIds = new Set(
+    marketplacePayments
+      .map(mp => mp.tripId)
+      .filter(Boolean)
+      .map(id => String(id))
+  )
+
+  const marketplaceBookingIds = new Set(
+    marketplacePayments
+      .map(mp => mp.bookingId)
+      .filter(Boolean)
+      .map(id => String(id))
+  )
   // 4. Fetch RazorpayPaymentLinks
   const plFilter = {
     $or: [
@@ -349,9 +397,7 @@ const getTransporterUnifiedPaymentHistory = async ({
 
   // Process & Normalize into unified transaction items
   const items = []
-  const paymentSessionIds = new Set(
-  paymentSessions.map(ps => String(ps._id))
-)
+  const paymentSessionIds = new Set(paymentSessions.map(ps => String(ps._id)))
 
   // Transform PaymentSessions
   paymentSessions.forEach(ps => {
@@ -479,6 +525,13 @@ const getTransporterUnifiedPaymentHistory = async ({
   marketplacePayments.forEach(mp => {
     const isSeller = safeString(mp.beneficiaryTransporterId) === tIdStr
     const dir = isSeller ? 'RECEIVED' : 'TRANSFERRED'
+    const marketplaceReferenceKey = [
+      safeString(mp.referenceType || 'BOOKING').toUpperCase(),
+      safeString(mp.referenceId || mp.bookingId)
+    ].join(':')
+
+    const linkedPayout =
+      payoutMapByReference.get(marketplaceReferenceKey) || null
 
     items.push({
       id: String(mp._id),
@@ -504,7 +557,7 @@ const getTransporterUnifiedPaymentHistory = async ({
       provider: mp.provider || 'RAZORPAY',
       providerTransactionId: mp.providerTransactionId || null,
       providerOrderId: mp.providerOrderId || null,
-      payoutStatus: 'NOT_APPLICABLE',
+      payoutStatus: linkedPayout ? linkedPayout.status : 'NOT_APPLICABLE',
       counterparty: {
         id: isSeller
           ? safeString(mp.payerTransporterId)
@@ -514,7 +567,23 @@ const getTransporterUnifiedPaymentHistory = async ({
         email: null,
         userType: 'TRANSPORTER'
       },
-      payout: null,
+      payout: linkedPayout
+        ? {
+            id: linkedPayout._id,
+            status: linkedPayout.status,
+            transferId:
+              linkedPayout.cashfree?.transferId ||
+              linkedPayout.razorpay?.payoutId ||
+              null,
+            utr:
+              linkedPayout.cashfree?.utr || linkedPayout.razorpay?.utr || null,
+            transferMode:
+              linkedPayout.cashfree?.transferMode ||
+              linkedPayout.razorpay?.transferMode ||
+              'IMPS',
+            completedAt: linkedPayout.completedAt || null
+          }
+        : null,
       metadata: mp.metadata || {}
     })
   })
