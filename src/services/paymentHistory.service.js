@@ -349,6 +349,9 @@ const getTransporterUnifiedPaymentHistory = async ({
 
   // Process & Normalize into unified transaction items
   const items = []
+  const paymentSessionIds = new Set(
+  paymentSessions.map(ps => String(ps._id))
+)
 
   // Transform PaymentSessions
   paymentSessions.forEach(ps => {
