@@ -254,6 +254,7 @@ const getTransporterUnifiedPaymentHistory = async ({
 }) => {
   const tIdStr = safeString(transporterId)
   const tIdObj = toObjectId(transporterId)
+
   if (!tIdStr) {
     throw new Error('Transporter ID is required')
   }
@@ -267,19 +268,31 @@ const getTransporterUnifiedPaymentHistory = async ({
     fromDate: resolvedFromDate,
     toDate: resolvedToDate,
     period: activePeriod
-  } = resolveDateRange({ period, fromDate, toDate, startTime, endTime })
+  } = resolveDateRange({
+    period,
+    fromDate,
+    toDate,
+    startTime,
+    endTime
+  })
 
   // Construct date filters
   const dateFilter = {}
+
   if (resolvedFromDate) {
     dateFilter.$gte = resolvedFromDate
   }
+
   if (resolvedToDate) {
     dateFilter.$lte = resolvedToDate
   }
+
   const hasDateFilter = Object.keys(dateFilter).length > 0
 
+  // ============================================================
   // 1. Fetch PaymentSessions
+  // ============================================================
+
   const psFilter = {
     $or: [
       { 'metadata.transporterId': tIdObj || tIdStr },
@@ -292,80 +305,65 @@ const getTransporterUnifiedPaymentHistory = async ({
       { 'metadata.payeeId': tIdStr }
     ]
   }
-  if (normalizedStatus) psFilter.status = normalizedStatus
-  if (normalizedProvider) psFilter.provider = normalizedProvider
-  if (hasDateFilter) psFilter.createdAt = dateFilter
+
+  if (normalizedStatus) {
+    psFilter.status = normalizedStatus
+  }
+
+  if (normalizedProvider) {
+    psFilter.provider = normalizedProvider
+  }
+
+  if (hasDateFilter) {
+    psFilter.createdAt = dateFilter
+  }
 
   const paymentSessions = await PaymentSession.find(psFilter).lean()
 
-  // Find linked Payouts for payment sessions
+  // Find linked Payouts for PaymentSessions
   const psIds = paymentSessions.map(ps => ps._id)
+
   const linkedPayouts = psIds.length
-    ? await Payout.find({ paymentId: { $in: psIds } }).lean()
+    ? await Payout.find({
+        paymentId: { $in: psIds }
+      }).lean()
     : []
+
   const payoutMapByPaymentId = new Map()
+
   linkedPayouts.forEach(po => {
     payoutMapByPaymentId.set(String(po.paymentId), po)
   })
 
-  // 2. Fetch standalone Payouts where transporter is payer or payee
-  const poFilter = {
-    $or: [{ payerId: tIdObj || tIdStr }, { payeeId: tIdObj || tIdStr }]
-  }
-  if (normalizedStatus) poFilter.status = normalizedStatus
-  if (normalizedProvider) poFilter.provider = normalizedProvider
-  if (hasDateFilter) poFilter.createdAt = dateFilter
+  // ============================================================
+  // 2. Fetch MarketplacePayments
+  //
+  // IMPORTANT:
+  // This MUST happen before standalonePayouts filtering because
+  // marketplacePaymentIds and marketplaceBookingIds are used there.
+  // ============================================================
 
-  const allPayouts = await Payout.find(poFilter).lean()
-  const standalonePayouts = allPayouts.filter(po => {
-    // Already represented by PaymentSession
-    if (po.paymentId && psIds.some(id => String(id) === String(po.paymentId))) {
-      return false
-    }
-
-    // Already represented by MarketplacePayment
-    if (po.paymentId && marketplacePaymentIds.has(String(po.paymentId))) {
-      return false
-    }
-
-    // Driver Advance / trip payout already represented
-    if (
-      safeString(po.referenceType).toUpperCase() === 'TRIP' &&
-      po.referenceId &&
-      paymentSessions.some(
-        ps =>
-          safeString(ps.referenceType).toUpperCase() === 'TRIP' &&
-          String(ps.referenceId) === String(po.referenceId)
-      )
-    ) {
-      return false
-    }
-
-    // Marketplace payout already represented by marketplace payment
-    if (
-      po.referenceType &&
-      safeString(po.referenceType).toUpperCase() === 'BOOKING' &&
-      po.referenceId &&
-      marketplaceBookingIds.has(String(po.referenceId))
-    ) {
-      return false
-    }
-
-    return true
-  })
-
-  // 3. Fetch MarketplacePayments
   const mpFilter = {
     $or: [
       { payerTransporterId: tIdObj || tIdStr },
       { beneficiaryTransporterId: tIdObj || tIdStr }
     ]
   }
-  if (normalizedStatus) mpFilter.status = normalizedStatus
-  if (normalizedProvider) mpFilter.provider = normalizedProvider
-  if (hasDateFilter) mpFilter.createdAt = dateFilter
+
+  if (normalizedStatus) {
+    mpFilter.status = normalizedStatus
+  }
+
+  if (normalizedProvider) {
+    mpFilter.provider = normalizedProvider
+  }
+
+  if (hasDateFilter) {
+    mpFilter.createdAt = dateFilter
+  }
 
   const marketplacePayments = await MarketplacePayment.find(mpFilter).lean()
+
   const marketplacePaymentIds = new Set(
     marketplacePayments.map(mp => String(mp._id))
   )
@@ -383,31 +381,159 @@ const getTransporterUnifiedPaymentHistory = async ({
       .filter(Boolean)
       .map(id => String(id))
   )
-  // 4. Fetch RazorpayPaymentLinks
+
+  // ============================================================
+  // 3. Fetch Payouts
+  // ============================================================
+
+  const poFilter = {
+    $or: [{ payerId: tIdObj || tIdStr }, { payeeId: tIdObj || tIdStr }]
+  }
+
+  if (normalizedStatus) {
+    poFilter.status = normalizedStatus
+  }
+
+  if (normalizedProvider) {
+    poFilter.provider = normalizedProvider
+  }
+
+  if (hasDateFilter) {
+    poFilter.createdAt = dateFilter
+  }
+
+  const allPayouts = await Payout.find(poFilter).lean()
+
+  // ============================================================
+  // 4. Create payout reference map
+  //
+  // Used later by MarketplacePayments to attach payout details.
+  // ============================================================
+
+  const payoutMapByReference = new Map()
+
+  allPayouts.forEach(po => {
+    const referenceType = safeString(po.referenceType).toUpperCase()
+
+    const referenceId = safeString(po.referenceId)
+
+    if (!referenceType || !referenceId) {
+      return
+    }
+
+    const key = `${referenceType}:${referenceId}`
+
+    const existing = payoutMapByReference.get(key)
+
+    if (
+      !existing ||
+      new Date(po.createdAt).getTime() > new Date(existing.createdAt).getTime()
+    ) {
+      payoutMapByReference.set(key, po)
+    }
+  })
+
+  // ============================================================
+  // 5. Find ONLY standalone payouts
+  //
+  // Do not create another history item if payout is already
+  // represented by PaymentSession or MarketplacePayment.
+  // ============================================================
+
+  const standalonePayouts = allPayouts.filter(po => {
+    // ------------------------------------------------------------
+    // Already represented by PaymentSession
+    // ------------------------------------------------------------
+
+    if (po.paymentId && psIds.some(id => String(id) === String(po.paymentId))) {
+      return false
+    }
+
+    // ------------------------------------------------------------
+    // Already represented by MarketplacePayment
+    // ------------------------------------------------------------
+
+    if (po.paymentId && marketplacePaymentIds.has(String(po.paymentId))) {
+      return false
+    }
+
+    // ------------------------------------------------------------
+    // Driver Advance / Trip payout already represented
+    // by PaymentSession
+    // ------------------------------------------------------------
+
+    if (
+      safeString(po.referenceType).toUpperCase() === 'TRIP' &&
+      po.referenceId &&
+      paymentSessions.some(
+        ps =>
+          safeString(ps.referenceType).toUpperCase() === 'TRIP' &&
+          String(ps.referenceId) === String(po.referenceId)
+      )
+    ) {
+      return false
+    }
+
+    // ------------------------------------------------------------
+    // Marketplace BOOKING payout already represented by
+    // MarketplacePayment
+    // ------------------------------------------------------------
+
+    if (
+      safeString(po.referenceType).toUpperCase() === 'BOOKING' &&
+      po.referenceId &&
+      marketplaceBookingIds.has(String(po.referenceId))
+    ) {
+      return false
+    }
+
+    return true
+  })
+
+  // ============================================================
+  // 6. Fetch RazorpayPaymentLinks
+  // ============================================================
+
   const plFilter = {
     $or: [
       { payerTransporterId: tIdObj || tIdStr },
       { beneficiaryTransporterId: tIdObj || tIdStr }
     ]
   }
-  if (normalizedStatus) plFilter.status = normalizedStatus
-  if (hasDateFilter) plFilter.createdAt = dateFilter
+
+  if (normalizedStatus) {
+    plFilter.status = normalizedStatus
+  }
+
+  if (hasDateFilter) {
+    plFilter.createdAt = dateFilter
+  }
 
   const paymentLinks = await RazorpayPaymentLink.find(plFilter).lean()
 
-  // Process & Normalize into unified transaction items
+  // ============================================================
+  // 7. Process & Normalize into unified transaction items
+  // ============================================================
+
   const items = []
+
   const paymentSessionIds = new Set(paymentSessions.map(ps => String(ps._id)))
 
-  // Transform PaymentSessions
+  // ============================================================
+  // 8. Transform PaymentSessions
+  // ============================================================
+
   paymentSessions.forEach(ps => {
     const linkedPayout = payoutMapByPaymentId.get(String(ps._id)) || null
+
     const payerIdStr = safeString(ps.payer?.userId || ps.initiatedBy?.userId)
+
     const payeeIdStr = safeString(
       ps.metadata?.payout?.payeeId || ps.metadata?.payeeId
     )
 
     let dir = 'TRANSFERRED'
+
     if (payeeIdStr === tIdStr && payerIdStr !== tIdStr) {
       dir = 'RECEIVED'
     } else if (payerIdStr === tIdStr) {
@@ -420,113 +546,185 @@ const getTransporterUnifiedPaymentHistory = async ({
     }
 
     let cat = ps.purpose === 'DRIVER_ADVANCE' ? 'DRIVER_ADVANCE' : 'INVOICE'
-    if (ps.referenceType) cat = safeString(ps.referenceType).toUpperCase()
+
+    if (ps.referenceType) {
+      cat = safeString(ps.referenceType).toUpperCase()
+    }
 
     items.push({
       id: String(ps._id),
+
       paymentId: ps._id,
+
       publicId: ps.publicId || String(ps._id),
+
       referenceId: ps.referenceId || null,
+
       referenceType: ps.referenceType || 'PAYMENT_SESSION',
+
       direction: dir,
+
       type: dir,
+
       category: cat,
+
       purpose: ps.purpose || 'Payment Session',
+
       amount: Number(ps.amount || 0),
+
       currency: ps.currency || 'INR',
+
       paymentStatus: ps.status,
+
       paymentDate: ps.completedAt || ps.createdAt,
+
       createdAt: ps.createdAt,
+
       provider: ps.provider,
+
       providerTransactionId: ps.providerTransactionId || null,
+
       providerOrderId: ps.providerOrderId || null,
+
       payoutStatus: linkedPayout ? linkedPayout.status : 'NOT_CREATED',
+
       counterparty: {
         id: dir === 'TRANSFERRED' ? payeeIdStr || null : payerIdStr || null,
+
         name: ps.payer?.name || null,
+
         mobile: ps.payer?.mobile || null,
+
         email: ps.payer?.email || null,
+
         userType:
           dir === 'TRANSFERRED'
             ? ps.metadata?.payout?.payeeType || 'DRIVER'
             : ps.payer?.userType || 'CUSTOMER'
       },
+
       payout: linkedPayout
         ? {
             id: linkedPayout._id,
+
             status: linkedPayout.status,
+
             transferId:
               linkedPayout.cashfree?.transferId ||
               linkedPayout.razorpay?.payoutId ||
               null,
+
             utr: linkedPayout.cashfree?.utr || null,
+
             transferMode:
               linkedPayout.cashfree?.transferMode ||
               linkedPayout.razorpay?.transferMode ||
               'IMPS',
+
             completedAt: linkedPayout.completedAt || null
           }
         : null,
+
       metadata: ps.metadata || {}
     })
   })
 
-  // Transform Standalone Payouts
+  // ============================================================
+  // 9. Transform Standalone Payouts
+  // ============================================================
+
   standalonePayouts.forEach(po => {
     const isPayee = safeString(po.payeeId) === tIdStr
+
     const dir = isPayee ? 'RECEIVED' : 'TRANSFERRED'
+
     const cat = po.referenceType
       ? safeString(po.referenceType).toUpperCase()
       : 'DIRECT_PAYOUT'
 
     items.push({
       id: String(po._id),
+
       paymentId: po.paymentId || po._id,
+
       publicId: `pout_${po._id}`,
+
       referenceId: po.referenceId || null,
+
       referenceType: po.referenceType || 'PAYOUT',
+
       direction: dir,
+
       type: dir,
+
       category: cat,
+
       purpose: isPayee ? 'Payout Received' : 'Payout Disbursed',
+
       amount: Number(po.amount || 0),
+
       currency: po.currency || 'INR',
+
       paymentStatus: po.status === 'SUCCESS' ? 'SUCCESS' : po.status,
+
       paymentDate: po.completedAt || po.initiatedAt || po.createdAt,
+
       createdAt: po.createdAt,
+
       provider: po.provider || 'CASHFREE',
+
       providerTransactionId:
         po.cashfree?.transferId || po.razorpay?.payoutId || null,
+
       providerOrderId: null,
+
       payoutStatus: po.status,
+
       counterparty: {
         id: isPayee
           ? safeString(po.payerId) || null
           : safeString(po.payeeId) || null,
+
         name: null,
+
         mobile: null,
+
         email: null,
+
         userType: isPayee ? 'PAYER' : po.payeeType || 'PAYEE'
       },
+
       payout: {
         id: po._id,
+
         status: po.status,
+
         transferId: po.cashfree?.transferId || po.razorpay?.payoutId || null,
+
         utr: po.cashfree?.utr || null,
+
         transferMode:
           po.cashfree?.transferMode || po.razorpay?.transferMode || 'IMPS',
+
         completedAt: po.completedAt || null
       },
+
       metadata: {}
     })
   })
 
-  // Transform MarketplacePayments
+  // ============================================================
+  // 10. Transform MarketplacePayments
+  // ============================================================
+
   marketplacePayments.forEach(mp => {
     const isSeller = safeString(mp.beneficiaryTransporterId) === tIdStr
+
     const dir = isSeller ? 'RECEIVED' : 'TRANSFERRED'
+
     const marketplaceReferenceKey = [
       safeString(mp.referenceType || 'BOOKING').toUpperCase(),
+
       safeString(mp.referenceId || mp.bookingId)
     ].join(':')
 
@@ -535,66 +733,98 @@ const getTransporterUnifiedPaymentHistory = async ({
 
     items.push({
       id: String(mp._id),
+
       paymentId: mp._id,
+
       publicId: mp.publicId || String(mp._id),
+
       referenceId: mp.tripId
         ? String(mp.tripId)
         : mp.bookingId
         ? String(mp.bookingId)
         : null,
+
       referenceType: 'MARKETPLACE_BOOKING',
+
       direction: dir,
+
       type: dir,
+
       category: isSeller ? 'MARKETPLACE_EARNING' : 'MARKETPLACE_BOOKING',
+
       purpose: isSeller
         ? 'Marketplace Vehicle Booking Payment Received'
         : 'Marketplace Vehicle Booking Pay-in',
+
       amount: Number(mp.amount || 0),
+
       currency: mp.currency || 'INR',
+
       paymentStatus: mp.status,
+
       paymentDate: mp.completedAt || mp.createdAt,
+
       createdAt: mp.createdAt,
+
       provider: mp.provider || 'RAZORPAY',
+
       providerTransactionId: mp.providerTransactionId || null,
+
       providerOrderId: mp.providerOrderId || null,
+
       payoutStatus: linkedPayout ? linkedPayout.status : 'NOT_APPLICABLE',
+
       counterparty: {
         id: isSeller
           ? safeString(mp.payerTransporterId)
           : safeString(mp.beneficiaryTransporterId),
+
         name: null,
+
         mobile: null,
+
         email: null,
+
         userType: 'TRANSPORTER'
       },
+
       payout: linkedPayout
         ? {
             id: linkedPayout._id,
+
             status: linkedPayout.status,
+
             transferId:
               linkedPayout.cashfree?.transferId ||
               linkedPayout.razorpay?.payoutId ||
               null,
+
             utr:
               linkedPayout.cashfree?.utr || linkedPayout.razorpay?.utr || null,
+
             transferMode:
               linkedPayout.cashfree?.transferMode ||
               linkedPayout.razorpay?.transferMode ||
               'IMPS',
+
             completedAt: linkedPayout.completedAt || null
           }
         : null,
+
       metadata: mp.metadata || {}
     })
   })
 
-  /// Transform RazorpayPaymentLinks
+  // ============================================================
+  // 11. Transform RazorpayPaymentLinks
   //
   // A RazorpayPaymentLink can have a corresponding PaymentSession.
   // In that case, the PaymentSession is already included above and
   // contains the linked payout information.
   //
   // Do NOT add another history item for the same payment session.
+  // ============================================================
+
   paymentLinks.forEach(pl => {
     const paymentSessionId =
       pl.paymentSessionId ||
@@ -612,52 +842,82 @@ const getTransporterUnifiedPaymentHistory = async ({
 
     items.push({
       id: String(pl._id),
+
       paymentId: pl._id,
+
       publicId: pl.publicId || String(pl._id),
+
       referenceId: pl.referenceId || pl.businessReferenceId || null,
+
       referenceType: pl.businessReferenceType || 'PAYMENT_LINK',
+
       direction: dir,
+
       type: dir,
+
       category: 'PAYMENT_LINK',
+
       purpose:
         pl.description ||
         (isBeneficiary ? 'Payment Link Received' : 'Payment Link Sent'),
+
       amount: Number(pl.amount || 0),
+
       currency: pl.currency || 'INR',
+
       paymentStatus: pl.status === 'PAID' ? 'SUCCESS' : pl.status,
+
       paymentDate: pl.paidAt || pl.createdAt,
+
       createdAt: pl.createdAt,
+
       provider: 'RAZORPAY',
+
       providerTransactionId: pl.razorpayPaymentId || null,
+
       providerOrderId: pl.razorpayOrderId || null,
+
       payoutStatus: pl.transferStatus || 'NOT_APPLICABLE',
+
       counterparty: {
         id: isBeneficiary
           ? safeString(pl.payerTransporterId)
           : safeString(pl.beneficiaryTransporterId),
+
         name: null,
+
         mobile: null,
+
         email: null,
+
         userType: isBeneficiary ? 'PAYER' : 'TRANSPORTER'
       },
+
       payout: null,
+
       metadata: pl.metadata || {}
     })
   })
 
-  // Apply filters in memory across aggregated dataset
+  // ============================================================
+  // 12. Apply filters in memory across aggregated dataset
+  // ============================================================
+
   let filtered = items
 
   // Date & Time filter in memory
   if (resolvedFromDate) {
     filtered = filtered.filter(i => {
       const itemDate = new Date(i.paymentDate || i.createdAt)
+
       return !isNaN(itemDate.getTime()) && itemDate >= resolvedFromDate
     })
   }
+
   if (resolvedToDate) {
     filtered = filtered.filter(i => {
       const itemDate = new Date(i.paymentDate || i.createdAt)
+
       return !isNaN(itemDate.getTime()) && itemDate <= resolvedToDate
     })
   }
@@ -690,20 +950,28 @@ const getTransporterUnifiedPaymentHistory = async ({
   // Search filter
   if (search && safeString(search)) {
     const q = safeString(search).toLowerCase()
+
     filtered = filtered.filter(i => {
       const matchRef = safeString(i.referenceId).toLowerCase().includes(q)
+
       const matchTxn = safeString(i.providerTransactionId)
         .toLowerCase()
         .includes(q)
+
       const matchOrder = safeString(i.providerOrderId).toLowerCase().includes(q)
+
       const matchPurpose = safeString(i.purpose).toLowerCase().includes(q)
+
       const matchPublic = safeString(i.publicId).toLowerCase().includes(q)
+
       const matchCpName = safeString(i.counterparty?.name)
         .toLowerCase()
         .includes(q)
+
       const matchCpMobile = safeString(i.counterparty?.mobile)
         .toLowerCase()
         .includes(q)
+
       return (
         matchRef ||
         matchTxn ||
@@ -716,13 +984,18 @@ const getTransporterUnifiedPaymentHistory = async ({
     })
   }
 
-  // Sort descending by date
+  // ============================================================
+  // 13. Sort descending by date
+  // ============================================================
+
   filtered.sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   )
 
-  // Calculate summary metrics from the filtered ledger view so the summary
-  // matches the records the caller is actually looking at.
+  // ============================================================
+  // 14. Calculate summary metrics
+  // ============================================================
+
   let totalReceivedAmount = 0
   let totalTransferredAmount = 0
   let totalReceivedCount = 0
@@ -733,6 +1006,7 @@ const getTransporterUnifiedPaymentHistory = async ({
   filtered.forEach(i => {
     const isSuccess =
       i.paymentStatus === 'SUCCESS' || i.paymentStatus === 'PAID'
+
     const isPending =
       i.paymentStatus === 'PENDING' || i.paymentStatus === 'CREATED'
 
@@ -753,40 +1027,73 @@ const getTransporterUnifiedPaymentHistory = async ({
     }
   })
 
-  // Pagination
+  // ============================================================
+  // 15. Pagination
+  // ============================================================
+
   const total = filtered.length
+
   const pageNum = Math.max(Number(page) || 1, 1)
+
   const limitNum = Math.min(Math.max(Number(limit) || 20, 1), 100)
+
   const skip = (pageNum - 1) * limitNum
+
   const paginatedPayments = filtered.slice(skip, skip + limitNum)
+
+  // ============================================================
+  // 16. Return
+  // ============================================================
 
   return {
     page: pageNum,
+
     limit: limitNum,
+
     total,
+
     count: paginatedPayments.length,
+
     totalPages: Math.ceil(total / limitNum) || 1,
+
     hasNext: pageNum * limitNum < total,
+
     hasPrevious: pageNum > 1,
+
     filters: {
       period: activePeriod,
+
       fromDate: resolvedFromDate ? resolvedFromDate.toISOString() : null,
+
       toDate: resolvedToDate ? resolvedToDate.toISOString() : null,
+
       direction: normalizedDirection,
+
       status: normalizedStatus,
+
       provider: normalizedProvider,
+
       category: normalizedCategory,
+
       search: search || null
     },
+
     summary: {
       totalReceivedAmount,
+
       totalTransferredAmount,
+
       netAmount: totalReceivedAmount - totalTransferredAmount,
+
       totalReceivedCount,
+
       totalTransferredCount,
+
       pendingReceivedAmount,
+
       pendingTransferredAmount
     },
+
     payments: paginatedPayments
   }
 }
