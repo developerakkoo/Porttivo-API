@@ -393,5 +393,194 @@ module.exports = [
         process.env.RAZORPAY_WEBHOOK_SECRET = previousSecret
       }
     }
+  },
+  {
+    name: 'GET status allows beneficiary when payer is a different transporter',
+    async run() {
+      const record = {
+        _id: 'record-1',
+        publicId: 'rpl_test',
+        razorpayPaymentLinkId: 'plink_1',
+        payerTransporterId: 'payer-1',
+        beneficiaryTransporterId: 'actor-1',
+        shortUrl: 'https://rzp.io/i/plink_1',
+        amount: 1250,
+        currency: 'INR',
+        status: 'CREATED',
+        transferStatus: 'NOT_STARTED',
+        transferredAmount: 0,
+        razorpayPaymentId: null,
+        razorpayTransferId: null,
+        save: async function save() {
+          return this
+        }
+      }
+
+      const controller = buildController({
+        RazorpayPaymentLink: {
+          findOne: async query => {
+            if (query?._id !== 'record-1') return null
+            const clauses = Array.isArray(query.$or) ? query.$or : []
+            const matches = clauses.some(
+              clause =>
+                clause.payerTransporterId === record.payerTransporterId ||
+                clause.beneficiaryTransporterId ===
+                  record.beneficiaryTransporterId
+            )
+            return matches ? record : null
+          }
+        },
+        razorpayRouteService: {
+          createPaymentLink: async () => null,
+          fetchPaymentLink: async () => ({
+            id: 'plink_1',
+            status: 'created'
+          }),
+          cancelPaymentLink: async () => null,
+          makeReferenceId: () => 'PTV-REF-STATUS'
+        }
+      })
+
+      const req = {
+        user: { id: 'actor-1', userType: 'transporter' },
+        params: { id: 'record-1' }
+      }
+      const res = createMockRes()
+
+      await controller.getTransporterPaymentLinkStatus(req, res, error => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(res.body.data.paymentLinkId, 'plink_1')
+      assert.equal(res.body.data.status, 'CREATED')
+    }
+  },
+  {
+    name: 'GET status allows payer and rejects unrelated transporters',
+    async run() {
+      const record = {
+        _id: 'record-1',
+        publicId: 'rpl_test',
+        razorpayPaymentLinkId: 'plink_1',
+        payerTransporterId: 'payer-1',
+        beneficiaryTransporterId: 'actor-1',
+        shortUrl: 'https://rzp.io/i/plink_1',
+        amount: 1250,
+        currency: 'INR',
+        status: 'CREATED',
+        transferStatus: 'NOT_STARTED',
+        transferredAmount: 0,
+        razorpayPaymentId: null,
+        razorpayTransferId: null,
+        save: async function save() {
+          return this
+        }
+      }
+
+      const controller = buildController({
+        RazorpayPaymentLink: {
+          findOne: async query => {
+            if (query?._id !== 'record-1') return null
+            const clauses = Array.isArray(query.$or) ? query.$or : []
+            const matches = clauses.some(
+              clause =>
+                clause.payerTransporterId === record.payerTransporterId ||
+                clause.beneficiaryTransporterId ===
+                  record.beneficiaryTransporterId
+            )
+            return matches ? record : null
+          }
+        },
+        razorpayRouteService: {
+          createPaymentLink: async () => null,
+          fetchPaymentLink: async () => ({
+            id: 'plink_1',
+            status: 'created'
+          }),
+          cancelPaymentLink: async () => null,
+          makeReferenceId: () => 'PTV-REF-STATUS-2'
+        }
+      })
+
+      const payerRes = createMockRes()
+      await controller.getTransporterPaymentLinkStatus(
+        {
+          user: { id: 'payer-1', userType: 'transporter' },
+          params: { id: 'record-1' }
+        },
+        payerRes,
+        error => {
+          throw error
+        }
+      )
+      assert.equal(payerRes.statusCode, 200)
+
+      const strangerRes = createMockRes()
+      await controller.getTransporterPaymentLinkStatus(
+        {
+          user: { id: 'stranger-1', userType: 'transporter' },
+          params: { id: 'record-1' }
+        },
+        strangerRes,
+        error => {
+          throw error
+        }
+      )
+      assert.equal(strangerRes.statusCode, 404)
+    }
+  },
+  {
+    name: 'cancel allows beneficiary when payer is a different transporter',
+    async run() {
+      const record = {
+        _id: 'record-1',
+        razorpayPaymentLinkId: 'plink_1',
+        payerTransporterId: 'payer-1',
+        beneficiaryTransporterId: 'actor-1',
+        status: 'CREATED',
+        paymentResponse: {},
+        save: async function save() {
+          return this
+        }
+      }
+
+      const controller = buildController({
+        RazorpayPaymentLink: {
+          findOne: async query => {
+            if (query?._id !== 'record-1') return null
+            const clauses = Array.isArray(query.$or) ? query.$or : []
+            const matches = clauses.some(
+              clause =>
+                clause.payerTransporterId === record.payerTransporterId ||
+                clause.beneficiaryTransporterId ===
+                  record.beneficiaryTransporterId
+            )
+            return matches ? record : null
+          }
+        },
+        razorpayRouteService: {
+          createPaymentLink: async () => null,
+          fetchPaymentLink: async () => null,
+          cancelPaymentLink: async () => ({ id: 'plink_1', status: 'cancelled' }),
+          makeReferenceId: () => 'PTV-REF-CANCEL'
+        }
+      })
+
+      const res = createMockRes()
+      await controller.cancelTransporterPaymentLink(
+        {
+          user: { id: 'actor-1', userType: 'transporter' },
+          params: { id: 'record-1' }
+        },
+        res,
+        error => {
+          throw error
+        }
+      )
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(record.status, 'CANCELLED')
+    }
   }
 ]

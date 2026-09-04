@@ -51,6 +51,15 @@ const normalizeMaybeString = value => {
   return normalized || null
 }
 
+const findPaymentLinkForActor = (id, actorId) =>
+  RazorpayPaymentLink.findOne({
+    _id: id,
+    $or: [
+      { payerTransporterId: actorId },
+      { beneficiaryTransporterId: actorId }
+    ]
+  })
+
 const buildRazorpayPaymentLinkPayoutMetadata = ({
   payeeId,
   payeeType = 'TRANSPORTER',
@@ -428,10 +437,7 @@ const getTransporterPaymentLinkStatus = async (req, res, next) => {
       })
     }
 
-    const record = await RazorpayPaymentLink.findOne({
-      _id: req.params.id,
-      payerTransporterId: actorId
-    })
+    const record = await findPaymentLinkForActor(req.params.id, actorId)
 
     if (!record) {
       return res.status(404).json({
@@ -517,10 +523,7 @@ const cancelTransporterPaymentLink = async (req, res, next) => {
       })
     }
 
-    const record = await RazorpayPaymentLink.findOne({
-      _id: req.params.id,
-      payerTransporterId: actorId
-    })
+    const record = await findPaymentLinkForActor(req.params.id, actorId)
 
     if (!record) {
       return res.status(404).json({
