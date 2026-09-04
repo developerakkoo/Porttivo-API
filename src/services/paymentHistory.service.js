@@ -4,15 +4,17 @@ const Payout = require('../models/Payout')
 const MarketplacePayment = require('../models/MarketplacePayment')
 const RazorpayPaymentLink = require('../models/RazorpayPaymentLink')
 
-const toObjectId = (val) => {
+const toObjectId = val => {
   if (!val) return null
   if (val instanceof mongoose.Types.ObjectId) return val
-  return mongoose.Types.ObjectId.isValid(val) ? new mongoose.Types.ObjectId(val) : null
+  return mongoose.Types.ObjectId.isValid(val)
+    ? new mongoose.Types.ObjectId(val)
+    : null
 }
 
-const safeString = (val) => (val != null ? String(val).trim() : '')
+const safeString = val => (val != null ? String(val).trim() : '')
 
-const normalizeFilterValue = (val) => {
+const normalizeFilterValue = val => {
   const normalized = safeString(val).toUpperCase()
   if (!normalized || normalized === 'ALL') {
     return null
@@ -35,7 +37,9 @@ const parseDateTimeString = (dateVal, timeVal, isEnd = false) => {
     const timeStr = safeString(timeVal)
     const baseDate = isDateOnly ? dateStr : dateStr.split('T')[0].split(' ')[0]
     const formattedTime = timeStr.includes(':')
-      ? (timeStr.split(':').length === 2 ? `${timeStr}:00` : timeStr)
+      ? timeStr.split(':').length === 2
+        ? `${timeStr}:00`
+        : timeStr
       : timeStr
     const combinedStr = `${baseDate}T${formattedTime}`
     const parsed = new Date(combinedStr)
@@ -140,8 +144,24 @@ const resolveDateRange = ({ period, fromDate, toDate, startTime, endTime }) => {
         break
       }
       case 'last_month': {
-        const start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0)
-        const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999)
+        const start = new Date(
+          now.getFullYear(),
+          now.getMonth() - 1,
+          1,
+          0,
+          0,
+          0,
+          0
+        )
+        const end = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          0,
+          23,
+          59,
+          59,
+          999
+        )
         computedFromDate = start
         computedToDate = end
         break
@@ -204,7 +224,8 @@ const resolveDateRange = ({ period, fromDate, toDate, startTime, endTime }) => {
     computedToDate = parseDateTimeString(toDate, endTime, true)
   }
 
-  const activePeriod = normalizedPeriod || (computedFromDate || computedToDate ? 'custom' : null)
+  const activePeriod =
+    normalizedPeriod || (computedFromDate || computedToDate ? 'custom' : null)
 
   return {
     fromDate: computedFromDate,
@@ -262,7 +283,10 @@ const getTransporterUnifiedPaymentHistory = async ({
   const psFilter = {
     $or: [
       { 'metadata.transporterId': tIdObj || tIdStr },
-      { 'initiatedBy.userId': tIdObj || tIdStr, 'initiatedBy.userType': 'transporter' },
+      {
+        'initiatedBy.userId': tIdObj || tIdStr,
+        'initiatedBy.userType': 'transporter'
+      },
       { 'payer.userId': tIdObj || tIdStr },
       { 'metadata.payout.payeeId': tIdStr },
       { 'metadata.payeeId': tIdStr }
@@ -275,21 +299,18 @@ const getTransporterUnifiedPaymentHistory = async ({
   const paymentSessions = await PaymentSession.find(psFilter).lean()
 
   // Find linked Payouts for payment sessions
-  const psIds = paymentSessions.map((ps) => ps._id)
+  const psIds = paymentSessions.map(ps => ps._id)
   const linkedPayouts = psIds.length
     ? await Payout.find({ paymentId: { $in: psIds } }).lean()
     : []
   const payoutMapByPaymentId = new Map()
-  linkedPayouts.forEach((po) => {
+  linkedPayouts.forEach(po => {
     payoutMapByPaymentId.set(String(po.paymentId), po)
   })
 
   // 2. Fetch standalone Payouts where transporter is payer or payee
   const poFilter = {
-    $or: [
-      { payerId: tIdObj || tIdStr },
-      { payeeId: tIdObj || tIdStr }
-    ]
+    $or: [{ payerId: tIdObj || tIdStr }, { payeeId: tIdObj || tIdStr }]
   }
   if (normalizedStatus) poFilter.status = normalizedStatus
   if (normalizedProvider) poFilter.provider = normalizedProvider
@@ -297,7 +318,8 @@ const getTransporterUnifiedPaymentHistory = async ({
 
   const allPayouts = await Payout.find(poFilter).lean()
   const standalonePayouts = allPayouts.filter(
-    (po) => !po.paymentId || !psIds.some((id) => String(id) === String(po.paymentId))
+    po =>
+      !po.paymentId || !psIds.some(id => String(id) === String(po.paymentId))
   )
 
   // 3. Fetch MarketplacePayments
@@ -329,17 +351,22 @@ const getTransporterUnifiedPaymentHistory = async ({
   const items = []
 
   // Transform PaymentSessions
-  paymentSessions.forEach((ps) => {
+  paymentSessions.forEach(ps => {
     const linkedPayout = payoutMapByPaymentId.get(String(ps._id)) || null
     const payerIdStr = safeString(ps.payer?.userId || ps.initiatedBy?.userId)
-    const payeeIdStr = safeString(ps.metadata?.payout?.payeeId || ps.metadata?.payeeId)
+    const payeeIdStr = safeString(
+      ps.metadata?.payout?.payeeId || ps.metadata?.payeeId
+    )
 
     let dir = 'TRANSFERRED'
     if (payeeIdStr === tIdStr && payerIdStr !== tIdStr) {
       dir = 'RECEIVED'
     } else if (payerIdStr === tIdStr) {
       dir = 'TRANSFERRED'
-    } else if (safeString(ps.metadata?.transporterId) === tIdStr && ps.purpose === 'DRIVER_ADVANCE') {
+    } else if (
+      safeString(ps.metadata?.transporterId) === tIdStr &&
+      ps.purpose === 'DRIVER_ADVANCE'
+    ) {
       dir = 'TRANSFERRED'
     }
 
@@ -370,15 +397,24 @@ const getTransporterUnifiedPaymentHistory = async ({
         name: ps.payer?.name || null,
         mobile: ps.payer?.mobile || null,
         email: ps.payer?.email || null,
-        userType: dir === 'TRANSFERRED' ? (ps.metadata?.payout?.payeeType || 'DRIVER') : (ps.payer?.userType || 'CUSTOMER')
+        userType:
+          dir === 'TRANSFERRED'
+            ? ps.metadata?.payout?.payeeType || 'DRIVER'
+            : ps.payer?.userType || 'CUSTOMER'
       },
       payout: linkedPayout
         ? {
             id: linkedPayout._id,
             status: linkedPayout.status,
-            transferId: linkedPayout.cashfree?.transferId || linkedPayout.razorpay?.payoutId || null,
+            transferId:
+              linkedPayout.cashfree?.transferId ||
+              linkedPayout.razorpay?.payoutId ||
+              null,
             utr: linkedPayout.cashfree?.utr || null,
-            transferMode: linkedPayout.cashfree?.transferMode || linkedPayout.razorpay?.transferMode || 'IMPS',
+            transferMode:
+              linkedPayout.cashfree?.transferMode ||
+              linkedPayout.razorpay?.transferMode ||
+              'IMPS',
             completedAt: linkedPayout.completedAt || null
           }
         : null,
@@ -387,10 +423,12 @@ const getTransporterUnifiedPaymentHistory = async ({
   })
 
   // Transform Standalone Payouts
-  standalonePayouts.forEach((po) => {
+  standalonePayouts.forEach(po => {
     const isPayee = safeString(po.payeeId) === tIdStr
     const dir = isPayee ? 'RECEIVED' : 'TRANSFERRED'
-    const cat = po.referenceType ? safeString(po.referenceType).toUpperCase() : 'DIRECT_PAYOUT'
+    const cat = po.referenceType
+      ? safeString(po.referenceType).toUpperCase()
+      : 'DIRECT_PAYOUT'
 
     items.push({
       id: String(po._id),
@@ -408,22 +446,26 @@ const getTransporterUnifiedPaymentHistory = async ({
       paymentDate: po.completedAt || po.initiatedAt || po.createdAt,
       createdAt: po.createdAt,
       provider: po.provider || 'CASHFREE',
-      providerTransactionId: po.cashfree?.transferId || po.razorpay?.payoutId || null,
+      providerTransactionId:
+        po.cashfree?.transferId || po.razorpay?.payoutId || null,
       providerOrderId: null,
       payoutStatus: po.status,
       counterparty: {
-        id: isPayee ? safeString(po.payerId) || null : safeString(po.payeeId) || null,
+        id: isPayee
+          ? safeString(po.payerId) || null
+          : safeString(po.payeeId) || null,
         name: null,
         mobile: null,
         email: null,
-        userType: isPayee ? 'PAYER' : (po.payeeType || 'PAYEE')
+        userType: isPayee ? 'PAYER' : po.payeeType || 'PAYEE'
       },
       payout: {
         id: po._id,
         status: po.status,
         transferId: po.cashfree?.transferId || po.razorpay?.payoutId || null,
         utr: po.cashfree?.utr || null,
-        transferMode: po.cashfree?.transferMode || po.razorpay?.transferMode || 'IMPS',
+        transferMode:
+          po.cashfree?.transferMode || po.razorpay?.transferMode || 'IMPS',
         completedAt: po.completedAt || null
       },
       metadata: {}
@@ -431,7 +473,7 @@ const getTransporterUnifiedPaymentHistory = async ({
   })
 
   // Transform MarketplacePayments
-  marketplacePayments.forEach((mp) => {
+  marketplacePayments.forEach(mp => {
     const isSeller = safeString(mp.beneficiaryTransporterId) === tIdStr
     const dir = isSeller ? 'RECEIVED' : 'TRANSFERRED'
 
@@ -439,12 +481,18 @@ const getTransporterUnifiedPaymentHistory = async ({
       id: String(mp._id),
       paymentId: mp._id,
       publicId: mp.publicId || String(mp._id),
-      referenceId: mp.tripId ? String(mp.tripId) : (mp.bookingId ? String(mp.bookingId) : null),
+      referenceId: mp.tripId
+        ? String(mp.tripId)
+        : mp.bookingId
+        ? String(mp.bookingId)
+        : null,
       referenceType: 'MARKETPLACE_BOOKING',
       direction: dir,
       type: dir,
       category: isSeller ? 'MARKETPLACE_EARNING' : 'MARKETPLACE_BOOKING',
-      purpose: isSeller ? 'Marketplace Vehicle Booking Payment Received' : 'Marketplace Vehicle Booking Pay-in',
+      purpose: isSeller
+        ? 'Marketplace Vehicle Booking Payment Received'
+        : 'Marketplace Vehicle Booking Pay-in',
       amount: Number(mp.amount || 0),
       currency: mp.currency || 'INR',
       paymentStatus: mp.status,
@@ -455,20 +503,39 @@ const getTransporterUnifiedPaymentHistory = async ({
       providerOrderId: mp.providerOrderId || null,
       payoutStatus: 'NOT_APPLICABLE',
       counterparty: {
-        id: isSeller ? safeString(mp.payerTransporterId) : safeString(mp.beneficiaryTransporterId),
+        id: isSeller
+          ? safeString(mp.payerTransporterId)
+          : safeString(mp.beneficiaryTransporterId),
         name: null,
         mobile: null,
         email: null,
         userType: 'TRANSPORTER'
       },
-      payout: null,
+      payout: nupaymentLinksll,
       metadata: mp.metadata || {}
     })
   })
 
-  // Transform RazorpayPaymentLinks
-  paymentLinks.forEach((pl) => {
+  /// Transform RazorpayPaymentLinks
+  //
+  // A RazorpayPaymentLink can have a corresponding PaymentSession.
+  // In that case, the PaymentSession is already included above and
+  // contains the linked payout information.
+  //
+  // Do NOT add another history item for the same payment session.
+  paymentLinks.forEach(pl => {
+    const paymentSessionId =
+      pl.paymentSessionId ||
+      pl.metadata?.paymentSessionId ||
+      pl.notes?.paymentSessionId ||
+      null
+
+    if (paymentSessionId && paymentSessionIds.has(String(paymentSessionId))) {
+      return
+    }
+
     const isBeneficiary = safeString(pl.beneficiaryTransporterId) === tIdStr
+
     const dir = isBeneficiary ? 'RECEIVED' : 'TRANSFERRED'
 
     items.push({
@@ -480,7 +547,9 @@ const getTransporterUnifiedPaymentHistory = async ({
       direction: dir,
       type: dir,
       category: 'PAYMENT_LINK',
-      purpose: pl.description || (isBeneficiary ? 'Payment Link Received' : 'Payment Link Sent'),
+      purpose:
+        pl.description ||
+        (isBeneficiary ? 'Payment Link Received' : 'Payment Link Sent'),
       amount: Number(pl.amount || 0),
       currency: pl.currency || 'INR',
       paymentStatus: pl.status === 'PAID' ? 'SUCCESS' : pl.status,
@@ -491,7 +560,9 @@ const getTransporterUnifiedPaymentHistory = async ({
       providerOrderId: pl.razorpayOrderId || null,
       payoutStatus: pl.transferStatus || 'NOT_APPLICABLE',
       counterparty: {
-        id: isBeneficiary ? safeString(pl.payerTransporterId) : safeString(pl.beneficiaryTransporterId),
+        id: isBeneficiary
+          ? safeString(pl.payerTransporterId)
+          : safeString(pl.beneficiaryTransporterId),
         name: null,
         mobile: null,
         email: null,
@@ -507,13 +578,13 @@ const getTransporterUnifiedPaymentHistory = async ({
 
   // Date & Time filter in memory
   if (resolvedFromDate) {
-    filtered = filtered.filter((i) => {
+    filtered = filtered.filter(i => {
       const itemDate = new Date(i.paymentDate || i.createdAt)
       return !isNaN(itemDate.getTime()) && itemDate >= resolvedFromDate
     })
   }
   if (resolvedToDate) {
-    filtered = filtered.filter((i) => {
+    filtered = filtered.filter(i => {
       const itemDate = new Date(i.paymentDate || i.createdAt)
       return !isNaN(itemDate.getTime()) && itemDate <= resolvedToDate
     })
@@ -521,43 +592,62 @@ const getTransporterUnifiedPaymentHistory = async ({
 
   // Direction filter
   if (normalizedDirection === 'RECEIVED') {
-    filtered = filtered.filter((i) => i.direction === 'RECEIVED')
-  } else if (normalizedDirection === 'TRANSFERRED' || normalizedDirection === 'TRANSFER') {
-    filtered = filtered.filter((i) => i.direction === 'TRANSFERRED')
+    filtered = filtered.filter(i => i.direction === 'RECEIVED')
+  } else if (
+    normalizedDirection === 'TRANSFERRED' ||
+    normalizedDirection === 'TRANSFER'
+  ) {
+    filtered = filtered.filter(i => i.direction === 'TRANSFERRED')
   }
 
   // Status filter
   if (normalizedStatus && normalizedStatus !== 'ALL') {
-    filtered = filtered.filter((i) => i.paymentStatus === normalizedStatus)
+    filtered = filtered.filter(i => i.paymentStatus === normalizedStatus)
   }
 
   // Provider filter
   if (normalizedProvider) {
-    filtered = filtered.filter((i) => i.provider === normalizedProvider)
+    filtered = filtered.filter(i => i.provider === normalizedProvider)
   }
 
   // Category filter
   if (normalizedCategory) {
-    filtered = filtered.filter((i) => i.category === normalizedCategory)
+    filtered = filtered.filter(i => i.category === normalizedCategory)
   }
 
   // Search filter
   if (search && safeString(search)) {
     const q = safeString(search).toLowerCase()
-    filtered = filtered.filter((i) => {
+    filtered = filtered.filter(i => {
       const matchRef = safeString(i.referenceId).toLowerCase().includes(q)
-      const matchTxn = safeString(i.providerTransactionId).toLowerCase().includes(q)
+      const matchTxn = safeString(i.providerTransactionId)
+        .toLowerCase()
+        .includes(q)
       const matchOrder = safeString(i.providerOrderId).toLowerCase().includes(q)
       const matchPurpose = safeString(i.purpose).toLowerCase().includes(q)
       const matchPublic = safeString(i.publicId).toLowerCase().includes(q)
-      const matchCpName = safeString(i.counterparty?.name).toLowerCase().includes(q)
-      const matchCpMobile = safeString(i.counterparty?.mobile).toLowerCase().includes(q)
-      return matchRef || matchTxn || matchOrder || matchPurpose || matchPublic || matchCpName || matchCpMobile
+      const matchCpName = safeString(i.counterparty?.name)
+        .toLowerCase()
+        .includes(q)
+      const matchCpMobile = safeString(i.counterparty?.mobile)
+        .toLowerCase()
+        .includes(q)
+      return (
+        matchRef ||
+        matchTxn ||
+        matchOrder ||
+        matchPurpose ||
+        matchPublic ||
+        matchCpName ||
+        matchCpMobile
+      )
     })
   }
 
   // Sort descending by date
-  filtered.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  filtered.sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  )
 
   // Calculate summary metrics from the filtered ledger view so the summary
   // matches the records the caller is actually looking at.
@@ -568,9 +658,11 @@ const getTransporterUnifiedPaymentHistory = async ({
   let pendingReceivedAmount = 0
   let pendingTransferredAmount = 0
 
-  filtered.forEach((i) => {
-    const isSuccess = i.paymentStatus === 'SUCCESS' || i.paymentStatus === 'PAID'
-    const isPending = i.paymentStatus === 'PENDING' || i.paymentStatus === 'CREATED'
+  filtered.forEach(i => {
+    const isSuccess =
+      i.paymentStatus === 'SUCCESS' || i.paymentStatus === 'PAID'
+    const isPending =
+      i.paymentStatus === 'PENDING' || i.paymentStatus === 'CREATED'
 
     if (i.direction === 'RECEIVED') {
       if (isSuccess) {
