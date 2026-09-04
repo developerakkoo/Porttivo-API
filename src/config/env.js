@@ -187,5 +187,5 @@ module.exports = {
   msg91ApiBaseUrl: process.env.MSG91_API_BASE_URL || 'https://control.msg91.com/api/v5/otp',
   msg91DefaultCountryCode: process.env.MSG91_DEFAULT_COUNTRY_CODE || '91',
   msg91EnableTestOtp: String(process.env.MSG91_ENABLE_TEST_OTP || '').trim().toLowerCase() === 'true',
-  msg91TestOtp: process.env.MSG91_TEST_OTP || '123456',
+  msg91TestOtp: process.env.MSG91_TEST_OTP || '1234',
 };
