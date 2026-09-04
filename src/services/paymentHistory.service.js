@@ -514,7 +514,7 @@ const getTransporterUnifiedPaymentHistory = async ({
         email: null,
         userType: 'TRANSPORTER'
       },
-      payout: nupaymentLinksll,
+      payout: null,
       metadata: mp.metadata || {}
     })
   })
