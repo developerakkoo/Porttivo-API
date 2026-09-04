@@ -840,17 +840,8 @@ const buildTransferRemarks = ({
   return parts.join(' ') || fallback
 }
 
-const buildRazorpayNarration = (referenceType, referenceId) => {
-  const narration = buildTransferRemarks({
-    referenceType,
-    referenceId,
-    fallback: 'Porttivo payout'
-  })
-
-  return String(narration || 'Porttivo payout')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 30)
+const buildRazorpayNarration = () => {
+  return 'Porttivo payout'
 }
 
 const buildRazorpayRequestBody = ({
