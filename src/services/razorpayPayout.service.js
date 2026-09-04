@@ -257,18 +257,21 @@ const normalizeRazorpayPayoutStatus = status => {
   ) {
     return 'FAILED'
   }
-  if (['retry_pending', 'retry-pending', 'payout.retry_pending'].includes(normalized)) {
+  if (
+    ['retry_pending', 'retry-pending', 'payout.retry_pending'].includes(
+      normalized
+    )
+  ) {
     return 'RETRY_PENDING'
   }
-  if (['cancelled', 'canceled', 'payout.cancelled', 'payout.canceled'].includes(normalized)) {
+  if (
+    ['cancelled', 'canceled', 'payout.cancelled', 'payout.canceled'].includes(
+      normalized
+    )
+  ) {
     return 'CANCELLED'
   }
-  if (
-    [
-      'created',
-      'payout.created'
-    ].includes(normalized)
-  ) {
+  if (['created', 'payout.created'].includes(normalized)) {
     return 'CREATED'
   }
   if (
@@ -323,7 +326,9 @@ const shouldApplyRazorpayPayoutStatusUpdate = (currentStatus, nextStatus) => {
     return next === 'FAILED' || next === 'SUCCESS'
   }
 
-  return getRazorpayPayoutStatusRank(next) >= getRazorpayPayoutStatusRank(current)
+  return (
+    getRazorpayPayoutStatusRank(next) >= getRazorpayPayoutStatusRank(current)
+  )
 }
 
 const extractRazorpayMessage = payload => {
@@ -804,7 +809,9 @@ const verifyRazorpayPayoutWebhook = (body = {}, headers = {}, rawBody = '') => {
       entity?.fund_account_id ||
       ''
   ).trim()
-  const referenceId = String(entity?.reference_id || entity?.referenceId || '').trim()
+  const referenceId = String(
+    entity?.reference_id || entity?.referenceId || ''
+  ).trim()
   const verification = verifyRazorpayPayoutWebhookSignature({
     rawBody,
     signature,
@@ -813,12 +820,11 @@ const verifyRazorpayPayoutWebhook = (body = {}, headers = {}, rawBody = '') => {
 
   return {
     valid: verification.valid,
-    reason: verification.reason || (verification.valid ? null : 'signature_mismatch'),
+    reason:
+      verification.reason || (verification.valid ? null : 'signature_mismatch'),
     message:
       verification.message ||
-      (verification.valid
-        ? null
-        : 'Invalid Razorpay payout webhook signature'),
+      (verification.valid ? null : 'Invalid Razorpay payout webhook signature'),
     signaturePresent: Boolean(signature),
     eventName,
     payoutId,
@@ -1314,25 +1320,49 @@ const createAutomaticPayoutForPayment = async (
   const { payee, modelName } = await findPayeeRecordById(autoMetadata.payeeId)
   const payeeSnapshot = getPayeeSnapshot(payee, modelName)
 
-  const payout = await createRazorpayPayoutRecord({
-    payerId: payment.payer?.userId || payment.initiatedBy?.userId || null,
-    payeeId: autoMetadata.payeeId,
-    payeeType: autoMetadata.payeeType || payeeSnapshot?.userType || null,
-    paymentId: payment._id,
-    referenceType: autoMetadata.referenceType || payment.referenceType || null,
-    referenceId: autoMetadata.referenceId || payment.referenceId || null,
-    amount: autoMetadata.amount,
-    currency: autoMetadata.currency || payment.currency || 'INR',
-    status: 'CREATED',
-    razorpay: {
-      fundAccountId: payee?.razorpayBeneficiary?.fundAccountId || null,
-      contactId: payee?.razorpayBeneficiary?.contactId || null,
-      transferMode: autoMetadata.transferMode || 'IMPS',
-      beneficiary: payee?.razorpayBeneficiary || {},
-      request: {},
-      response: {}
+  let payout
+
+  try {
+    payout = await createRazorpayPayoutRecord({
+      payerId: payment.payer?.userId || payment.initiatedBy?.userId || null,
+      payeeId: autoMetadata.payeeId,
+      payeeType: autoMetadata.payeeType || payeeSnapshot?.userType || null,
+      paymentId: payment._id,
+      referenceType:
+        autoMetadata.referenceType || payment.referenceType || null,
+      referenceId: autoMetadata.referenceId || payment.referenceId || null,
+      amount: autoMetadata.amount,
+      currency: autoMetadata.currency || payment.currency || 'INR',
+      status: 'CREATED',
+      razorpay: {
+        fundAccountId: payee?.razorpayBeneficiary?.fundAccountId || null,
+        contactId: payee?.razorpayBeneficiary?.contactId || null,
+        transferMode: autoMetadata.transferMode || 'IMPS',
+        beneficiary: payee?.razorpayBeneficiary || {},
+        request: {},
+        response: {}
+      }
+    })
+  } catch (error) {
+    // Another webhook/process created the payout at the same time.
+    if (error?.code === 11000) {
+      logger.info(
+      `[PAYOUT] Duplicate payout creation prevented (paymentId=${payment._id})`
+    )
+      payout = await findExistingRazorpayPayout({
+        paymentId: payment._id,
+        referenceType:
+          autoMetadata.referenceType || payment.referenceType || null,
+        referenceId: autoMetadata.referenceId || payment.referenceId || null
+      })
+
+      if (!payout) {
+        throw error
+      }
+    } else {
+      throw error
     }
-  })
+  }
 
   const hydratedPayout =
     payout && payout._id && typeof payout.save === 'function'
@@ -1738,7 +1768,9 @@ const processRazorpayPayoutWebhook = async ({
 
   if (savedPayout?.razorpay?.payoutId) {
     try {
-      const syncedPayout = await syncRazorpayPayoutStatus(savedPayout, { fetchImpl })
+      const syncedPayout = await syncRazorpayPayoutStatus(savedPayout, {
+        fetchImpl
+      })
       logger.info('[RAZORPAY PAYOUT WEBHOOK] Background sync complete', {
         event: eventName,
         payoutId,
