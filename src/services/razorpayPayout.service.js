@@ -896,93 +896,93 @@ const buildRazorpayRequestBody = ({
   }
 }
 
-// const createRazorpayPayoutRecord = async ({
-//   payerId,
-//   payeeId,
-//   payeeType,
-//   paymentId,
-//   referenceType,
-//   referenceId,
-//   amount,
-//   currency = 'INR',
-//   status = 'CREATED',
-//   failure = null,
-//   retry = {},
-//   razorpay = {}
-// }) => {
-//   if (!payerId || !payeeId) {
-//     const error = new Error(
-//       'payerId and payeeId are required for payout creation'
-//     )
-//     error.statusCode = 400
-//     throw error
-//   }
+const createRazorpayPayoutRecord = async ({
+  payerId,
+  payeeId,
+  payeeType,
+  paymentId,
+  referenceType,
+  referenceId,
+  amount,
+  currency = 'INR',
+  status = 'CREATED',
+  failure = null,
+  retry = {},
+  razorpay = {}
+}) => {
+  if (!payerId || !payeeId) {
+    const error = new Error(
+      'payerId and payeeId are required for payout creation'
+    )
+    error.statusCode = 400
+    throw error
+  }
 
-//   const existingByPayment = paymentId
-//     ? await Payout.findOne({ paymentId, provider: 'RAZORPAY' }).sort({
-//         createdAt: -1
-//       })
-//     : null
+  const existingByPayment = paymentId
+    ? await Payout.findOne({ paymentId, provider: 'RAZORPAY' }).sort({
+        createdAt: -1
+      })
+    : null
 
-//   if (existingByPayment) {
-//     return existingByPayment
-//   }
+  if (existingByPayment) {
+    return existingByPayment
+  }
 
-//   const existingByReference =
-//     referenceType || referenceId
-//       ? await Payout.findOne({
-//           referenceType,
-//           referenceId,
-//           provider: 'RAZORPAY'
-//         }).sort({ createdAt: -1 })
-//       : null
+  // const existingByReference =
+  //   referenceType || referenceId
+  //     ? await Payout.findOne({
+  //         referenceType,
+  //         referenceId,
+  //         provider: 'RAZORPAY'
+  //       }).sort({ createdAt: -1 })
+  //     : null
 
-//   if (
-//     existingByReference &&
-//     ['SUCCESS', 'PROCESSING', 'CREATED', 'RETRY_PENDING'].includes(
-//       existingByReference.status
-//     )
-//   ) {
-//     return existingByReference
-//   }
+  // if (
+  //   existingByReference &&
+  //   ['SUCCESS', 'PROCESSING', 'CREATED', 'RETRY_PENDING'].includes(
+  //     existingByReference.status
+  //   )
+  // ) {
+  //   return existingByReference
+  // }
 
-//   const payout = new Payout({
-//     payerId,
-//     payeeId,
-//     payeeType,
-//     paymentId: paymentId || null,
-//     referenceType: referenceType || null,
-//     referenceId: referenceId || null,
-//     amount: Number(normalizeMoney(amount)),
-//     currency,
-//     provider: 'RAZORPAY',
-//     razorpay: {
-//       contactId: razorpay.contactId || null,
-//       fundAccountId: razorpay.fundAccountId || null,
-//       payoutId: razorpay.payoutId || null,
-//       referenceId: razorpay.referenceId || null,
-//       utr: razorpay.utr || null,
-//       transferMode: razorpay.transferMode || 'IMPS',
-//       statusDetails: razorpay.statusDetails || {},
-//       beneficiary: razorpay.beneficiary || {},
-//       request: razorpay.request || {},
-//       response: razorpay.response || {}
-//     },
-//     status,
-//     failure: failure || buildPayoutFailure({}),
-//     retry: {
-//       count: retry.count || 0,
-//       maxRetry: retry.maxRetry || 3,
-//       nextRetryAt: retry.nextRetryAt || null
-//     },
-//     initiatedAt: new Date(),
-//     startedAt: razorpay.payoutId ? new Date() : null,
-//     lastAttemptAt: razorpay.payoutId ? new Date() : null
-//   })
+  const payout = new Payout({
+    payerId,
+    payeeId,
+    payeeType,
+    paymentId: paymentId || null,
+    referenceType: referenceType || null,
+    referenceId: referenceId || null,
+    amount: Number(normalizeMoney(amount)),
+    currency,
+    provider: 'RAZORPAY',
+    razorpay: {
+      contactId: razorpay.contactId || null,
+      fundAccountId: razorpay.fundAccountId || null,
+      payoutId: razorpay.payoutId || null,
+      referenceId: razorpay.referenceId || null,
+      utr: razorpay.utr || null,
+      transferMode: razorpay.transferMode || 'IMPS',
+      statusDetails: razorpay.statusDetails || {},
+      beneficiary: razorpay.beneficiary || {},
+      request: razorpay.request || {},
+      response: razorpay.response || {}
+    },
+    status,
+    failure: failure || buildPayoutFailure({}),
+    retry: {
+      count: retry.count || 0,
+      maxRetry: retry.maxRetry || 3,
+      nextRetryAt: retry.nextRetryAt || null
+    },
+    initiatedAt: new Date(),
+    startedAt: razorpay.payoutId ? new Date() : null,
+    lastAttemptAt: razorpay.payoutId ? new Date() : null
+  })
 
-//   return savePayoutWithLogs(payout)
-// }
-createRazorpayPayoutRecord 
+  return savePayoutWithLogs(payout)
+}
+
 
 const findExistingRazorpayPayout = async ({
   paymentId,
