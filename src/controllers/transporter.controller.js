@@ -1,10 +1,17 @@
-const Transporter = require('../models/Transporter');
-const Vehicle = require('../models/Vehicle');
-const Trip = require('../models/Trip');
-const Driver = require('../models/Driver');
-const { normalizeOperatingCountry } = require('../constants/operatingCountries');
-const { validateMobile, cleanMobile, validatePin, validateEmail, normalizeEmail } = require('../utils/validation');
-const { TRIP_STATUS } = require('../utils/tripState');
+const Transporter = require('../models/Transporter')
+const Vehicle = require('../models/Vehicle')
+const Trip = require('../models/Trip')
+const Driver = require('../models/Driver')
+const { normalizeOperatingCountry } = require('../constants/operatingCountries')
+const {
+  validateMobile,
+  cleanMobile,
+  validatePin,
+  validateEmail,
+  normalizeEmail
+} = require('../utils/validation')
+const { TRIP_STATUS } = require('../utils/tripState')
+const { getCache, setCache, deleteCache } = require('../utils/cache')
 
 /**
  * Get transporter profile
@@ -12,13 +19,13 @@ const { TRIP_STATUS } = require('../utils/tripState');
  */
 const getProfile = async (req, res, next) => {
   try {
-    const transporter = await Transporter.findById(req.user.id).select('-pin');
+    const transporter = await Transporter.findById(req.user.id).select('-pin')
 
     if (!transporter) {
       return res.status(404).json({
         success: false,
-        message: 'Transporter not found',
-      });
+        message: 'Transporter not found'
+      })
     }
 
     return res.status(200).json({
@@ -37,14 +44,14 @@ const getProfile = async (req, res, next) => {
           hasPinSet: transporter.hasPinSet(),
           walletBalance: transporter.walletBalance,
           createdAt: transporter.createdAt,
-          updatedAt: transporter.updatedAt,
-        },
-      },
-    });
+          updatedAt: transporter.updatedAt
+        }
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Update transporter profile
@@ -52,31 +59,32 @@ const getProfile = async (req, res, next) => {
  */
 const updateProfile = async (req, res, next) => {
   try {
-    const { name, email, company, operatingCountry } = req.body;
+    const { name, email, company, operatingCountry } = req.body
 
     // Build update object
-    const updateData = {};
-    if (name !== undefined) updateData.name = name?.trim();
+    const updateData = {}
+    if (name !== undefined) updateData.name = name?.trim()
     if (email !== undefined) {
-      const normalizedEmail = normalizeEmail(email);
+      const normalizedEmail = normalizeEmail(email)
       if (normalizedEmail && !validateEmail(normalizedEmail)) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid email format',
-        });
+          message: 'Invalid email format'
+        })
       }
-      updateData.email = normalizedEmail || null;
+      updateData.email = normalizedEmail || null
     }
-    if (company !== undefined) updateData.company = company?.trim();
+    if (company !== undefined) updateData.company = company?.trim()
     if (operatingCountry !== undefined) {
-      const normalizedOperatingCountry = normalizeOperatingCountry(operatingCountry);
+      const normalizedOperatingCountry =
+        normalizeOperatingCountry(operatingCountry)
       if (!normalizedOperatingCountry) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid operating country',
-        });
+          message: 'Invalid operating country'
+        })
       }
-      updateData.operatingCountry = normalizedOperatingCountry;
+      updateData.operatingCountry = normalizedOperatingCountry
     }
 
     // Update transporter
@@ -85,15 +93,15 @@ const updateProfile = async (req, res, next) => {
       updateData,
       {
         new: true,
-        runValidators: true,
+        runValidators: true
       }
-    ).select('-pin');
+    ).select('-pin')
 
     if (!transporter) {
       return res.status(404).json({
         success: false,
-        message: 'Transporter not found',
-      });
+        message: 'Transporter not found'
+      })
     }
 
     return res.status(200).json({
@@ -112,14 +120,14 @@ const updateProfile = async (req, res, next) => {
           hasPinSet: transporter.hasPinSet(),
           walletBalance: transporter.walletBalance,
           createdAt: transporter.createdAt,
-          updatedAt: transporter.updatedAt,
-        },
-      },
-    });
+          updatedAt: transporter.updatedAt
+        }
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Set PIN for transporter
@@ -127,48 +135,48 @@ const updateProfile = async (req, res, next) => {
  */
 const setPin = async (req, res, next) => {
   try {
-    const { pin } = req.body;
+    const { pin } = req.body
 
     // Validation
     if (!pin) {
       return res.status(400).json({
         success: false,
-        message: 'PIN is required',
-      });
+        message: 'PIN is required'
+      })
     }
 
     if (!validatePin(pin)) {
       return res.status(400).json({
         success: false,
-        message: 'PIN must be 4 digits',
-      });
+        message: 'PIN must be 4 digits'
+      })
     }
 
     // Find transporter and update PIN
-    const transporter = await Transporter.findById(req.user.id).select('+pin');
+    const transporter = await Transporter.findById(req.user.id).select('+pin')
 
     if (!transporter) {
       return res.status(404).json({
         success: false,
-        message: 'Transporter not found',
-      });
+        message: 'Transporter not found'
+      })
     }
 
     // Set PIN (will be hashed by pre-save hook)
-    transporter.pin = pin;
-    await transporter.save();
+    transporter.pin = pin
+    await transporter.save()
 
     return res.status(200).json({
       success: true,
       message: 'PIN set successfully',
       data: {
-        hasPinSet: true,
-      },
-    });
+        hasPinSet: true
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Get transporter dashboard stats
@@ -178,9 +186,22 @@ const getDashboard = async (req, res, next) => {
   try {
     const transporterId = req.user.id;
 
+    // Redis cache key
+    const cacheKey = `transporter:dashboard:${transporterId}`;
+
+    // 1. Check Redis first
+    const cachedDashboard = await getCache(cacheKey);
+
+    if (cachedDashboard) {
+      return res.status(200).json(cachedDashboard);
+    }
+
+    // 2. Redis MISS -> calculate dashboard from MongoDB
+
     // Get today's date range
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
@@ -197,33 +218,46 @@ const getDashboard = async (req, res, next) => {
         transporterId,
         status: 'active',
       }),
+
       Trip.countDocuments({
         transporterId,
-        status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] },
+        status: {
+          $in: [
+            TRIP_STATUS.ACTIVE,
+            TRIP_STATUS.PAUSED
+          ],
+        },
       }),
+
       Trip.countDocuments({
         transporterId,
         status: TRIP_STATUS.PLANNED,
       }),
+
       Trip.countDocuments({
         transporterId,
         status: TRIP_STATUS.POD_PENDING,
       }),
+
       Trip.countDocuments({
         transporterId,
-        status: { $ne: TRIP_STATUS.DRAFT },
+        status: {
+          $ne: TRIP_STATUS.DRAFT
+        },
         createdAt: {
           $gte: today,
           $lt: tomorrow,
         },
       }),
+
       Driver.countDocuments({
         transporterId,
         status: 'active',
       }),
     ]);
 
-    return res.status(200).json({
+    // 3. Build exactly the same response as current API
+    const response = {
       success: true,
       message: 'Dashboard stats retrieved successfully',
       data: {
@@ -236,7 +270,18 @@ const getDashboard = async (req, res, next) => {
           todaysTripsCount,
         },
       },
-    });
+    };
+
+    // 4. Cache dashboard for 2 minutes
+    await setCache(
+      cacheKey,
+      response,
+      2 * 60
+    );
+
+    // 5. Return response
+    return res.status(200).json(response);
+
   } catch (error) {
     next(error);
   }
@@ -246,5 +291,5 @@ module.exports = {
   getProfile,
   updateProfile,
   setPin,
-  getDashboard,
-};
+  getDashboard
+}

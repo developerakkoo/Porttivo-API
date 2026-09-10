@@ -1,17 +1,17 @@
-const express = require('express');
-const cors = require('cors');
-const http = require('http');
-const path = require('path');
-const os = require('os');
-const { engine } = require('express-handlebars');
-const logger = require('./src/utils/logger');
-const connectDB = require('./src/config/database');
-const { port } = require('./src/config/env');
-const { errorHandler, notFound } = require('./src/middleware/error.middleware');
-const { auditRequest } = require('./src/middleware/audit.middleware');
-const { logApiRequest } = require('./src/middleware/requestLog.middleware');
-const { initializeSocketIO } = require('./src/services/socket.service');
-
+const express = require('express')
+const cors = require('cors')
+const http = require('http')
+const path = require('path')
+const os = require('os')
+const { engine } = require('express-handlebars')
+const logger = require('./src/utils/logger')
+const connectDB = require('./src/config/database')
+const { port } = require('./src/config/env')
+const { errorHandler, notFound } = require('./src/middleware/error.middleware')
+const { auditRequest } = require('./src/middleware/audit.middleware')
+const { logApiRequest } = require('./src/middleware/requestLog.middleware')
+const { initializeSocketIO } = require('./src/services/socket.service')
+const { connectRedis } = require('./src/config/redis')
 if (typeof global.fetch !== 'function') {
   try {
     const { fetch: undiciFetch } = require('undici')
@@ -25,228 +25,277 @@ if (typeof global.fetch !== 'function') {
 }
 
 // Import routes
-const authRoutes = require('./src/routes/auth.routes');
-const transporterRoutes = require('./src/routes/transporter.routes');
-const driverRoutes = require('./src/routes/driver.routes');
-const vehicleRoutes = require('./src/routes/vehicle.routes');
-const vehicleTypeRoutes = require('./src/routes/vehicleType.routes');
-const vehicleTypeRequestRoutes = require('./src/routes/vehicleTypeRequest.routes');
-const transporterCustomerRoutes = require('./src/routes/transporterCustomer.routes');
-const tripRoutes = require('./src/routes/trip.routes');
-const fuelCardRoutes = require('./src/routes/fuelCard.routes');
-const fuelRoutes = require('./src/routes/fuel.routes');
-const companyUserRoutes = require('./src/routes/companyUser.routes');
-const pumpOwnerRoutes = require('./src/routes/pumpOwner.routes');
-const pumpStaffRoutes = require('./src/routes/pumpStaff.routes');
-const adminRoutes = require('./src/routes/admin.routes');
-const walletRoutes = require('./src/routes/wallet.routes');
-const settlementRoutes = require('./src/routes/settlement.routes');
-const notificationRoutes = require('./src/routes/notification.routes');
-const vehiclePostRoutes = require('./src/routes/vehiclePost.routes');
-const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes');
-const marketplacePaymentRoutes = require('./src/routes/marketplacePayment.routes');
-const razorpayPaymentLinkRoutes = require('./src/routes/razorpayPaymentLink.routes');
-const paymentRoutes = require('./src/routes/payment.routes');
-const payoutRoutes = require('./src/routes/payout.routes');
-const messageRoutes = require('./src/routes/message.routes');
-const requirementRoutes = require('./src/routes/requirement.routes');
-const quoteRoutes = require('./src/routes/quote.routes');
-const deviceRoutes = require('./src/routes/device.routes');
-const supportTransporterRoutes = require('./src/routes/supportTransporter.routes');
-const supportCustomerRoutes = require('./src/routes/supportCustomer.routes');
-const { getCustomerDetails, listAllCustomers, getDuplicateCustomers, listCustomersWithTripsAndActivities } = require('./src/controllers/admin.controller');
-const { authenticate } = require('./src/middleware/auth.middleware');
-const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability');
-const Payout = require('./src/models/Payout');
-const { startPayoutAutomationCron } = require('./src/services/cashfreePayout.service');
+const authRoutes = require('./src/routes/auth.routes')
+const transporterRoutes = require('./src/routes/transporter.routes')
+const driverRoutes = require('./src/routes/driver.routes')
+const vehicleRoutes = require('./src/routes/vehicle.routes')
+const vehicleTypeRoutes = require('./src/routes/vehicleType.routes')
+const vehicleTypeRequestRoutes = require('./src/routes/vehicleTypeRequest.routes')
+const transporterCustomerRoutes = require('./src/routes/transporterCustomer.routes')
+const tripRoutes = require('./src/routes/trip.routes')
+const fuelCardRoutes = require('./src/routes/fuelCard.routes')
+const fuelRoutes = require('./src/routes/fuel.routes')
+const companyUserRoutes = require('./src/routes/companyUser.routes')
+const pumpOwnerRoutes = require('./src/routes/pumpOwner.routes')
+const pumpStaffRoutes = require('./src/routes/pumpStaff.routes')
+const adminRoutes = require('./src/routes/admin.routes')
+const walletRoutes = require('./src/routes/wallet.routes')
+const settlementRoutes = require('./src/routes/settlement.routes')
+const notificationRoutes = require('./src/routes/notification.routes')
+const vehiclePostRoutes = require('./src/routes/vehiclePost.routes')
+const vehicleBookingRoutes = require('./src/routes/vehicleBooking.routes')
+const marketplacePaymentRoutes = require('./src/routes/marketplacePayment.routes')
+const razorpayPaymentLinkRoutes = require('./src/routes/razorpayPaymentLink.routes')
+const paymentRoutes = require('./src/routes/payment.routes')
+const payoutRoutes = require('./src/routes/payout.routes')
+const messageRoutes = require('./src/routes/message.routes')
+const requirementRoutes = require('./src/routes/requirement.routes')
+const quoteRoutes = require('./src/routes/quote.routes')
+const deviceRoutes = require('./src/routes/device.routes')
+const supportTransporterRoutes = require('./src/routes/supportTransporter.routes')
+const supportCustomerRoutes = require('./src/routes/supportCustomer.routes')
+const {
+  getCustomerDetails,
+  listAllCustomers,
+  getDuplicateCustomers,
+  listCustomersWithTripsAndActivities
+} = require('./src/controllers/admin.controller')
+const { authenticate } = require('./src/middleware/auth.middleware')
+const VehicleRouteAvailability = require('./src/models/VehicleRouteAvailability')
+const Payout = require('./src/models/Payout')
+const {
+  startPayoutAutomationCron
+} = require('./src/services/cashfreePayout.service')
 
-const accountDeletionRoutes = require("./src/routes/accountDeletion.routes");
+const accountDeletionRoutes = require('./src/routes/accountDeletion.routes')
 
-logger.installConsoleFormatter();
+logger.installConsoleFormatter()
 
-function requireAdminUser(req, res, next) {
+function requireAdminUser (req, res, next) {
   if (req.user?.userType !== 'admin') {
     return res.status(403).json({
       success: false,
-      message: 'Access denied. This endpoint is for admins only.',
-    });
+      message: 'Access denied. This endpoint is for admins only.'
+    })
   }
-  next();
+  next()
 }
 
 // Initialize Express app
-const app = express();
+const app = express()
 
 // Create HTTP server
-const httpServer = http.createServer(app);
+const httpServer = http.createServer(app)
 
 // Initialize Socket.IO
-initializeSocketIO(httpServer);
+initializeSocketIO(httpServer)
 
 // Configure Handlebars view engine
-app.engine('html', engine({
-  extname: '.html',
-  defaultLayout: false,
-  layoutsDir: path.join(__dirname, 'src/views'),
-}));
-app.set('view engine', 'html');
-app.set('views', path.join(__dirname, 'src/views'));
+app.engine(
+  'html',
+  engine({
+    extname: '.html',
+    defaultLayout: false,
+    layoutsDir: path.join(__dirname, 'src/views')
+  })
+)
+app.set('view engine', 'html')
+app.set('views', path.join(__dirname, 'src/views'))
 
 // Middleware
-app.use(cors());
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf ? buf.toString('utf8') : '';
-  }
-}));
-app.use(express.urlencoded({
-  extended: true,
-  verify: (req, res, buf) => {
-    req.rawBody = buf ? buf.toString('utf8') : '';
-  }
-}));
-app.use(logApiRequest);
+app.use(cors())
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf ? buf.toString('utf8') : ''
+    }
+  })
+)
+app.use(
+  express.urlencoded({
+    extended: true,
+    verify: (req, res, buf) => {
+      req.rawBody = buf ? buf.toString('utf8') : ''
+    }
+  })
+)
+app.use(logApiRequest)
 
 // Audit middleware for /api routes (logs mutating ops when req.user exists)
-app.use('/api', auditRequest);
+app.use('/api', auditRequest)
 
 // Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
     success: true,
     message: 'Porttivo API is running',
-    timestamp: new Date().toISOString(),
-  });
-});
-
+    timestamp: new Date().toISOString()
+  })
+})
 
 app.use(
-  "/account-deletion",
-  express.static(path.join(__dirname, "src/account_deletion"))
-);
+  '/account-deletion',
+  express.static(path.join(__dirname, 'src/account_deletion'))
+)
 // Public accunt deletion
-app.use("/api", accountDeletionRoutes);
+app.use('/api', accountDeletionRoutes)
 
 // API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/transporters/support', supportTransporterRoutes);
-app.use('/api/customers/support', supportCustomerRoutes);
-app.use('/api/transporters', transporterRoutes);
-app.use('/api/drivers', driverRoutes);
-app.use('/api/vehicles', vehicleRoutes);
-app.use('/api/vehicle-types', vehicleTypeRoutes);
-app.use('/api/vehicle-type-requests', vehicleTypeRequestRoutes);
-app.use('/api/transporter-customers', transporterCustomerRoutes);
-app.use('/api/trips', tripRoutes);
-app.use('/api/fuel-cards', fuelCardRoutes);
-app.use('/api/fuel', fuelRoutes);
-app.use('/api/company-users', companyUserRoutes);
-app.use('/api/pump-owners', pumpOwnerRoutes);
-app.use('/api/pump-staff', pumpStaffRoutes);
+app.use('/api/auth', authRoutes)
+app.use('/api/transporters/support', supportTransporterRoutes)
+app.use('/api/customers/support', supportCustomerRoutes)
+app.use('/api/transporters', transporterRoutes)
+app.use('/api/drivers', driverRoutes)
+app.use('/api/vehicles', vehicleRoutes)
+app.use('/api/vehicle-types', vehicleTypeRoutes)
+app.use('/api/vehicle-type-requests', vehicleTypeRequestRoutes)
+app.use('/api/transporter-customers', transporterCustomerRoutes)
+app.use('/api/trips', tripRoutes)
+app.use('/api/fuel-cards', fuelCardRoutes)
+app.use('/api/fuel', fuelRoutes)
+app.use('/api/company-users', companyUserRoutes)
+app.use('/api/pump-owners', pumpOwnerRoutes)
+app.use('/api/pump-staff', pumpStaffRoutes)
 // Customer detail must be registered before mounting admin router so GET always matches
-app.get('/api/admin/customers/list', authenticate, requireAdminUser, listAllCustomers);
-app.get('/api/admin/customers/duplicates', authenticate, requireAdminUser, getDuplicateCustomers);
-app.get('/api/admin/customers/with-trips-activities', authenticate, requireAdminUser, listCustomersWithTripsAndActivities);
-app.get('/api/admin/customers/:id', authenticate, requireAdminUser, getCustomerDetails);
-app.get('/api/admins/customers/:id', authenticate, requireAdminUser, getCustomerDetails);
-app.use('/api/admins', adminRoutes);
-app.use('/api/admin', adminRoutes); // Admin dashboard routes
-app.use('/api/wallets', walletRoutes);
-app.use('/api/settlements', settlementRoutes);
-app.use('/api/notifications', notificationRoutes);
-app.use('/api/vehicle-posts', vehiclePostRoutes);
-app.use('/api/vehicle-bookings', vehicleBookingRoutes);
-app.use('/api/marketplace-payments', marketplacePaymentRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/payouts', payoutRoutes);
+app.get(
+  '/api/admin/customers/list',
+  authenticate,
+  requireAdminUser,
+  listAllCustomers
+)
+app.get(
+  '/api/admin/customers/duplicates',
+  authenticate,
+  requireAdminUser,
+  getDuplicateCustomers
+)
+app.get(
+  '/api/admin/customers/with-trips-activities',
+  authenticate,
+  requireAdminUser,
+  listCustomersWithTripsAndActivities
+)
+app.get(
+  '/api/admin/customers/:id',
+  authenticate,
+  requireAdminUser,
+  getCustomerDetails
+)
+app.get(
+  '/api/admins/customers/:id',
+  authenticate,
+  requireAdminUser,
+  getCustomerDetails
+)
+app.use('/api/admins', adminRoutes)
+app.use('/api/admin', adminRoutes) // Admin dashboard routes
+app.use('/api/wallets', walletRoutes)
+app.use('/api/settlements', settlementRoutes)
+app.use('/api/notifications', notificationRoutes)
+app.use('/api/vehicle-posts', vehiclePostRoutes)
+app.use('/api/vehicle-bookings', vehicleBookingRoutes)
+app.use('/api/marketplace-payments', marketplacePaymentRoutes)
+app.use('/api/payments', paymentRoutes)
+app.use('/api/payouts', payoutRoutes)
 app.use('/api/razorpay-payment-links', razorpayPaymentLinkRoutes)
-app.use('/api/messages', messageRoutes);
-app.use('/api/requirements', requirementRoutes);
-app.use('/api/quotes', quoteRoutes);
-app.use('/api/devices', deviceRoutes);
+app.use('/api/messages', messageRoutes)
+app.use('/api/requirements', requirementRoutes)
+app.use('/api/quotes', quoteRoutes)
+app.use('/api/devices', deviceRoutes)
 
 // 404 handler
-app.use(notFound);
+app.use(notFound)
 
 // Error handler (must be last)
-app.use(errorHandler);
+app.use(errorHandler)
 
 // Helper function to get local IP address
 const getLocalIPAddress = () => {
-  const interfaces = os.networkInterfaces();
+  const interfaces = os.networkInterfaces()
   for (const name of Object.keys(interfaces)) {
     for (const iface of interfaces[name]) {
       // Skip internal (loopback) and non-IPv4 addresses
       if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+        return iface.address
       }
     }
   }
-  return 'localhost';
-};
+  return 'localhost'
+}
 
 // Connect to database and start server
 const startServer = async () => {
   try {
     // Connect to MongoDB
-    await connectDB();
+    await connectDB()
+    // Connect to Redis
+    try {
+      await connectRedis()
+    } catch (redisError) {
+      console.warn(
+        'Redis connection failed. API will continue without Redis:',
+        redisError.message
+      )
+    }
 
     try {
-      await VehicleRouteAvailability.syncIndexes();
-      console.log('VehicleRouteAvailability indexes synced');
+      await VehicleRouteAvailability.syncIndexes()
+      console.log('VehicleRouteAvailability indexes synced')
     } catch (indexError) {
       console.warn(
         'VehicleRouteAvailability index sync skipped:',
         indexError.message || indexError
-      );
+      )
     }
 
     try {
-      await Payout.syncIndexes();
-      console.log('Payout indexes synced');
+      await Payout.syncIndexes()
+      console.log('Payout indexes synced')
     } catch (indexError) {
       console.warn(
         'Payout index sync skipped:',
         indexError.message || indexError
-      );
+      )
     }
 
-    startPayoutAutomationCron();
+    startPayoutAutomationCron()
 
     // Start HTTP server (Socket.IO is attached to it)
     // Listen on 0.0.0.0 to make it accessible over WiFi network
     httpServer.listen(port, '0.0.0.0', () => {
-      const localIP = getLocalIPAddress();
-      console.log(`🚀 Server is running on port ${port}`);
-      console.log(`📡 API endpoints available at:`);
-      console.log(`   - Local:   http://localhost:${port}/health`);
-      console.log(`   - Network: http://${localIP}:${port}/api`);
-      console.log(`🔌 Socket.IO server initialized`);
-      console.log(`\n💡 To access from your device, use: http://${localIP}:${port}/api`);
-    });
+      const localIP = getLocalIPAddress()
+      console.log(`🚀 Server is running on port ${port}`)
+      console.log(`📡 API endpoints available at:`)
+      console.log(`   - Local:   http://localhost:${port}/health`)
+      console.log(`   - Network: http://${localIP}:${port}/api`)
+      console.log(`🔌 Socket.IO server initialized`)
+      console.log(
+        `\n💡 To access from your device, use: http://${localIP}:${port}/api`
+      )
+    })
   } catch (error) {
-    logger.error('Failed to start server', { message: error.message });
-    process.exit(1);
+    logger.error('Failed to start server', { message: error.message })
+    process.exit(1)
   }
-};
+}
 
-startServer();
+startServer()
 
 // Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
+process.on('unhandledRejection', err => {
   logger.error('Unhandled Promise Rejection', {
     message: err.message,
     stack: err.stack
-  });
+  })
   // Close server gracefully
-  process.exit(1);
-});
+  process.exit(1)
+})
 
 // Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-  logger.error('Uncaught Exception', { message: err.message, stack: err.stack });
-  process.exit(1);
-});
+process.on('uncaughtException', err => {
+  logger.error('Uncaught Exception', { message: err.message, stack: err.stack })
+  process.exit(1)
+})

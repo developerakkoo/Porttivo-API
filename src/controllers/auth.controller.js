@@ -1,84 +1,133 @@
-const Transporter = require('../models/Transporter');
-const Driver = require('../models/Driver');
-const Trip = require('../models/Trip');
-const CompanyUser = require('../models/CompanyUser');
-const PumpOwner = require('../models/PumpOwner');
-const PumpStaff = require('../models/PumpStaff');
-const Customer = require('../models/Customer');
-const { generateTokens } = require('../services/jwt.service');
+const Transporter = require('../models/Transporter')
+const Driver = require('../models/Driver')
+const Trip = require('../models/Trip')
+const CompanyUser = require('../models/CompanyUser')
+const PumpOwner = require('../models/PumpOwner')
+const PumpStaff = require('../models/PumpStaff')
+const Customer = require('../models/Customer')
+const { generateTokens } = require('../services/jwt.service')
 const {
   DRIVER_TRACKING_STATUS,
   persistTrackingUpdate
-} = require('../services/driverTracking.service');
-const {
-  emitDriverTrackingChanged
-} = require('../services/socket.service');
+} = require('../services/driverTracking.service')
+const { emitDriverTrackingChanged } = require('../services/socket.service')
 const {
   validateMobile,
   cleanMobile,
   normalizeEmail,
   validateEmail,
   validateUserType,
-  validatePin,
-} = require('../utils/validation');
-const { normalizeOperatingCountry } = require('../constants/operatingCountries');
-const msg91Service = require('../services/msg91.service');
+  validatePin
+} = require('../utils/validation')
+const { normalizeOperatingCountry } = require('../constants/operatingCountries')
+const msg91Service = require('../services/msg91.service')
+const { deleteCache } = require('../utils/cache')
 
 /**
  * Helper to verify account eligibility before sending or verifying OTP
  */
 const checkUserEligibility = async (normalizedUserType, cleanedMobile) => {
   if (normalizedUserType === 'transporter') {
-    const transporter = await Transporter.findOne({ mobile: cleanedMobile });
+    const transporter = await Transporter.findOne({ mobile: cleanedMobile })
     if (!transporter) {
-      return { eligible: false, statusCode: 404, message: 'Transporter not registered. Please contact admin for registration.' };
+      return {
+        eligible: false,
+        statusCode: 404,
+        message:
+          'Transporter not registered. Please contact admin for registration.'
+      }
     }
     if (transporter.status === 'blocked') {
-      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+      return {
+        eligible: false,
+        statusCode: 403,
+        message: 'Your account has been blocked. Please contact support.'
+      }
     }
-    return { eligible: true, user: transporter };
+    return { eligible: true, user: transporter }
   } else if (normalizedUserType === 'driver') {
-    const driver = await Driver.findOne({ mobile: cleanedMobile });
+    const driver = await Driver.findOne({ mobile: cleanedMobile })
     if (!driver || !driver.transporterId) {
-      return { eligible: false, statusCode: 404, message: 'You are not linked to any transporter yet.' };
+      return {
+        eligible: false,
+        statusCode: 404,
+        message: 'You are not linked to any transporter yet.'
+      }
     }
     if (driver.status === 'blocked') {
-      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+      return {
+        eligible: false,
+        statusCode: 403,
+        message: 'Your account has been blocked. Please contact support.'
+      }
     }
-    return { eligible: true, user: driver };
+    return { eligible: true, user: driver }
   } else if (normalizedUserType === 'pump_owner') {
-    const pumpOwner = await PumpOwner.findOne({ mobile: cleanedMobile });
+    const pumpOwner = await PumpOwner.findOne({ mobile: cleanedMobile })
     if (!pumpOwner) {
-      return { eligible: false, statusCode: 404, message: 'Pump owner not registered. Please contact admin for registration.' };
+      return {
+        eligible: false,
+        statusCode: 404,
+        message:
+          'Pump owner not registered. Please contact admin for registration.'
+      }
     }
     if (pumpOwner.status === 'blocked') {
-      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+      return {
+        eligible: false,
+        statusCode: 403,
+        message: 'Your account has been blocked. Please contact support.'
+      }
     }
     if (pumpOwner.status === 'inactive' || pumpOwner.status === 'pending') {
-      return { eligible: false, statusCode: 403, message: 'Your account is not active. Please contact admin for activation.' };
+      return {
+        eligible: false,
+        statusCode: 403,
+        message:
+          'Your account is not active. Please contact admin for activation.'
+      }
     }
-    return { eligible: true, user: pumpOwner };
+    return { eligible: true, user: pumpOwner }
   } else if (normalizedUserType === 'pump_staff') {
-    const pumpStaff = await PumpStaff.findOne({ mobile: cleanedMobile }).populate('pumpOwnerId', 'name pumpName');
+    const pumpStaff = await PumpStaff.findOne({
+      mobile: cleanedMobile
+    }).populate('pumpOwnerId', 'name pumpName')
     if (!pumpStaff) {
-      return { eligible: false, statusCode: 404, message: 'Pump staff not registered. Please contact your pump owner for registration.' };
+      return {
+        eligible: false,
+        statusCode: 404,
+        message:
+          'Pump staff not registered. Please contact your pump owner for registration.'
+      }
     }
     if (pumpStaff.status === 'blocked' || pumpStaff.status === 'disabled') {
-      return { eligible: false, statusCode: 403, message: 'Your account has been blocked or disabled.' };
+      return {
+        eligible: false,
+        statusCode: 403,
+        message: 'Your account has been blocked or disabled.'
+      }
     }
     if (pumpStaff.status === 'inactive') {
-      return { eligible: false, statusCode: 403, message: 'Your account is not active. Please contact your pump owner.' };
+      return {
+        eligible: false,
+        statusCode: 403,
+        message: 'Your account is not active. Please contact your pump owner.'
+      }
     }
-    return { eligible: true, user: pumpStaff };
+    return { eligible: true, user: pumpStaff }
   } else if (normalizedUserType === 'customer') {
-    const customer = await Customer.findOne({ mobile: cleanedMobile });
+    const customer = await Customer.findOne({ mobile: cleanedMobile })
     if (customer && customer.status === 'blocked') {
-      return { eligible: false, statusCode: 403, message: 'Your account has been blocked. Please contact support.' };
+      return {
+        eligible: false,
+        statusCode: 403,
+        message: 'Your account has been blocked. Please contact support.'
+      }
     }
-    return { eligible: true, user: customer || null };
+    return { eligible: true, user: customer || null }
   }
-  return { eligible: false, statusCode: 400, message: 'Invalid user type' };
-};
+  return { eligible: false, statusCode: 400, message: 'Invalid user type' }
+}
 
 /**
  * Send OTP endpoint via MSG91
@@ -86,56 +135,57 @@ const checkUserEligibility = async (normalizedUserType, cleanedMobile) => {
  */
 const sendOTP = async (req, res, next) => {
   try {
-    const { mobile, userType } = req.body;
+    const { mobile, userType } = req.body
 
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
     if (!userType) {
       return res.status(400).json({
         success: false,
-        message: 'User type is required',
-      });
+        message: 'User type is required'
+      })
     }
 
     if (!validateUserType(userType)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"',
-      });
+        message:
+          'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
-    const normalizedUserType = userType.toLowerCase();
+    const normalizedUserType = userType.toLowerCase()
 
     // Check account eligibility in DB before sending OTP
-    const check = await checkUserEligibility(normalizedUserType, cleanedMobile);
+    const check = await checkUserEligibility(normalizedUserType, cleanedMobile)
     if (!check.eligible) {
       return res.status(check.statusCode).json({
         success: false,
-        message: check.message,
-      });
+        message: check.message
+      })
     }
 
     // Call MSG91 to send OTP
-    const otpResult = await msg91Service.sendOtp(cleanedMobile);
+    const otpResult = await msg91Service.sendOtp(cleanedMobile)
 
     if (!otpResult.success) {
       return res.status(500).json({
         success: false,
-        message: otpResult.message || 'Failed to send OTP',
-      });
+        message: otpResult.message || 'Failed to send OTP'
+      })
     }
 
     return res.status(200).json({
@@ -144,13 +194,13 @@ const sendOTP = async (req, res, next) => {
       data: {
         mobile: cleanedMobile,
         userType: normalizedUserType,
-        requestId: otpResult.requestId || null,
-      },
-    });
+        requestId: otpResult.requestId || null
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Verify OTP endpoint via MSG91
@@ -158,73 +208,74 @@ const sendOTP = async (req, res, next) => {
  */
 const verifyOTP = async (req, res, next) => {
   try {
-    const { mobile, userType, otp } = req.body;
+    const { mobile, userType, otp } = req.body
 
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
     if (!userType) {
       return res.status(400).json({
         success: false,
-        message: 'User type is required',
-      });
+        message: 'User type is required'
+      })
     }
 
     if (!otp) {
       return res.status(400).json({
         success: false,
-        message: 'OTP is required',
-      });
+        message: 'OTP is required'
+      })
     }
 
     if (!validateUserType(userType)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"',
-      });
+        message:
+          'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
-    const normalizedUserType = userType.toLowerCase();
+    const normalizedUserType = userType.toLowerCase()
 
     // Check account eligibility in DB
-    const check = await checkUserEligibility(normalizedUserType, cleanedMobile);
+    const check = await checkUserEligibility(normalizedUserType, cleanedMobile)
     if (!check.eligible) {
       return res.status(check.statusCode).json({
         success: false,
-        message: check.message,
-      });
+        message: check.message
+      })
     }
 
     // Verify OTP via MSG91
-    const verifyResult = await msg91Service.verifyOtp(cleanedMobile, otp);
+    const verifyResult = await msg91Service.verifyOtp(cleanedMobile, otp)
 
     if (!verifyResult.success) {
       return res.status(400).json({
         success: false,
-        message: verifyResult.message || 'Invalid or expired OTP',
-      });
+        message: verifyResult.message || 'Invalid or expired OTP'
+      })
     }
 
     // Return JWT tokens and user profile on successful verification
     if (normalizedUserType === 'transporter') {
-      const transporter = check.user;
+      const transporter = check.user
       const tokens = generateTokens({
         id: transporter._id,
         mobile: transporter.mobile,
-        userType: 'transporter',
-      });
+        userType: 'transporter'
+      })
 
       return res.status(200).json({
         success: true,
@@ -242,28 +293,29 @@ const verifyOTP = async (req, res, next) => {
             userType: 'transporter',
             status: transporter.status,
             hasAccess: transporter.hasAccess,
-            hasPinSet: transporter.hasPinSet(),
-          },
-        },
-      });
+            hasPinSet: transporter.hasPinSet()
+          }
+        }
+      })
     } else if (normalizedUserType === 'driver') {
-      const driver = check.user;
+      const driver = check.user
 
       if (driver.status === 'pending') {
-        driver.status = 'active';
-        driver.appInstalled = true;
-        driver.lastSeen = new Date();
-        await driver.save();
+        driver.status = 'active'
+        driver.appInstalled = true
+        driver.lastSeen = new Date()
+        await driver.save()
+        await deleteCache(`transporter:dashboard:${transporterId}`)
       } else {
-        driver.lastSeen = new Date();
-        await driver.save({ validateBeforeSave: false });
+        driver.lastSeen = new Date()
+        await driver.save({ validateBeforeSave: false })
       }
 
       const tokens = generateTokens({
         id: driver._id,
         mobile: driver.mobile,
-        userType: 'driver',
-      });
+        userType: 'driver'
+      })
 
       return res.status(200).json({
         success: true,
@@ -279,17 +331,17 @@ const verifyOTP = async (req, res, next) => {
             status: driver.status,
             hasAccess: driver.status === 'active',
             language: driver.language,
-            transporterId: driver.transporterId,
-          },
-        },
-      });
+            transporterId: driver.transporterId
+          }
+        }
+      })
     } else if (normalizedUserType === 'pump_owner') {
-      const pumpOwner = check.user;
+      const pumpOwner = check.user
       const tokens = generateTokens({
         id: pumpOwner._id,
         mobile: pumpOwner.mobile,
-        userType: 'pump_owner',
-      });
+        userType: 'pump_owner'
+      })
 
       return res.status(200).json({
         success: true,
@@ -306,17 +358,17 @@ const verifyOTP = async (req, res, next) => {
             userType: 'pump_owner',
             status: pumpOwner.status,
             walletBalance: pumpOwner.walletBalance,
-            commissionRate: pumpOwner.commissionRate,
-          },
-        },
-      });
+            commissionRate: pumpOwner.commissionRate
+          }
+        }
+      })
     } else if (normalizedUserType === 'pump_staff') {
-      const pumpStaff = check.user;
+      const pumpStaff = check.user
       const tokens = generateTokens({
         id: pumpStaff._id,
         mobile: pumpStaff.mobile,
-        userType: 'pump_staff',
-      });
+        userType: 'pump_staff'
+      })
 
       return res.status(200).json({
         success: true,
@@ -331,27 +383,27 @@ const verifyOTP = async (req, res, next) => {
             userType: 'pump_staff',
             status: pumpStaff.status,
             pumpOwnerId: pumpStaff.pumpOwnerId?._id || pumpStaff.pumpOwnerId,
-            pumpName: pumpStaff.pumpOwnerId?.pumpName,
-          },
-        },
-      });
+            pumpName: pumpStaff.pumpOwnerId?.pumpName
+          }
+        }
+      })
     } else if (normalizedUserType === 'customer') {
-      let customer = check.user;
-      let isRegistered = true;
+      let customer = check.user
+      let isRegistered = true
 
       if (!customer) {
         customer = await Customer.create({
           mobile: cleanedMobile,
-          isRegistered: false,
-        });
-        isRegistered = false;
+          isRegistered: false
+        })
+        isRegistered = false
       }
 
       const tokens = generateTokens({
         id: customer._id,
         mobile: customer.mobile,
-        userType: 'customer',
-      });
+        userType: 'customer'
+      })
 
       return res.status(200).json({
         success: true,
@@ -366,15 +418,15 @@ const verifyOTP = async (req, res, next) => {
             email: customer.email,
             userType: 'customer',
             status: customer.status,
-            isRegistered: customer.isRegistered,
-          },
-        },
-      });
+            isRegistered: customer.isRegistered
+          }
+        }
+      })
     }
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Resend OTP endpoint via MSG91
@@ -382,66 +434,70 @@ const verifyOTP = async (req, res, next) => {
  */
 const resendOTP = async (req, res, next) => {
   try {
-    const { mobile, userType, retryType } = req.body;
+    const { mobile, userType, retryType } = req.body
 
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
     if (!userType) {
       return res.status(400).json({
         success: false,
-        message: 'User type is required',
-      });
+        message: 'User type is required'
+      })
     }
 
     if (!validateUserType(userType)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"',
-      });
+        message:
+          'Invalid user type. Must be "transporter", "driver", "pump_owner", "pump_staff", or "customer"'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
-    const normalizedUserType = userType.toLowerCase();
+    const normalizedUserType = userType.toLowerCase()
 
     // Check account eligibility in DB
-    const check = await checkUserEligibility(normalizedUserType, cleanedMobile);
+    const check = await checkUserEligibility(normalizedUserType, cleanedMobile)
     if (!check.eligible) {
       return res.status(check.statusCode).json({
         success: false,
-        message: check.message,
-      });
+        message: check.message
+      })
     }
 
     // Call MSG91 to resend OTP
-    const resendResult = await msg91Service.resendOtp(cleanedMobile, retryType || 'text');
+    const resendResult = await msg91Service.resendOtp(
+      cleanedMobile,
+      retryType || 'text'
+    )
 
     if (!resendResult.success) {
       return res.status(500).json({
         success: false,
-        message: resendResult.message || 'Failed to resend OTP',
-      });
+        message: resendResult.message || 'Failed to resend OTP'
+      })
     }
 
     return res.status(200).json({
       success: true,
-      message: resendResult.message || 'OTP resent successfully',
-    });
+      message: resendResult.message || 'OTP resent successfully'
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Customer mobile auth endpoint
@@ -449,69 +505,69 @@ const resendOTP = async (req, res, next) => {
  */
 const customerMobileAuth = async (req, res, next) => {
   try {
-    const { mobile, name, email } = req.body;
+    const { mobile, name, email } = req.body
 
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
-    const normalizedEmail = email ? normalizeEmail(email) : '';
+    const normalizedEmail = email ? normalizeEmail(email) : ''
     if (normalizedEmail && !validateEmail(normalizedEmail)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid email format',
-      });
+        message: 'Invalid email format'
+      })
     }
 
-    let customer = await Customer.findOne({ mobile: cleanedMobile });
-    let isRegistered = true;
+    let customer = await Customer.findOne({ mobile: cleanedMobile })
+    let isRegistered = true
 
     if (!customer) {
       customer = await Customer.create({
         mobile: cleanedMobile,
         name: name?.trim() || '',
         email: normalizedEmail || null,
-        isRegistered: !!name,
-      });
-      isRegistered = false;
+        isRegistered: !!name
+      })
+      isRegistered = false
     } else {
       if (customer.status === 'blocked') {
         return res.status(403).json({
           success: false,
-          message: 'Your account has been blocked. Please contact support.',
-        });
+          message: 'Your account has been blocked. Please contact support.'
+        })
       }
 
       if (name && !customer.name) {
-        customer.name = name.trim();
+        customer.name = name.trim()
       }
       if (email && !customer.email) {
-        customer.email = normalizedEmail || null;
+        customer.email = normalizedEmail || null
       }
       if (name && !customer.isRegistered) {
-        customer.isRegistered = true;
+        customer.isRegistered = true
       }
       if (customer.isModified()) {
-        await customer.save();
+        await customer.save()
       }
     }
 
     const tokens = generateTokens({
       id: customer._id,
       mobile: customer.mobile,
-      userType: 'customer',
-    });
+      userType: 'customer'
+    })
 
     return res.status(isRegistered ? 200 : 201).json({
       success: true,
@@ -527,20 +583,20 @@ const customerMobileAuth = async (req, res, next) => {
           userType: 'customer',
           status: customer.status,
           isRegistered: customer.isRegistered,
-          existed: isRegistered,
-        },
-      },
-    });
+          existed: isRegistered
+        }
+      }
+    })
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: 'Customer with this mobile number already exists',
-      });
+        message: 'Customer with this mobile number already exists'
+      })
     }
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Register transporter endpoint
@@ -548,62 +604,65 @@ const customerMobileAuth = async (req, res, next) => {
  */
 const register = async (req, res, next) => {
   try {
-    const { mobile, name, email, company, operatingCountry } = req.body;
+    const { mobile, name, email, company, operatingCountry } = req.body
 
     // Validation
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
     if (!name) {
       return res.status(400).json({
         success: false,
-        message: 'Name is required',
-      });
+        message: 'Name is required'
+      })
     }
 
     if (!company) {
       return res.status(400).json({
         success: false,
-        message: 'Company name is required',
-      });
+        message: 'Company name is required'
+      })
     }
 
-    const normalizedOperatingCountry = normalizeOperatingCountry(operatingCountry);
+    const normalizedOperatingCountry =
+      normalizeOperatingCountry(operatingCountry)
     if (!normalizedOperatingCountry) {
       return res.status(400).json({
         success: false,
-        message: 'Valid operating country is required',
-      });
+        message: 'Valid operating country is required'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
     // Check if transporter already exists
-    const existingTransporter = await Transporter.findOne({ mobile: cleanedMobile });
+    const existingTransporter = await Transporter.findOne({
+      mobile: cleanedMobile
+    })
     if (existingTransporter) {
       return res.status(409).json({
         success: false,
-        message: 'Transporter with this mobile number already exists',
-      });
+        message: 'Transporter with this mobile number already exists'
+      })
     }
 
     // Validate email format if provided
-    const normalizedEmail = email ? normalizeEmail(email) : '';
+    const normalizedEmail = email ? normalizeEmail(email) : ''
     if (normalizedEmail && !validateEmail(normalizedEmail)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid email format',
-      });
+        message: 'Invalid email format'
+      })
     }
 
     // Create new transporter
@@ -615,15 +674,15 @@ const register = async (req, res, next) => {
       operatingCountry: normalizedOperatingCountry,
       status: 'pending',
       hasAccess: false,
-      walletBalance: 0,
-    });
+      walletBalance: 0
+    })
 
     // Generate tokens
     const tokens = generateTokens({
       id: transporter._id,
       mobile: transporter.mobile,
-      userType: 'transporter',
-    });
+      userType: 'transporter'
+    })
 
     // Return success response
     return res.status(201).json({
@@ -642,21 +701,21 @@ const register = async (req, res, next) => {
           userType: 'transporter',
           status: transporter.status,
           hasAccess: transporter.hasAccess,
-          hasPinSet: transporter.hasPinSet(),
-        },
-      },
-    });
+          hasPinSet: transporter.hasPinSet()
+        }
+      }
+    })
   } catch (error) {
     // Handle duplicate key error
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: 'Transporter with this mobile number already exists',
-      });
+        message: 'Transporter with this mobile number already exists'
+      })
     }
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * PIN Login endpoint (Transporter only)
@@ -664,79 +723,81 @@ const register = async (req, res, next) => {
  */
 const pinLogin = async (req, res, next) => {
   try {
-    const { mobile, pin } = req.body;
+    const { mobile, pin } = req.body
 
     // Validation
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
     if (!pin) {
       return res.status(400).json({
         success: false,
-        message: 'PIN is required',
-      });
+        message: 'PIN is required'
+      })
     }
 
     if (!validatePin(pin)) {
       return res.status(400).json({
         success: false,
-        message: 'PIN must be 4 digits',
-      });
+        message: 'PIN must be 4 digits'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
     // Find transporter with PIN
-    const transporter = await Transporter.findOne({ mobile: cleanedMobile }).select('+pin');
+    const transporter = await Transporter.findOne({
+      mobile: cleanedMobile
+    }).select('+pin')
 
     if (!transporter) {
       return res.status(404).json({
         success: false,
-        message: 'Transporter not found',
-      });
+        message: 'Transporter not found'
+      })
     }
 
     // Check if PIN is set
     if (!transporter.hasPinSet()) {
       return res.status(400).json({
         success: false,
-        message: 'PIN not set. Please set your PIN first.',
-      });
+        message: 'PIN not set. Please set your PIN first.'
+      })
     }
 
     // Check if transporter is blocked
     if (transporter.status === 'blocked') {
       return res.status(403).json({
         success: false,
-        message: 'Your account has been blocked. Please contact support.',
-      });
+        message: 'Your account has been blocked. Please contact support.'
+      })
     }
 
     // Verify PIN
-    const isPinValid = await transporter.comparePin(pin);
+    const isPinValid = await transporter.comparePin(pin)
     if (!isPinValid) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid PIN',
-      });
+        message: 'Invalid PIN'
+      })
     }
 
     // Generate tokens
     const tokens = generateTokens({
       id: transporter._id,
       mobile: transporter.mobile,
-      userType: 'transporter',
-    });
+      userType: 'transporter'
+    })
 
     // Return success response
     return res.status(200).json({
@@ -755,14 +816,14 @@ const pinLogin = async (req, res, next) => {
           userType: 'transporter',
           status: transporter.status,
           hasAccess: transporter.hasAccess,
-          hasPinSet: true,
-        },
-      },
-    });
+          hasPinSet: true
+        }
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Company User Login endpoint
@@ -770,94 +831,98 @@ const pinLogin = async (req, res, next) => {
  */
 const companyUserLogin = async (req, res, next) => {
   try {
-    const { mobile, pin } = req.body;
+    const { mobile, pin } = req.body
 
     // Validation
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
     if (!pin) {
       return res.status(400).json({
         success: false,
-        message: 'PIN is required',
-      });
+        message: 'PIN is required'
+      })
     }
 
     if (!validatePin(pin)) {
       return res.status(400).json({
         success: false,
-        message: 'PIN must be 4 digits',
-      });
+        message: 'PIN must be 4 digits'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
     // Find company user with PIN
-    const companyUser = await CompanyUser.findOne({ mobile: cleanedMobile }).select('+pin');
+    const companyUser = await CompanyUser.findOne({
+      mobile: cleanedMobile
+    }).select('+pin')
 
     if (!companyUser) {
       return res.status(404).json({
         success: false,
-        message: 'Company user not found',
-      });
+        message: 'Company user not found'
+      })
     }
 
     // Check if PIN is set
     if (!companyUser.hasPinSet()) {
       return res.status(400).json({
         success: false,
-        message: 'PIN not set. Please contact your administrator to set your PIN.',
-      });
+        message:
+          'PIN not set. Please contact your administrator to set your PIN.'
+      })
     }
 
     // Check if user has access
     if (!companyUser.hasAccess) {
       return res.status(403).json({
         success: false,
-        message: 'Access denied. Your account is not activated. Please contact your administrator.',
-      });
+        message:
+          'Access denied. Your account is not activated. Please contact your administrator.'
+      })
     }
 
     // Check if user is blocked or inactive
     if (companyUser.status === 'blocked') {
       return res.status(403).json({
         success: false,
-        message: 'Your account has been blocked. Please contact support.',
-      });
+        message: 'Your account has been blocked. Please contact support.'
+      })
     }
 
     if (companyUser.status === 'inactive') {
       return res.status(403).json({
         success: false,
-        message: 'Your account is inactive. Please contact your administrator.',
-      });
+        message: 'Your account is inactive. Please contact your administrator.'
+      })
     }
 
     // Verify PIN
-    const isPinValid = await companyUser.comparePin(pin);
+    const isPinValid = await companyUser.comparePin(pin)
     if (!isPinValid) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid PIN',
-      });
+        message: 'Invalid PIN'
+      })
     }
 
     // Generate tokens
     const tokens = generateTokens({
       id: companyUser._id,
       mobile: companyUser.mobile,
-      userType: 'company-user',
-    });
+      userType: 'company-user'
+    })
 
     // Return success response
     return res.status(200).json({
@@ -876,14 +941,14 @@ const companyUserLogin = async (req, res, next) => {
           hasAccess: companyUser.hasAccess,
           hasPinSet: true,
           transporterId: companyUser.transporterId,
-          permissions: companyUser.permissions || [],
-        },
-      },
-    });
+          permissions: companyUser.permissions || []
+        }
+      }
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Register pump owner endpoint
@@ -891,69 +956,71 @@ const companyUserLogin = async (req, res, next) => {
  */
 const registerPumpOwner = async (req, res, next) => {
   try {
-    const { mobile, name, email, pumpName, location } = req.body;
+    const { mobile, name, email, pumpName, location } = req.body
 
     // Validation
     if (!mobile) {
       return res.status(400).json({
         success: false,
-        message: 'Mobile number is required',
-      });
+        message: 'Mobile number is required'
+      })
     }
 
     if (!name) {
       return res.status(400).json({
         success: false,
-        message: 'Name is required',
-      });
+        message: 'Name is required'
+      })
     }
 
     if (!pumpName) {
       return res.status(400).json({
         success: false,
-        message: 'Pump name is required',
-      });
+        message: 'Pump name is required'
+      })
     }
 
-    const cleanedMobile = cleanMobile(mobile);
+    const cleanedMobile = cleanMobile(mobile)
     if (!validateMobile(cleanedMobile)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid mobile number format. Must be 10 digits',
-      });
+        message: 'Invalid mobile number format. Must be 10 digits'
+      })
     }
 
     // Check if pump owner already exists
-    const existingPumpOwner = await PumpOwner.findOne({ mobile: cleanedMobile });
+    const existingPumpOwner = await PumpOwner.findOne({ mobile: cleanedMobile })
     if (existingPumpOwner) {
       return res.status(409).json({
         success: false,
-        message: 'Pump owner with this mobile number already exists',
-      });
+        message: 'Pump owner with this mobile number already exists'
+      })
     }
 
     // Validate email format if provided
-    const normalizedEmail = email ? normalizeEmail(email) : '';
+    const normalizedEmail = email ? normalizeEmail(email) : ''
     if (normalizedEmail && !validateEmail(normalizedEmail)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid email format',
-      });
+        message: 'Invalid email format'
+      })
     }
 
     // Prepare location data if provided
-    let locationData = undefined;
+    let locationData = undefined
     if (location) {
       locationData = {
         address: location.address ? location.address.trim() : undefined,
-        coordinates: location.coordinates ? {
-          latitude: location.coordinates.latitude,
-          longitude: location.coordinates.longitude,
-        } : undefined,
+        coordinates: location.coordinates
+          ? {
+              latitude: location.coordinates.latitude,
+              longitude: location.coordinates.longitude
+            }
+          : undefined,
         city: location.city ? location.city.trim() : undefined,
         state: location.state ? location.state.trim() : undefined,
-        pincode: location.pincode ? location.pincode.trim() : undefined,
-      };
+        pincode: location.pincode ? location.pincode.trim() : undefined
+      }
     }
 
     // Create new pump owner with pending status (requires admin approval)
@@ -965,15 +1032,15 @@ const registerPumpOwner = async (req, res, next) => {
       location: locationData,
       status: 'pending',
       walletBalance: 0,
-      commissionRate: 0,
-    });
+      commissionRate: 0
+    })
 
     // Generate tokens
     const tokens = generateTokens({
       id: pumpOwner._id,
       mobile: pumpOwner.mobile,
-      userType: 'pump_owner',
-    });
+      userType: 'pump_owner'
+    })
 
     // Return success response
     return res.status(201).json({
@@ -991,21 +1058,21 @@ const registerPumpOwner = async (req, res, next) => {
           userType: 'pump_owner',
           status: pumpOwner.status,
           walletBalance: pumpOwner.walletBalance,
-          commissionRate: pumpOwner.commissionRate,
-        },
-      },
-    });
+          commissionRate: pumpOwner.commissionRate
+        }
+      }
+    })
   } catch (error) {
     // Handle duplicate key error
     if (error.code === 11000) {
       return res.status(409).json({
         success: false,
-        message: 'Pump owner with this mobile number already exists',
-      });
+        message: 'Pump owner with this mobile number already exists'
+      })
     }
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Refresh token endpoint
@@ -1013,45 +1080,48 @@ const registerPumpOwner = async (req, res, next) => {
  */
 const refreshToken = async (req, res, next) => {
   try {
-    const { refreshToken } = req.body;
+    const { refreshToken } = req.body
 
     if (!refreshToken) {
       return res.status(400).json({
         success: false,
-        message: 'Refresh token is required',
-      });
+        message: 'Refresh token is required'
+      })
     }
 
-    const { verifyToken, generateAccessToken } = require('../services/jwt.service');
+    const {
+      verifyToken,
+      generateAccessToken
+    } = require('../services/jwt.service')
 
     try {
       // Verify refresh token
-      const decoded = verifyToken(refreshToken);
+      const decoded = verifyToken(refreshToken)
 
       // Generate new access token
       const newAccessToken = generateAccessToken({
         userId: decoded.userId,
         mobile: decoded.mobile,
-        userType: decoded.userType,
-      });
+        userType: decoded.userType
+      })
 
       return res.status(200).json({
         success: true,
         message: 'Token refreshed successfully',
         data: {
-          accessToken: newAccessToken,
-        },
-      });
+          accessToken: newAccessToken
+        }
+      })
     } catch (tokenError) {
       return res.status(401).json({
         success: false,
-        message: tokenError.message || 'Invalid or expired refresh token',
-      });
+        message: tokenError.message || 'Invalid or expired refresh token'
+      })
     }
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 /**
  * Logout endpoint
@@ -1062,37 +1132,38 @@ const logout = async (req, res, next) => {
     if (!req.user?.id) {
       return res.status(401).json({
         success: false,
-        message: 'Authentication required',
-      });
+        message: 'Authentication required'
+      })
     }
 
     if (req.user.userType === 'driver') {
-      const driver = await Driver.findById(req.user.id);
+      const driver = await Driver.findById(req.user.id)
       if (driver) {
-        driver.lastSeen = new Date();
-        await driver.save({ validateBeforeSave: false });
+        driver.lastSeen = new Date()
+        await driver.save({ validateBeforeSave: false })
       }
 
       const activeTrip = await Trip.findOne({
         driverId: req.user.id,
-        status: 'ACTIVE',
-      });
+        status: 'ACTIVE'
+      })
 
       if (activeTrip) {
-        const { trip, currentTracking, previousTracking } = await persistTrackingUpdate({
-          trip: activeTrip,
-          patch: {
-            status: DRIVER_TRACKING_STATUS.LOGGED_OUT,
-            reason: 'driver_requested_logout',
-            source: 'auth.logout',
-            lastLogoutAt: new Date(),
-            updatedAt: new Date(),
-          },
-          actor: {
-            userId: req.user.id,
-            userType: req.user.userType,
-          },
-        });
+        const { trip, currentTracking, previousTracking } =
+          await persistTrackingUpdate({
+            trip: activeTrip,
+            patch: {
+              status: DRIVER_TRACKING_STATUS.LOGGED_OUT,
+              reason: 'driver_requested_logout',
+              source: 'auth.logout',
+              lastLogoutAt: new Date(),
+              updatedAt: new Date()
+            },
+            actor: {
+              userId: req.user.id,
+              userType: req.user.userType
+            }
+          })
 
         emitDriverTrackingChanged(trip, {
           previousStatus: previousTracking.status || null,
@@ -1106,19 +1177,19 @@ const logout = async (req, res, next) => {
           networkConnected: currentTracking.networkConnected ?? null,
           appState: currentTracking.appState || null,
           batteryLevel: currentTracking.batteryLevel ?? null,
-          updatedAt: currentTracking.updatedAt,
-        });
+          updatedAt: currentTracking.updatedAt
+        })
       }
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Logged out successfully',
-    });
+      message: 'Logged out successfully'
+    })
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 module.exports = {
   sendOTP,
@@ -1130,5 +1201,5 @@ module.exports = {
   pinLogin,
   companyUserLogin,
   refreshToken,
-  logout,
-};
+  logout
+}

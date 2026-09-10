@@ -188,4 +188,5 @@ module.exports = {
   msg91DefaultCountryCode: process.env.MSG91_DEFAULT_COUNTRY_CODE || '91',
   msg91EnableTestOtp: String(process.env.MSG91_ENABLE_TEST_OTP || '').trim().toLowerCase() === 'true',
   msg91TestOtp: process.env.MSG91_TEST_OTP || '1234',
+  redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
 };
