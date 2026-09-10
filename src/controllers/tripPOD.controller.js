@@ -156,6 +156,7 @@ const uploadPOD = async (req, res, next) => {
     }
 
     await trip.save()
+    await releaseTripResources(trip)
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType')
@@ -300,7 +301,6 @@ const approvePOD = async (req, res, next) => {
     await trip.save()
 
     await completeMarketplaceBookingAfterTripClosed(trip)
-    await releaseTripResources(trip)
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType')
