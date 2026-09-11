@@ -65,8 +65,30 @@ const deleteCache = async (key) => {
   }
 };
 
+/**
+ * Delete cache keys matching a pattern.
+ */
+const deleteCachePattern = async (pattern) => {
+  try {
+    if (!redisClient.isReady) {
+      return false;
+    }
+
+    const keys = await redisClient.keys(pattern);
+    if (keys && keys.length > 0) {
+      await redisClient.del(keys);
+    }
+
+    return true;
+  } catch (error) {
+    console.error(`Redis DELETE pattern failed for pattern ${pattern}:`, error.message);
+    return false;
+  }
+};
+
 module.exports = {
   getCache,
   setCache,
   deleteCache,
+  deleteCachePattern,
 };

@@ -16,7 +16,8 @@ const {
 } = require('../services/vehicleTypeCatalog.service')
 const { verifyRcFull } = require('../services/surepass.service')
 const { verifyRechargeKitRc } = require('../services/rechargeKit.service')
-const { deleteCache } = require('../utils/cache')
+const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
+const logger = require('../utils/logger')
 
 const formatVehicleResponse = vehicle => {
   if (!vehicle) return null
@@ -202,6 +203,18 @@ const getVehicles = async (req, res, next) => {
       availableForTrip
     } = req.query
 
+    const ownerId = isAdmin ? (queryTransporterId || 'admin') : transporterId
+    const queryStr = `status=${status || 'all'}&ownerType=${ownerType || 'all'}&driverId=${driverId || 'all'}&queryTransporterId=${queryTransporterId || 'all'}&availableForTrip=${availableForTrip || 'all'}`
+    const cacheKey = `vehicles:${ownerId}:${queryStr}`
+
+    const cachedVehicles = await getCache(cacheKey)
+    if (cachedVehicles) {
+      logger.info(`VEHICLES CACHE HIT: ${cacheKey}`)
+      return res.status(200).json(cachedVehicles)
+    }
+
+    logger.info(`VEHICLES CACHE MISS: ${cacheKey}`)
+
     // Build query - admins can see all, others see only their transporter's vehicles
     const query = {}
     if (isAdmin) {
@@ -255,14 +268,19 @@ const getVehicles = async (req, res, next) => {
         .map(({ vehicle }) => vehicle)
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Vehicles retrieved successfully',
       data: {
         vehicles: vehicles.map(formatVehicleResponse),
         count: vehicles.length
       }
-    })
+    }
+
+    // Cache response for 10 minutes
+    await setCache(cacheKey, response, 10 * 60)
+
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -399,7 +417,14 @@ const createVehicle = async (req, res, next) => {
       )
     })
 
-    await deleteCache(`transporter:dashboard:${transporterId}`)
+    const vehicleCachePattern = `vehicles:${transporterId}*`
+    await deleteCachePattern(vehicleCachePattern)
+    await deleteCachePattern('vehicles:admin*')
+    logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
+
+    const dashCacheKey = `transporter:dashboard:${transporterId}`
+    await deleteCache(dashCacheKey)
+    logger.info(`DASHBOARD CACHE REMOVE: ${dashCacheKey}`)
 
     // Populate driver info
     await vehicle.populate([
@@ -685,7 +710,14 @@ const updateVehicle = async (req, res, next) => {
       runValidators: true
     }).populate('driverId', 'name mobile status')
 
-    await deleteCache(`transporter:dashboard:${transporterId}`)
+    const vehicleCachePattern = `vehicles:${transporterId}*`
+    await deleteCachePattern(vehicleCachePattern)
+    await deleteCachePattern('vehicles:admin*')
+    logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
+
+    const dashCacheKey = `transporter:dashboard:${transporterId}`
+    await deleteCache(dashCacheKey)
+    logger.info(`DASHBOARD CACHE REMOVE: ${dashCacheKey}`)
 
     return res.status(200).json({
       success: true,
@@ -778,7 +810,15 @@ const deleteVehicle = async (req, res, next) => {
 
     // Delete vehicle
     await Vehicle.findByIdAndDelete(id)
-    await deleteCache(`transporter:dashboard:${transporterId}`)
+
+    const vehicleCachePattern = `vehicles:${transporterId}*`
+    await deleteCachePattern(vehicleCachePattern)
+    await deleteCachePattern('vehicles:admin*')
+    logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
+
+    const dashCacheKey = `transporter:dashboard:${transporterId}`
+    await deleteCache(dashCacheKey)
+    logger.info(`DASHBOARD CACHE REMOVE: ${dashCacheKey}`)
 
     return res.status(200).json({
       success: true,

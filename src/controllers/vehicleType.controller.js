@@ -5,6 +5,8 @@ const {
   listAllTypes,
   getUsageCounts,
 } = require('../services/vehicleTypeCatalog.service');
+const { getCache, setCache, deleteCachePattern } = require('../utils/cache');
+const logger = require('../utils/logger');
 
 const canReadVehicleTypes = (req) => {
   if (req.user?.userType === 'admin') return true;
@@ -26,8 +28,23 @@ const listPublicVehicleTypes = async (req, res, next) => {
     }
 
     const q = req.query.q?.toString()?.trim() || '';
+    const cacheKey = `vehicle-types:active:${q || 'all'}`;
+
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      logger.info(`VEHICLE_TYPES CACHE HIT: ${cacheKey}`);
+      return res.status(200).json(cached);
+    }
+
+    logger.info(`VEHICLE_TYPES CACHE MISS: ${cacheKey}`);
+
     const results = await listActiveTypes({ q: q || undefined });
-    return res.status(200).json({ success: true, data: { results } });
+    const response = { success: true, data: { results } };
+
+    // Cache for 1 hour (3600 seconds)
+    await setCache(cacheKey, response, 60 * 60);
+
+    return res.status(200).json(response);
   } catch (err) {
     next(err);
   }
@@ -72,6 +89,9 @@ const createVehicleType = async (req, res, next) => {
       sortOrder: Number.isFinite(Number(sortOrder)) ? Number(sortOrder) : 0,
     });
 
+    await deleteCachePattern('vehicle-types:active*');
+    logger.info('VEHICLE_TYPES CACHE REMOVE: vehicle-types:active:*');
+
     return res.status(201).json({
       success: true,
       message: 'Vehicle type created',
@@ -114,6 +134,9 @@ const updateVehicleType = async (req, res, next) => {
     }
 
     await vt.save();
+    await deleteCachePattern('vehicle-types:active*');
+    logger.info('VEHICLE_TYPES CACHE REMOVE: vehicle-types:active:*');
+
     const usage = await getUsageCounts(vt.name);
     return res.status(200).json({
       success: true,
@@ -141,6 +164,9 @@ const deleteVehicleType = async (req, res, next) => {
     }
 
     await VehicleType.deleteOne({ _id: vt._id });
+    await deleteCachePattern('vehicle-types:active*');
+    logger.info('VEHICLE_TYPES CACHE REMOVE: vehicle-types:active:*');
+
     return res.status(200).json({ success: true, message: 'Vehicle type deleted' });
   } catch (err) {
     next(err);

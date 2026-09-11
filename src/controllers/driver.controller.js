@@ -7,7 +7,8 @@ const {
   hasPermission
 } = require('../middleware/permission.middleware')
 const { getDriverAvailabilityState } = require('../utils/vehicleValidation')
-const { deleteCache } = require('../utils/cache')
+const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
+const logger = require('../utils/logger')
 
 /**
  * Get driver profile
@@ -203,6 +204,16 @@ const getDriversByTransporter = async (req, res, next) => {
       })
     }
 
+    const cacheKey = `transporter:drivers:${transporterId}:${availableForTrip || 'all'}`
+    const cachedDrivers = await getCache(cacheKey)
+
+    if (cachedDrivers) {
+      logger.info(`DRIVERS CACHE HIT: ${cacheKey}`)
+      return res.status(200).json(cachedDrivers)
+    }
+
+    logger.info(`DRIVERS CACHE MISS: ${cacheKey}`)
+
     // Get all drivers for this transporter
     let drivers = await Driver.find({ transporterId: transporterId }).select(
       '-__v'
@@ -225,7 +236,7 @@ const getDriversByTransporter = async (req, res, next) => {
         .map(({ driver }) => driver)
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Drivers retrieved successfully',
       data: {
@@ -242,7 +253,12 @@ const getDriversByTransporter = async (req, res, next) => {
         })),
         count: drivers.length
       }
-    })
+    }
+
+    // Cache drivers list for 10 minutes
+    await setCache(cacheKey, response, 10 * 60)
+
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -329,7 +345,14 @@ const createDriver = async (req, res, next) => {
       transporterId,
       status: driverStatus
     })
-    await deleteCache(`transporter:dashboard:${transporterId}`)
+
+    const driversCachePattern = `transporter:drivers:${transporterId}*`
+    await deleteCachePattern(driversCachePattern)
+    logger.info(`DRIVERS CACHE REMOVE: ${driversCachePattern}`)
+
+    const dashCacheKey = `transporter:dashboard:${transporterId}`
+    await deleteCache(dashCacheKey)
+    logger.info(`DASHBOARD CACHE REMOVE: ${dashCacheKey}`)
 
     return res.status(201).json({
       success: true,
@@ -406,7 +429,14 @@ const updateDriver = async (req, res, next) => {
     }
 
     await driver.save()
-    await deleteCache(`transporter:dashboard:${transporterId}`)
+
+    const driversCachePattern = `transporter:drivers:${transporterId}*`
+    await deleteCachePattern(driversCachePattern)
+    logger.info(`DRIVERS CACHE REMOVE: ${driversCachePattern}`)
+
+    const dashCacheKey = `transporter:dashboard:${transporterId}`
+    await deleteCache(dashCacheKey)
+    logger.info(`DASHBOARD CACHE REMOVE: ${dashCacheKey}`)
 
     return res.status(200).json({
       success: true,
@@ -467,7 +497,14 @@ const deleteDriver = async (req, res, next) => {
 
     // Delete driver
     await Driver.deleteOne({ _id: id })
-    await deleteCache(`transporter:dashboard:${transporterId}`)
+
+    const driversCachePattern = `transporter:drivers:${transporterId}*`
+    await deleteCachePattern(driversCachePattern)
+    logger.info(`DRIVERS CACHE REMOVE: ${driversCachePattern}`)
+
+    const dashCacheKey = `transporter:dashboard:${transporterId}`
+    await deleteCache(dashCacheKey)
+    logger.info(`DASHBOARD CACHE REMOVE: ${dashCacheKey}`)
 
     return res.status(200).json({
       success: true,

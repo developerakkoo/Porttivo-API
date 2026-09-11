@@ -210,6 +210,9 @@ const notifyTransporterVehicleTypeDecision = async (request, status, vehicleType
   });
 };
 
+const { deleteCachePattern } = require('../utils/cache');
+const logger = require('../utils/logger');
+
 const approveVehicleTypeRequest = async (requestId, adminId) => {
   const request = await VehicleTypeRequest.findById(requestId);
   if (!request) {
@@ -256,6 +259,9 @@ const approveVehicleTypeRequest = async (requestId, adminId) => {
   request.approvedVehicleTypeId = vehicleType._id;
   request.rejectionReason = null;
   await request.save();
+
+  await deleteCachePattern('vehicle-types:active*');
+  logger.info('VEHICLE_TYPES CACHE REMOVE: vehicle-types:active:*');
 
   await notifyTransporterVehicleTypeDecision(request, 'approved', vehicleType._id);
 

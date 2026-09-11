@@ -128,7 +128,9 @@ const updateProfile = async (req, res, next) => {
     }
 
     // Invalidate profile cache
-    await deleteCache(`transporter:profile:${req.user.id}`)
+    const profileCacheKey = `transporter:profile:${req.user.id}`
+    await deleteCache(profileCacheKey)
+    logger.info(`PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
     return res.status(200).json({
       success: true,
@@ -193,7 +195,9 @@ const setPin = async (req, res, next) => {
     await transporter.save()
 
     // Invalidate profile cache
-    await deleteCache(`transporter:profile:${req.user.id}`)
+    const profileCacheKey = `transporter:profile:${req.user.id}`
+    await deleteCache(profileCacheKey)
+    logger.info(`PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
     return res.status(200).json({
       success: true,
@@ -222,10 +226,12 @@ const getDashboard = async (req, res, next) => {
     const cachedDashboard = await getCache(cacheKey)
 
     if (cachedDashboard) {
+      logger.info(`DASHBOARD CACHE HIT: ${cacheKey}`)
       return res.status(200).json(cachedDashboard)
     }
 
     // 2. Redis MISS -> calculate dashboard from MongoDB
+    logger.info(`DASHBOARD CACHE MISS: ${cacheKey}`)
 
     // Get today's date range
     const today = new Date()
