@@ -24,11 +24,18 @@ const getProfile = async (req, res, next) => {
 
     // 1. Check Redis cache first
     const cachedProfile = await getCache(cacheKey)
+
     if (cachedProfile) {
+      logger.info(`PROFILE CACHE HIT: ${cacheKey}`)
       return res.status(200).json(cachedProfile)
     }
 
+    // Cache MISS
+    logger.info(`PROFILE CACHE MISS: ${cacheKey}`)
+
     // 2. Fetch from MongoDB on cache miss
+    logger.info(`PROFILE DB QUERY: ${transporterId}`)
+
     const transporter = await Transporter.findById(transporterId).select('-pin')
 
     if (!transporter) {
@@ -205,26 +212,26 @@ const setPin = async (req, res, next) => {
  */
 const getDashboard = async (req, res, next) => {
   try {
-    const transporterId = req.user.id;
+    const transporterId = req.user.id
 
     // Redis cache key
-    const cacheKey = `transporter:dashboard:${transporterId}`;
+    const cacheKey = `transporter:dashboard:${transporterId}`
 
     // 1. Check Redis first
-    const cachedDashboard = await getCache(cacheKey);
+    const cachedDashboard = await getCache(cacheKey)
 
     if (cachedDashboard) {
-      return res.status(200).json(cachedDashboard);
+      return res.status(200).json(cachedDashboard)
     }
 
     // 2. Redis MISS -> calculate dashboard from MongoDB
 
     // Get today's date range
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
 
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrow = new Date(today)
+    tomorrow.setDate(tomorrow.getDate() + 1)
 
     // Parallel queries for dashboard stats
     const [
@@ -233,31 +240,28 @@ const getDashboard = async (req, res, next) => {
       queuedTripsCount,
       pendingPODCount,
       todaysTripsCount,
-      totalDrivers,
+      totalDrivers
     ] = await Promise.all([
       Vehicle.countDocuments({
         transporterId,
-        status: 'active',
+        status: 'active'
       }),
 
       Trip.countDocuments({
         transporterId,
         status: {
-          $in: [
-            TRIP_STATUS.ACTIVE,
-            TRIP_STATUS.PAUSED
-          ],
-        },
+          $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED]
+        }
       }),
 
       Trip.countDocuments({
         transporterId,
-        status: TRIP_STATUS.PLANNED,
+        status: TRIP_STATUS.PLANNED
       }),
 
       Trip.countDocuments({
         transporterId,
-        status: TRIP_STATUS.POD_PENDING,
+        status: TRIP_STATUS.POD_PENDING
       }),
 
       Trip.countDocuments({
@@ -267,15 +271,15 @@ const getDashboard = async (req, res, next) => {
         },
         createdAt: {
           $gte: today,
-          $lt: tomorrow,
-        },
+          $lt: tomorrow
+        }
       }),
 
       Driver.countDocuments({
         transporterId,
-        status: 'active',
-      }),
-    ]);
+        status: 'active'
+      })
+    ])
 
     // 3. Build exactly the same response as current API
     const response = {
@@ -288,25 +292,20 @@ const getDashboard = async (req, res, next) => {
           activeTripsCount,
           queuedTripsCount,
           pendingPODCount,
-          todaysTripsCount,
-        },
-      },
-    };
+          todaysTripsCount
+        }
+      }
+    }
 
     // 4. Cache dashboard for 2 minutes
-    await setCache(
-      cacheKey,
-      response,
-      2 * 60
-    );
+    await setCache(cacheKey, response, 2 * 60)
 
     // 5. Return response
-    return res.status(200).json(response);
-
+    return res.status(200).json(response)
   } catch (error) {
-    next(error);
+    next(error)
   }
-};
+}
 
 module.exports = {
   getProfile,
