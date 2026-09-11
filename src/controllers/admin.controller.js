@@ -30,6 +30,7 @@ const {
   emitTripClosedWithoutPOD,
 } = require('../services/socket.service');
 const { validateEmail, normalizeEmail } = require('../utils/validation');
+const { deleteCache } = require('../utils/cache');
 
 const ADMIN_LIST_SORT_FIELDS = ['createdAt', 'name', 'mobile'];
 const ADMIN_TRIP_SORT_FIELDS = ['createdAt', 'updatedAt', 'scheduledAt', 'status', 'tripType', 'tripId'];
@@ -1570,6 +1571,8 @@ const updateTransporterStatus = async (req, res, next) => {
         message: 'Transporter not found',
       });
     }
+
+    await deleteCache(`transporter:profile:${req.params.id}`);
 
     return res.status(200).json({
       success: true,

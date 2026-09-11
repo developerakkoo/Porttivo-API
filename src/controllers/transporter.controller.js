@@ -19,7 +19,17 @@ const { getCache, setCache, deleteCache } = require('../utils/cache')
  */
 const getProfile = async (req, res, next) => {
   try {
-    const transporter = await Transporter.findById(req.user.id).select('-pin')
+    const transporterId = req.user.id
+    const cacheKey = `transporter:profile:${transporterId}`
+
+    // 1. Check Redis cache first
+    const cachedProfile = await getCache(cacheKey)
+    if (cachedProfile) {
+      return res.status(200).json(cachedProfile)
+    }
+
+    // 2. Fetch from MongoDB on cache miss
+    const transporter = await Transporter.findById(transporterId).select('-pin')
 
     if (!transporter) {
       return res.status(404).json({
@@ -28,7 +38,7 @@ const getProfile = async (req, res, next) => {
       })
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Profile retrieved successfully',
       data: {
@@ -47,7 +57,12 @@ const getProfile = async (req, res, next) => {
           updatedAt: transporter.updatedAt
         }
       }
-    })
+    }
+
+    // 3. Cache response for 10 minutes (600 seconds)
+    await setCache(cacheKey, response, 10 * 60)
+
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -103,6 +118,9 @@ const updateProfile = async (req, res, next) => {
         message: 'Transporter not found'
       })
     }
+
+    // Invalidate profile cache
+    await deleteCache(`transporter:profile:${req.user.id}`)
 
     return res.status(200).json({
       success: true,
@@ -165,6 +183,9 @@ const setPin = async (req, res, next) => {
     // Set PIN (will be hashed by pre-save hook)
     transporter.pin = pin
     await transporter.save()
+
+    // Invalidate profile cache
+    await deleteCache(`transporter:profile:${req.user.id}`)
 
     return res.status(200).json({
       success: true,
