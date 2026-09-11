@@ -399,6 +399,8 @@ const createVehicle = async (req, res, next) => {
       )
     })
 
+    await deleteCache(`transporter:dashboard:${transporterId}`)
+
     // Populate driver info
     await vehicle.populate([
       {
@@ -683,6 +685,8 @@ const updateVehicle = async (req, res, next) => {
       runValidators: true
     }).populate('driverId', 'name mobile status')
 
+    await deleteCache(`transporter:dashboard:${transporterId}`)
+
     return res.status(200).json({
       success: true,
       message: 'Vehicle updated successfully',
@@ -774,6 +778,7 @@ const deleteVehicle = async (req, res, next) => {
 
     // Delete vehicle
     await Vehicle.findByIdAndDelete(id)
+    await deleteCache(`transporter:dashboard:${transporterId}`)
 
     return res.status(200).json({
       success: true,
@@ -1087,6 +1092,8 @@ const bulkImportVehicles = async (req, res, next) => {
         })
       }
     }
+
+    await deleteCache(`transporter:dashboard:${transporterId}`)
 
     return res.status(200).json({
       success: true,
