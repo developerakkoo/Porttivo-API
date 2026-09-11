@@ -12,6 +12,7 @@ const {
 } = require('../utils/validation')
 const { TRIP_STATUS } = require('../utils/tripState')
 const { getCache, setCache, deleteCache } = require('../utils/cache')
+const { info } = require('../utils/logger')
 
 /**
  * Get transporter profile
