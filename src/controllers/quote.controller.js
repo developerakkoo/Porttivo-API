@@ -4,6 +4,37 @@ const Quote = require('../models/Quote')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const { createTripFromQuote } = require('../services/requirementToTrip.service')
 const { notifyUser } = require('../services/pushNotification.service')
+const { getCache, setCache, deleteCachePattern } = require('../utils/cache')
+
+const INCOMING_REQUIREMENTS_CACHE_PREFIX = 'requirements:incoming'
+const REQUIREMENT_CACHE_PREFIX = 'requirement'
+const REQUIREMENT_QUOTES_CACHE_PREFIX = 'requirement'
+const REQUIREMENT_QUOTES_CACHE_TTL = 60
+
+async function invalidateIncomingRequirementsCache(transporterId) {
+  const pattern = transporterId
+    ? `${INCOMING_REQUIREMENTS_CACHE_PREFIX}:${transporterId}:*`
+    : `${INCOMING_REQUIREMENTS_CACHE_PREFIX}:*`
+
+  await deleteCachePattern(pattern)
+  console.log('REQUIREMENTS INCOMING CACHE INVALIDATE', { pattern })
+}
+
+async function invalidateRequirementCache(requirementId) {
+  const pattern = `${REQUIREMENT_CACHE_PREFIX}:${requirementId}:*`
+  await deleteCachePattern(pattern)
+  console.log('REQUIREMENT CACHE INVALIDATE', { pattern })
+}
+
+function getRequirementQuotesCacheKey(id, viewerId) {
+  return `${REQUIREMENT_QUOTES_CACHE_PREFIX}:${id}:quotes:${viewerId}`
+}
+
+async function invalidateRequirementQuotesCache(requirementId) {
+  const pattern = `${REQUIREMENT_QUOTES_CACHE_PREFIX}:${requirementId}:quotes:*`
+  await deleteCachePattern(pattern)
+  console.log('REQUIREMENT QUOTES CACHE INVALIDATE', { pattern })
+}
 
 function locationLabel(loc) {
   if (!loc) return ''
@@ -128,6 +159,10 @@ const submitQuote = async (req, res, next) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     )
 
+    await invalidateIncomingRequirementsCache(transporterId)
+    await invalidateRequirementCache(requirementId)
+    await invalidateRequirementQuotesCache(requirementId)
+
     // Notify the requester.
     const routeLabel = `${locationLabel(requirement.origin)} → ${locationLabel(
       requirement.destination
@@ -165,6 +200,15 @@ const getQuotesForRequirement = async (req, res, next) => {
   try {
     const viewerId = getTransporterActorId(req.user)
     const requirementId = req.params.id
+    const cacheKey = getRequirementQuotesCacheKey(requirementId, viewerId)
+    const cachedResponse = await getCache(cacheKey)
+    if (cachedResponse) {
+      console.log('REQUIREMENT QUOTES CACHE HIT', { cacheKey })
+      return res.status(200).json(cachedResponse)
+    }
+
+    console.log('REQUIREMENT QUOTES CACHE MISS', { cacheKey })
+
     const requirement = await Requirement.findById(requirementId).lean()
     if (!requirement) {
       return res
@@ -182,12 +226,17 @@ const getQuotesForRequirement = async (req, res, next) => {
       .populate('transporterId', 'name company rating ratingCount')
       .lean()
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         quotes: quotes.map((q) => serializeQuote(q, requirement))
       }
-    })
+    }
+
+    await setCache(cacheKey, response, REQUIREMENT_QUOTES_CACHE_TTL)
+    console.log('REQUIREMENT QUOTES CACHE SET', { cacheKey })
+
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -249,6 +298,10 @@ const selectQuote = async (req, res, next) => {
       session.endSession()
       throw txErr
     }
+
+    await invalidateIncomingRequirementsCache()
+    await invalidateRequirementCache(requirement._id)
+    await invalidateRequirementQuotesCache(requirement._id)
 
     const routeLabel = `${locationLabel(requirement.origin)} → ${locationLabel(
       requirement.destination
@@ -353,6 +406,10 @@ const counterQuote = async (req, res, next) => {
     quote.counterPrice = Number(counterPrice)
     await quote.save()
 
+    await invalidateIncomingRequirementsCache(quote.transporterId)
+    await invalidateRequirementCache(quote.requirementId)
+    await invalidateRequirementQuotesCache(quote.requirementId)
+
     notifyUser({
       userId: quote.transporterId,
       userType: 'TRANSPORTER',
@@ -401,6 +458,9 @@ const withdrawQuote = async (req, res, next) => {
     }
     quote.status = 'WITHDRAWN'
     await quote.save()
+    await invalidateIncomingRequirementsCache(transporterId)
+    await invalidateRequirementCache(quote.requirementId)
+    await invalidateRequirementQuotesCache(quote.requirementId)
     return res
       .status(200)
       .json({ success: true, message: 'Quote withdrawn' })
@@ -415,5 +475,6 @@ module.exports = {
   selectQuote,
   counterQuote,
   withdrawQuote,
-  serializeQuote
+  serializeQuote,
+  invalidateRequirementQuotesCache
 }

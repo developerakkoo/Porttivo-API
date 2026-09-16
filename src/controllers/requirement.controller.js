@@ -4,6 +4,36 @@ const Transporter = require('../models/Transporter')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const { validateLocationInput } = require('../utils/location')
 const { notifyUsers } = require('../services/pushNotification.service')
+const { getCache, setCache, deleteCachePattern } = require('../utils/cache')
+const { invalidateRequirementQuotesCache } = require('./quote.controller')
+
+const INCOMING_REQUIREMENTS_CACHE_PREFIX = 'requirements:incoming'
+const INCOMING_REQUIREMENTS_CACHE_TTL = 60
+const REQUIREMENT_CACHE_PREFIX = 'requirement'
+const REQUIREMENT_CACHE_TTL = 2 * 60
+
+function getIncomingRequirementsCacheKey(transporterId, query) {
+  return `${INCOMING_REQUIREMENTS_CACHE_PREFIX}:${transporterId}:${query}`
+}
+
+async function invalidateIncomingRequirementsCache(transporterId) {
+  const pattern = transporterId
+    ? `${INCOMING_REQUIREMENTS_CACHE_PREFIX}:${transporterId}:*`
+    : `${INCOMING_REQUIREMENTS_CACHE_PREFIX}:*`
+
+  await deleteCachePattern(pattern)
+  console.log('REQUIREMENTS INCOMING CACHE INVALIDATE', { pattern })
+}
+
+function getRequirementCacheKey(id, viewerId) {
+  return `${REQUIREMENT_CACHE_PREFIX}:${id}:${viewerId}`
+}
+
+async function invalidateRequirementCache(id) {
+  const pattern = `${REQUIREMENT_CACHE_PREFIX}:${id}:*`
+  await deleteCachePattern(pattern)
+  console.log('REQUIREMENT CACHE INVALIDATE', { pattern })
+}
 
 function locationLabel(loc) {
   if (!loc) return ''
@@ -126,6 +156,8 @@ const createRequirement = async (req, res, next) => {
     requirement.broadcastTo = broadcastTo
     await requirement.save()
 
+    await invalidateIncomingRequirementsCache()
+
     const routeLabel = `${locationLabel(requirement.origin)} -> ${locationLabel(
       requirement.destination
     )}`
@@ -209,6 +241,18 @@ const getIncomingRequirements = async (req, res, next) => {
         .json({ success: false, message: 'Not authorized' })
     }
 
+    const query = req.originalUrl?.includes('?')
+      ? req.originalUrl.split('?')[1]
+      : new URLSearchParams(req.query || {}).toString()
+    const cacheKey = getIncomingRequirementsCacheKey(transporterId, query)
+    const cachedResponse = await getCache(cacheKey)
+    if (cachedResponse) {
+      console.log('REQUIREMENTS INCOMING CACHE HIT', { cacheKey })
+      return res.status(200).json(cachedResponse)
+    }
+
+    console.log('REQUIREMENTS INCOMING CACHE MISS', { cacheKey })
+
     const list = await Requirement.find({
       status: 'OPEN'
     })
@@ -231,7 +275,7 @@ const getIncomingRequirements = async (req, res, next) => {
       }
     })
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         requirements: list.map((r) =>
@@ -240,7 +284,12 @@ const getIncomingRequirements = async (req, res, next) => {
           })
         )
       }
-    })
+    }
+
+    await setCache(cacheKey, response, INCOMING_REQUIREMENTS_CACHE_TTL)
+    console.log('REQUIREMENTS INCOMING CACHE SET', { cacheKey })
+
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -256,6 +305,15 @@ const getRequirementById = async (req, res, next) => {
         .json({ success: false, message: 'Not authorized' })
     }
     const { id } = req.params
+    const cacheKey = getRequirementCacheKey(id, viewerId)
+    const cachedResponse = await getCache(cacheKey)
+    if (cachedResponse) {
+      console.log('REQUIREMENT CACHE HIT', { cacheKey })
+      return res.status(200).json(cachedResponse)
+    }
+
+    console.log('REQUIREMENT CACHE MISS', { cacheKey })
+
     const r = await Requirement.findById(id)
       .populate('requesterId', 'name company mobile')
       .lean()
@@ -280,7 +338,7 @@ const getRequirementById = async (req, res, next) => {
       transporterId: viewerId
     }).lean()
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         requirement: serializeRequirement(r, {
@@ -296,7 +354,12 @@ const getRequirementById = async (req, res, next) => {
             : null
         })
       }
-    })
+    }
+
+    await setCache(cacheKey, response, REQUIREMENT_CACHE_TTL)
+    console.log('REQUIREMENT CACHE SET', { cacheKey })
+
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -326,6 +389,9 @@ const cancelRequirement = async (req, res, next) => {
     }
     r.status = 'CANCELLED'
     await r.save()
+    await invalidateIncomingRequirementsCache()
+    await invalidateRequirementCache(id)
+    await invalidateRequirementQuotesCache(id)
     return res
       .status(200)
       .json({ success: true, message: 'Inquiry cancelled' })
@@ -341,5 +407,7 @@ module.exports = {
   getRequirementById,
   cancelRequirement,
   serializeRequirement,
-  locationLabel
+  locationLabel,
+  invalidateIncomingRequirementsCache,
+  invalidateRequirementCache
 }
