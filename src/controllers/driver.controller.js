@@ -16,6 +16,16 @@ const logger = require('../utils/logger')
  */
 const getProfile = async (req, res, next) => {
   try {
+    const cacheKey = `driver:profile:${req.user.id}`
+    const cachedProfile = await getCache(cacheKey)
+
+    if (cachedProfile) {
+      logger.info(`DRIVER PROFILE CACHE HIT: ${cacheKey}`)
+      return res.status(200).json(cachedProfile)
+    }
+
+    logger.info(`DRIVER PROFILE CACHE MISS: ${cacheKey}`)
+
     const driver = await Driver.findById(req.user.id).populate(
       'transporterId',
       'name company mobile'
@@ -28,7 +38,7 @@ const getProfile = async (req, res, next) => {
       })
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Profile retrieved successfully',
       data: {
@@ -53,7 +63,12 @@ const getProfile = async (req, res, next) => {
           updatedAt: driver.updatedAt
         }
       }
-    })
+    }
+
+    await setCache(cacheKey, response, 10 * 60)
+    logger.info(`DRIVER PROFILE CACHE SET: ${cacheKey}`)
+
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -83,6 +98,10 @@ const updateProfile = async (req, res, next) => {
         message: 'Driver not found'
       })
     }
+
+    const profileCacheKey = `driver:profile:${driver._id}`
+    await deleteCache(profileCacheKey)
+    logger.info(`DRIVER PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
     return res.status(200).json({
       success: true,
@@ -148,6 +167,10 @@ const updateLanguage = async (req, res, next) => {
         message: 'Driver not found'
       })
     }
+
+    const profileCacheKey = `driver:profile:${driver._id}`
+    await deleteCache(profileCacheKey)
+    logger.info(`DRIVER PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
     return res.status(200).json({
       success: true,
@@ -430,6 +453,10 @@ const updateDriver = async (req, res, next) => {
 
     await driver.save()
 
+    const profileCacheKey = `driver:profile:${id}`
+    await deleteCache(profileCacheKey)
+    logger.info(`DRIVER PROFILE CACHE REMOVE: ${profileCacheKey}`)
+
     const driversCachePattern = `transporter:drivers:${transporterId}*`
     await deleteCachePattern(driversCachePattern)
     logger.info(`DRIVERS CACHE REMOVE: ${driversCachePattern}`)
@@ -497,6 +524,10 @@ const deleteDriver = async (req, res, next) => {
 
     // Delete driver
     await Driver.deleteOne({ _id: id })
+
+    const profileCacheKey = `driver:profile:${id}`
+    await deleteCache(profileCacheKey)
+    logger.info(`DRIVER PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
     const driversCachePattern = `transporter:drivers:${transporterId}*`
     await deleteCachePattern(driversCachePattern)

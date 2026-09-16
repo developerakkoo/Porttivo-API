@@ -4,6 +4,7 @@ const Transporter = require('../models/Transporter');
 const Driver = require('../models/Driver');
 const PumpOwner = require('../models/PumpOwner');
 const FuelCard = require('../models/FuelCard');
+const { deleteCache } = require('../utils/cache');
 
 const USER_MODEL_BY_TYPE = {
   TRANSPORTER: Transporter,
@@ -20,6 +21,10 @@ const syncUserWalletMirror = async (wallet) => {
   await Model.findByIdAndUpdate(wallet.userId, {
     $set: { walletBalance: wallet.balance },
   });
+
+  if (wallet.userType === 'DRIVER') {
+    await deleteCache(`driver:profile:${wallet.userId}`);
+  }
 };
 
 const syncTransporterFuelCardBalances = async (wallet) => {

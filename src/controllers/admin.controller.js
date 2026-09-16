@@ -1820,6 +1820,9 @@ const updateDriverStatus = async (req, res, next) => {
       });
     }
 
+    const profileCacheKey = `driver:profile:${driver._id}`;
+    await deleteCache(profileCacheKey);
+
     await logAdminAction({
       adminId: req.user.id,
       action: 'DRIVER_STATUS_UPDATED',

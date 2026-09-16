@@ -1081,6 +1081,7 @@ const bulkImportVehicles = async (req, res, next) => {
               driver.transporterId = transporterId
               if (driver.status !== 'active') driver.status = 'active'
               await driver.save()
+              await deleteCache(`driver:profile:${driver._id}`)
               await deleteCache(`transporter:dashboard:${transporterId}`)
             }
           } else {
