@@ -225,13 +225,14 @@ const getDashboard = async (req, res, next) => {
     // 1. Check Redis first
     const cachedDashboard = await getCache(cacheKey)
 
-    if (cachedDashboard) {
-      logger.info(`DASHBOARD CACHE HIT: ${cacheKey}`)
+    if (cachedDashboard !== null) {
+      logger.info('DASHBOARD CACHE HIT', { cacheKey })
       return res.status(200).json(cachedDashboard)
     }
 
     // 2. Redis MISS -> calculate dashboard from MongoDB
-    logger.info(`DASHBOARD CACHE MISS: ${cacheKey}`)
+    logger.info('DASHBOARD CACHE MISS', { cacheKey })
+    logger.info('DASHBOARD DB QUERY', { transporterId })
 
     // Get today's date range
     const today = new Date()
@@ -305,7 +306,15 @@ const getDashboard = async (req, res, next) => {
     }
 
     // 4. Cache dashboard for 2 minutes
-    await setCache(cacheKey, response, 2 * 60)
+    const cacheSet = await setCache(cacheKey, response, 2 * 60)
+    if (cacheSet) {
+      logger.info('DASHBOARD CACHE SET', { cacheKey, ttlSeconds: 120 })
+    } else {
+      logger.warn('DASHBOARD CACHE SET SKIPPED', {
+        cacheKey,
+        reason: 'Redis unavailable or SET failed'
+      })
+    }
 
     // 5. Return response
     return res.status(200).json(response)
