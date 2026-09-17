@@ -155,8 +155,17 @@ test('trip cache invalidation clears both trip and draft namespaces', { concurre
   const deletedPatterns = [];
   const { invalidateTripCaches } = loadWithMocks(path.resolve(__dirname, '..', 'src', 'utils', 'tripCache.js'), {
     './cache': { deleteCachePattern: async (pattern) => deletedPatterns.push(pattern) },
+    './logger': { info: () => {} },
   });
 
   await invalidateTripCaches();
-  assert.deepEqual(deletedPatterns.sort(), ['trip-drafts:*', 'trips:*']);
+  assert.deepEqual(deletedPatterns.sort(), [
+    'admin:analytics:*',
+    'admin:dashboard-stats:*',
+    'admin:driver:*',
+    'admin:drivers:*',
+    'admin:trips:*',
+    'trip-drafts:*',
+    'trips:*',
+  ]);
 });

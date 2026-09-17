@@ -52,6 +52,15 @@ const listPublicVehicleTypes = async (req, res, next) => {
 
 const listVehicleTypes = async (req, res, next) => {
   try {
+    const cacheKey = `admin:vehicle-types:${encodeURIComponent(JSON.stringify(req.query || {}))}`;
+    const cachedResponse = await getCache(cacheKey);
+    if (cachedResponse !== null) {
+      logger.info('ADMIN CACHE HIT', { cacheKey });
+      return res.status(200).json(cachedResponse);
+    }
+    logger.info('ADMIN CACHE MISS', { cacheKey });
+    logger.info('ADMIN DB QUERY', { resource: 'vehicle-types', cacheKey });
+
     const types = await listAllTypes();
     const withUsage = await Promise.all(
       types.map(async (t) => {
@@ -59,7 +68,14 @@ const listVehicleTypes = async (req, res, next) => {
         return { ...t, usage };
       })
     );
-    return res.status(200).json({ success: true, data: { results: withUsage } });
+    const response = { success: true, data: { results: withUsage } };
+    const cacheSet = await setCache(cacheKey, response, 60 * 60);
+    if (cacheSet) {
+      logger.info('ADMIN CACHE SET', { cacheKey, ttlSeconds: 3600 });
+    } else {
+      logger.warn('ADMIN CACHE SKIP', { cacheKey, reason: 'Redis unavailable or SET failed' });
+    }
+    return res.status(200).json(response);
   } catch (err) {
     next(err);
   }
@@ -90,6 +106,8 @@ const createVehicleType = async (req, res, next) => {
     });
 
     await deleteCachePattern('vehicle-types:active*');
+    await deleteCachePattern('admin:vehicle-types:*');
+    logger.info('ADMIN CACHE INVALIDATION', { patterns: ['admin:vehicle-types:*'] });
     logger.info('VEHICLE_TYPES CACHE REMOVE: vehicle-types:active:*');
 
     return res.status(201).json({
@@ -135,6 +153,8 @@ const updateVehicleType = async (req, res, next) => {
 
     await vt.save();
     await deleteCachePattern('vehicle-types:active*');
+    await deleteCachePattern('admin:vehicle-types:*');
+    logger.info('ADMIN CACHE INVALIDATION', { patterns: ['admin:vehicle-types:*'] });
     logger.info('VEHICLE_TYPES CACHE REMOVE: vehicle-types:active:*');
 
     const usage = await getUsageCounts(vt.name);
@@ -165,6 +185,8 @@ const deleteVehicleType = async (req, res, next) => {
 
     await VehicleType.deleteOne({ _id: vt._id });
     await deleteCachePattern('vehicle-types:active*');
+    await deleteCachePattern('admin:vehicle-types:*');
+    logger.info('ADMIN CACHE INVALIDATION', { patterns: ['admin:vehicle-types:*'] });
     logger.info('VEHICLE_TYPES CACHE REMOVE: vehicle-types:active:*');
 
     return res.status(200).json({ success: true, message: 'Vehicle type deleted' });

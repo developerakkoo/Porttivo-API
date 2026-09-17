@@ -420,6 +420,18 @@ const createVehicle = async (req, res, next) => {
     const vehicleCachePattern = `vehicles:${transporterId}*`
     await deleteCachePattern(vehicleCachePattern)
     await deleteCachePattern('vehicles:admin*')
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:vehicle-types:*')
+    await deleteCachePattern('admin:transporters-with-vehicles:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: [
+        'admin:dashboard-stats:*',
+        'admin:analytics:*',
+        'admin:vehicle-types:*',
+        'admin:transporters-with-vehicles:*'
+      ]
+    })
     logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
 
     const dashCacheKey = `transporter:dashboard:${transporterId}`
@@ -713,6 +725,18 @@ const updateVehicle = async (req, res, next) => {
     const vehicleCachePattern = `vehicles:${transporterId}*`
     await deleteCachePattern(vehicleCachePattern)
     await deleteCachePattern('vehicles:admin*')
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:vehicle-types:*')
+    await deleteCachePattern('admin:transporters-with-vehicles:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: [
+        'admin:dashboard-stats:*',
+        'admin:analytics:*',
+        'admin:vehicle-types:*',
+        'admin:transporters-with-vehicles:*'
+      ]
+    })
     logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
 
     const dashCacheKey = `transporter:dashboard:${transporterId}`
@@ -814,6 +838,18 @@ const deleteVehicle = async (req, res, next) => {
     const vehicleCachePattern = `vehicles:${transporterId}*`
     await deleteCachePattern(vehicleCachePattern)
     await deleteCachePattern('vehicles:admin*')
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:vehicle-types:*')
+    await deleteCachePattern('admin:transporters-with-vehicles:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: [
+        'admin:dashboard-stats:*',
+        'admin:analytics:*',
+        'admin:vehicle-types:*',
+        'admin:transporters-with-vehicles:*'
+      ]
+    })
     logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
 
     const dashCacheKey = `transporter:dashboard:${transporterId}`

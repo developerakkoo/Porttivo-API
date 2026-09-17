@@ -11,7 +11,7 @@ const {
   normalizeEmail
 } = require('../utils/validation')
 const { TRIP_STATUS } = require('../utils/tripState')
-const { getCache, setCache, deleteCache } = require('../utils/cache')
+const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
 // const { info } = require('../utils/logger')
 const logger = require('../utils/logger')
 /**
@@ -130,6 +130,18 @@ const updateProfile = async (req, res, next) => {
     // Invalidate profile cache
     const profileCacheKey = `transporter:profile:${req.user.id}`
     await deleteCache(profileCacheKey)
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:transporters:*')
+    await deleteCachePattern('admin:transporters-with-vehicles:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: [
+        'admin:dashboard-stats:*',
+        'admin:analytics:*',
+        'admin:transporters:*',
+        'admin:transporters-with-vehicles:*'
+      ]
+    })
     logger.info(`PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
     return res.status(200).json({
@@ -197,6 +209,18 @@ const setPin = async (req, res, next) => {
     // Invalidate profile cache
     const profileCacheKey = `transporter:profile:${req.user.id}`
     await deleteCache(profileCacheKey)
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:transporters:*')
+    await deleteCachePattern('admin:transporters-with-vehicles:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: [
+        'admin:dashboard-stats:*',
+        'admin:analytics:*',
+        'admin:transporters:*',
+        'admin:transporters-with-vehicles:*'
+      ]
+    })
     logger.info(`PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
     return res.status(200).json({

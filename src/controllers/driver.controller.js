@@ -371,6 +371,13 @@ const createDriver = async (req, res, next) => {
 
     const driversCachePattern = `transporter:drivers:${transporterId}*`
     await deleteCachePattern(driversCachePattern)
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:drivers:*')
+    await deleteCachePattern('admin:driver:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: ['admin:dashboard-stats:*', 'admin:analytics:*', 'admin:drivers:*', 'admin:driver:*']
+    })
     logger.info(`DRIVERS CACHE REMOVE: ${driversCachePattern}`)
 
     const dashCacheKey = `transporter:dashboard:${transporterId}`
@@ -459,6 +466,13 @@ const updateDriver = async (req, res, next) => {
 
     const driversCachePattern = `transporter:drivers:${transporterId}*`
     await deleteCachePattern(driversCachePattern)
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:drivers:*')
+    await deleteCachePattern('admin:driver:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: ['admin:dashboard-stats:*', 'admin:analytics:*', 'admin:drivers:*', 'admin:driver:*']
+    })
     logger.info(`DRIVERS CACHE REMOVE: ${driversCachePattern}`)
 
     const dashCacheKey = `transporter:dashboard:${transporterId}`
@@ -531,6 +545,13 @@ const deleteDriver = async (req, res, next) => {
 
     const driversCachePattern = `transporter:drivers:${transporterId}*`
     await deleteCachePattern(driversCachePattern)
+    await deleteCachePattern('admin:dashboard-stats:*')
+    await deleteCachePattern('admin:analytics:*')
+    await deleteCachePattern('admin:drivers:*')
+    await deleteCachePattern('admin:driver:*')
+    logger.info('ADMIN CACHE INVALIDATION', {
+      patterns: ['admin:dashboard-stats:*', 'admin:analytics:*', 'admin:drivers:*', 'admin:driver:*']
+    })
     logger.info(`DRIVERS CACHE REMOVE: ${driversCachePattern}`)
 
     const dashCacheKey = `transporter:dashboard:${transporterId}`

@@ -1,4 +1,5 @@
 const { deleteCachePattern } = require('./cache');
+const logger = require('./logger');
 
 const TRIP_LIST_CACHE_TTL = 60;
 const TRIP_DRAFT_LIST_CACHE_TTL = 60;
@@ -41,8 +42,23 @@ const invalidateTripCaches = async () => {
   await Promise.all([
     deleteCachePattern('trip-drafts:*'),
     deleteCachePattern('trips:*'),
+    deleteCachePattern('admin:dashboard-stats:*'),
+    deleteCachePattern('admin:analytics:*'),
+    deleteCachePattern('admin:trips:*'),
+    deleteCachePattern('admin:drivers:*'),
+    deleteCachePattern('admin:driver:*'),
   ]);
-  console.log('CACHE INVALIDATION: trip and draft caches');
+  logger.info('CACHE INVALIDATION', {
+    patterns: [
+      'trip-drafts:*',
+      'trips:*',
+      'admin:dashboard-stats:*',
+      'admin:analytics:*',
+      'admin:trips:*',
+      'admin:drivers:*',
+      'admin:driver:*',
+    ],
+  });
 };
 
 module.exports = {
