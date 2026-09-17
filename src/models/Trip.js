@@ -10,6 +10,7 @@ const {
   DRIVER_TRACKING_STATUS
 } = require('../services/driverTracking.service')
 const { validateContainerNumber, normalizeContainerNumber } = require('../utils/validation')
+const { invalidateTripCaches } = require('../utils/tripCache')
 
 // Milestone Schema
 const milestoneSchema = new mongoose.Schema(
@@ -813,5 +814,13 @@ tripSchema.pre('save', function () {
     this.containerNumber = this.assignments[0].containerNumber
   }
 })
+
+tripSchema.post('save', invalidateTripCaches)
+tripSchema.post('findOneAndDelete', invalidateTripCaches)
+tripSchema.post('findOneAndUpdate', invalidateTripCaches)
+tripSchema.post('findOneAndReplace', invalidateTripCaches)
+tripSchema.post('updateOne', invalidateTripCaches)
+tripSchema.post('updateMany', invalidateTripCaches)
+tripSchema.post('deleteOne', invalidateTripCaches)
 
 module.exports = mongoose.model('Trip', tripSchema)

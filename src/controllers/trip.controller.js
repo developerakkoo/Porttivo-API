@@ -81,6 +81,15 @@ const {
   normalizeContainerNumber
 } = require('../utils/validation')
 const { buildTrackingMetrics } = require('../services/tripEta.service')
+const {
+  TRIP_LIST_CACHE_TTL,
+  TRIP_DRAFT_LIST_CACHE_TTL,
+  TRIP_DRAFT_DETAIL_CACHE_TTL,
+  buildTripDraftListCacheKey,
+  buildTripDraftDetailCacheKey,
+  buildTripListCacheKey
+} = require('../utils/tripCache')
+const { getCache, setCache } = require('../utils/cache')
 
 const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
   bookedBy: 'CUSTOMER',
@@ -1749,6 +1758,14 @@ const getTrips = async (req, res, next) => {
         message: 'Access denied. You do not have permission to view trips.'
       })
     }
+    const cacheKey = buildTripListCacheKey(req.user, transporterId, req.query)
+    const cachedResponse = await getCache(cacheKey)
+    if (cachedResponse) {
+      console.log(`CACHE HIT: ${cacheKey}`)
+      return res.status(200).json(cachedResponse)
+    }
+    console.log(`CACHE MISS: ${cacheKey}`)
+
     const {
       status,
       vehicleId,
@@ -1810,7 +1827,7 @@ const getTrips = async (req, res, next) => {
 
     const total = await Trip.countDocuments(query)
 
-    res.json({
+    const response = {
       success: true,
       data: await serializeTripsWithQueue(
         trips,
@@ -1822,7 +1839,10 @@ const getTrips = async (req, res, next) => {
         total,
         pages: Math.ceil(total / limitNum)
       }
-    })
+    }
+    await setCache(cacheKey, response, TRIP_LIST_CACHE_TTL)
+    console.log(`CACHE SET: ${cacheKey}`)
+    res.json(response)
   } catch (error) {
     next(error)
   }
@@ -4475,15 +4495,25 @@ const listTripDrafts = async (req, res, next) => {
           'Access denied. Only transporters and authorized company users can view drafts.'
       })
     }
+    const cacheKey = buildTripDraftListCacheKey(req.user, transporterId)
+    const cachedResponse = await getCache(cacheKey)
+    if (cachedResponse) {
+      console.log(`CACHE HIT: ${cacheKey}`)
+      return res.status(200).json(cachedResponse)
+    }
+    console.log(`CACHE MISS: ${cacheKey}`)
 
     const drafts = await Trip.find({ transporterId, status: TRIP_STATUS.DRAFT })
       .sort({ updatedAt: -1 })
       .limit(50)
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: serializeTrips(drafts)
-    })
+    }
+    await setCache(cacheKey, response, TRIP_DRAFT_LIST_CACHE_TTL)
+    console.log(`CACHE SET: ${cacheKey}`)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -4499,6 +4529,13 @@ const getTripDraftById = async (req, res, next) => {
           'Access denied. Only transporters and authorized company users can view drafts.'
       })
     }
+    const cacheKey = buildTripDraftDetailCacheKey(req.user, transporterId, req.params.id)
+    const cachedResponse = await getCache(cacheKey)
+    if (cachedResponse) {
+      console.log(`CACHE HIT: ${cacheKey}`)
+      return res.status(200).json(cachedResponse)
+    }
+    console.log(`CACHE MISS: ${cacheKey}`)
 
     const trip = await Trip.findOne({
       _id: req.params.id,
@@ -4513,10 +4550,13 @@ const getTripDraftById = async (req, res, next) => {
       })
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: serializeTrip(trip)
-    })
+    }
+    await setCache(cacheKey, response, TRIP_DRAFT_DETAIL_CACHE_TTL)
+    console.log(`CACHE SET: ${cacheKey}`)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
