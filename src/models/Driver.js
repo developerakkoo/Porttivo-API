@@ -19,6 +19,27 @@ const driverSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    alternateMobile: {
+      type: String,
+      trim: true,
+      default: null,
+      validate: {
+        validator: function (v) {
+          return v == null || /^[0-9]{10}$/.test(v);
+        },
+        message: 'Alternate mobile number must be 10 digits',
+      },
+    },
+    licenseNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: null,
+    },
+    licenseValidTill: {
+      type: Date,
+      default: null,
+    },
     transporterId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',

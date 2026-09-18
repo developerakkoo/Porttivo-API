@@ -94,6 +94,9 @@ const formatVehicleResponse = vehicle => {
           id: driver._id.toString(),
           name: driver.name,
           mobile: driver.mobile,
+          alternateMobile: driver.alternateMobile ?? null,
+          licenseNumber: driver.licenseNumber ?? null,
+          licenseValidTill: driver.licenseValidTill ?? null,
           status: driver.status
         }
       : null,
@@ -134,15 +137,19 @@ const validateDriverVehicleLink = async ({
   transporterId,
   excludeVehicleId = null
 }) => {
-  const driver = await Driver.findOne({
-    _id: driverId,
-    transporterId
-  })
+  const driver = await Driver.findOne({ _id: driverId })
 
   if (!driver) {
     return {
       error: 'Driver not found or does not belong to your transporter account',
       statusCode: 400
+    }
+  }
+
+  if (driver.transporterId?.toString() !== transporterId.toString()) {
+    return {
+      error: 'Driver does not belong to your transporter account',
+      statusCode: 403
     }
   }
 
@@ -157,12 +164,17 @@ const validateDriverVehicleLink = async ({
     driverId,
     transporterId,
     ...(excludeVehicleId ? { _id: { $ne: excludeVehicleId } } : {})
-  }).select('_id vehicleNumber')
+  }).select('_id vehicleNumber transporterId')
 
   if (existingVehicle) {
     return {
-      error: `Driver is already assigned to vehicle ${existingVehicle.vehicleNumber}. Please clear the existing assignment first.`,
-      statusCode: 400
+      error: `Driver is already assigned to vehicle ${existingVehicle.vehicleNumber}.`,
+      statusCode: 409,
+      currentVehicle: {
+        id: existingVehicle._id,
+        vehicleNumber: existingVehicle.vehicleNumber,
+        transporterId: existingVehicle.transporterId
+      }
     }
   }
 
@@ -180,6 +192,25 @@ const buildRcVerificationSnapshot = (verification, vehicleNumber) => ({
   verifiedVehicleNumber: vehicleNumber,
   rawResponse: verification?.rawResponse || null
 })
+
+const invalidateVehicleDriverCaches = async (transporterId, driverId) => {
+  const vehicleCachePattern = `vehicles:${transporterId}*`
+  const driversCachePattern = `transporter:drivers:${transporterId}*`
+  await deleteCachePattern(vehicleCachePattern)
+  await deleteCachePattern('vehicles:admin*')
+  await deleteCachePattern(driversCachePattern)
+  await deleteCache(`driver:profile:${driverId}`)
+  await deleteCache(`transporter:dashboard:${transporterId}`)
+  logger.info('VEHICLE DRIVER CACHE INVALIDATION', {
+    patterns: [
+      vehicleCachePattern,
+      'vehicles:admin*',
+      driversCachePattern,
+      `driver:profile:${driverId}`,
+      `transporter:dashboard:${transporterId}`
+    ]
+  })
+}
 
 /**
  * Get all vehicles for authenticated transporter
@@ -336,12 +367,27 @@ const createVehicle = async (req, res, next) => {
       vehicleType,
       cargoWeightMt
     } = req.body
+    const forceReassign = req.body.forceReassign === true
 
     // Validation
     if (!vehicleNumber) {
       return res.status(400).json({
         success: false,
         message: 'Vehicle number is required'
+      })
+    }
+
+    if (!vehicleType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vehicle type is required'
+      })
+    }
+
+    if (!driverId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Driver ID is required when adding a fleet vehicle'
       })
     }
 
@@ -385,19 +431,20 @@ const createVehicle = async (req, res, next) => {
       }
     }
 
-    // Validate driver belongs to transporter (if provided)
-    if (driverId) {
-      const driverValidation = await validateDriverVehicleLink({
-        driverId,
-        transporterId
+    const driverValidation = await validateDriverVehicleLink({
+      driverId,
+      transporterId
+    })
+    if (driverValidation.error && !(
+      forceReassign && driverValidation.statusCode === 409
+    )) {
+      return res.status(driverValidation.statusCode).json({
+        success: false,
+        message: driverValidation.error,
+        ...(driverValidation.currentVehicle
+          ? { currentVehicle: driverValidation.currentVehicle }
+          : {})
       })
-
-      if (driverValidation.error) {
-        return res.status(driverValidation.statusCode).json({
-          success: false,
-          message: driverValidation.error
-        })
-      }
     }
 
     // Validate vehicleType if provided (DB catalog)
@@ -447,6 +494,22 @@ const createVehicle = async (req, res, next) => {
       )
     })
 
+    if (forceReassign && driverValidation.currentVehicle) {
+      try {
+        const oldVehicle = await Vehicle.findByIdAndUpdate(
+          driverValidation.currentVehicle.id,
+          { driverId: null },
+          { new: true, runValidators: true }
+        )
+        if (!oldVehicle) {
+          throw new Error('Could not remove the driver from the current vehicle')
+        }
+      } catch (error) {
+        await Vehicle.deleteOne({ _id: vehicle._id })
+        throw error
+      }
+    }
+
     const vehicleCachePattern = `vehicles:${transporterId}*`
     await deleteCachePattern(vehicleCachePattern)
     await deleteCachePattern('vehicles:admin*')
@@ -464,6 +527,8 @@ const createVehicle = async (req, res, next) => {
     })
     logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
 
+    await invalidateVehicleDriverCaches(transporterId, driverId)
+
     const dashCacheKey = `transporter:dashboard:${transporterId}`
     await deleteCache(dashCacheKey)
     logger.info(`DASHBOARD CACHE REMOVE: ${dashCacheKey}`)
@@ -478,7 +543,10 @@ const createVehicle = async (req, res, next) => {
         path: 'originalOwnerId',
         select: 'mobile name email company status hasAccess'
       },
-      { path: 'driverId', select: 'name mobile status' }
+      {
+        path: 'driverId',
+        select: 'name mobile alternateMobile licenseNumber licenseValidTill status'
+      }
     ])
 
     return res.status(201).json({
@@ -632,6 +700,7 @@ const updateVehicle = async (req, res, next) => {
       vehicleType,
       cargoWeightMt
     } = req.body
+    const forceReassign = req.body.forceReassign === true
 
     // Transporters and company users with manageVehicles permission can update vehicles
     const transporterId = getTransporterId(req.user)
@@ -672,6 +741,8 @@ const updateVehicle = async (req, res, next) => {
       })
     }
 
+    const previousDriverId = vehicle.driverId?.toString?.() || null
+
     // Build update object
     const updateData = {}
     if (status !== undefined) {
@@ -684,20 +755,26 @@ const updateVehicle = async (req, res, next) => {
       updateData.status = status
     }
 
+    let driverValidation = null
     if (driverId !== undefined) {
       if (driverId === null || driverId === '') {
         updateData.driverId = null
       } else {
-        const driverValidation = await validateDriverVehicleLink({
+        driverValidation = await validateDriverVehicleLink({
           driverId,
           transporterId,
           excludeVehicleId: id
         })
 
-        if (driverValidation.error) {
+        if (driverValidation.error && !(
+          forceReassign && driverValidation.statusCode === 409
+        )) {
           return res.status(driverValidation.statusCode).json({
             success: false,
-            message: driverValidation.error
+            message: driverValidation.error,
+            ...(driverValidation.currentVehicle
+              ? { currentVehicle: driverValidation.currentVehicle }
+              : {})
           })
         }
         updateData.driverId = driverId
@@ -768,7 +845,28 @@ const updateVehicle = async (req, res, next) => {
     const updatedVehicle = await Vehicle.findByIdAndUpdate(id, updateData, {
       new: true,
       runValidators: true
-    }).populate('driverId', 'name mobile status')
+    }).populate(
+      'driverId',
+      'name mobile alternateMobile licenseNumber licenseValidTill status'
+    )
+
+    if (forceReassign && driverValidation?.currentVehicle) {
+      try {
+        const oldVehicle = await Vehicle.findByIdAndUpdate(
+          driverValidation.currentVehicle.id,
+          { driverId: null },
+          { new: true, runValidators: true }
+        )
+        if (!oldVehicle) {
+          throw new Error('Could not remove the driver from the current vehicle')
+        }
+      } catch (error) {
+        await Vehicle.findByIdAndUpdate(id, {
+          driverId: vehicle.driverId || null
+        })
+        throw error
+      }
+    }
 
     const vehicleCachePattern = `vehicles:${transporterId}*`
     await deleteCachePattern(vehicleCachePattern)
@@ -786,6 +884,14 @@ const updateVehicle = async (req, res, next) => {
       ]
     })
     logger.info(`VEHICLES CACHE REMOVE: ${vehicleCachePattern}`)
+
+    const affectedDriverIds = [previousDriverId, driverId]
+      .filter(Boolean)
+      .map(value => value.toString())
+      .filter((value, index, values) => values.indexOf(value) === index)
+    for (const affectedDriverId of affectedDriverIds) {
+      await invalidateVehicleDriverCaches(transporterId, affectedDriverId)
+    }
 
     const dashCacheKey = `transporter:dashboard:${transporterId}`
     await deleteCache(dashCacheKey)
@@ -806,10 +912,15 @@ const updateVehicle = async (req, res, next) => {
                 id: updatedVehicle.driverId._id,
                 name: updatedVehicle.driverId.name,
                 mobile: updatedVehicle.driverId.mobile,
+                alternateMobile: updatedVehicle.driverId.alternateMobile ?? null,
+                licenseNumber: updatedVehicle.driverId.licenseNumber ?? null,
+                licenseValidTill:
+                  updatedVehicle.driverId.licenseValidTill ?? null,
                 status: updatedVehicle.driverId.status
               }
             : null,
           status: updatedVehicle.status,
+          vehicleType: updatedVehicle.vehicleType ?? null,
           trailerType: updatedVehicle.trailerType,
           cargoWeightMt: updatedVehicle.cargoWeightMt ?? null,
           documents: updatedVehicle.documents,

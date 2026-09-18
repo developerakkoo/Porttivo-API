@@ -10,6 +10,39 @@ const { getDriverAvailabilityState } = require('../utils/vehicleValidation')
 const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
 const logger = require('../utils/logger')
 
+const normalizeOptionalMobile = (value, fieldName) => {
+  if (value === undefined || value === null || value === '') return null
+  const cleanedMobile = String(value).replace(/\D/g, '')
+  if (cleanedMobile.length !== 10) {
+    return { error: `${fieldName} must be 10 digits` }
+  }
+  return { value: cleanedMobile }
+}
+
+const normalizeLicenseValidTill = value => {
+  if (value === undefined || value === null || value === '') return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return { error: 'License valid till must be a valid date' }
+  }
+  return { value: date }
+}
+
+const formatDriverResponse = driver => ({
+  id: driver._id,
+  mobile: driver.mobile,
+  name: driver.name,
+  alternateMobile: driver.alternateMobile ?? null,
+  licenseNumber: driver.licenseNumber ?? null,
+  licenseValidTill: driver.licenseValidTill ?? null,
+  status: driver.status,
+  riskLevel: driver.riskLevel,
+  language: driver.language,
+  walletBalance: driver.walletBalance,
+  createdAt: driver.createdAt,
+  updatedAt: driver.updatedAt
+})
+
 /**
  * Get driver profile
  * GET /api/drivers/profile
@@ -46,6 +79,9 @@ const getProfile = async (req, res, next) => {
           id: driver._id,
           mobile: driver.mobile,
           name: driver.name,
+          alternateMobile: driver.alternateMobile ?? null,
+          licenseNumber: driver.licenseNumber ?? null,
+          licenseValidTill: driver.licenseValidTill ?? null,
           transporterId: driver.transporterId,
           transporter: driver.transporterId
             ? {
@@ -111,6 +147,9 @@ const updateProfile = async (req, res, next) => {
           id: driver._id,
           mobile: driver.mobile,
           name: driver.name,
+          alternateMobile: driver.alternateMobile ?? null,
+          licenseNumber: driver.licenseNumber ?? null,
+          licenseValidTill: driver.licenseValidTill ?? null,
           transporterId: driver.transporterId,
           transporter: driver.transporterId
             ? {
@@ -180,6 +219,9 @@ const updateLanguage = async (req, res, next) => {
           id: driver._id,
           mobile: driver.mobile,
           name: driver.name,
+          alternateMobile: driver.alternateMobile ?? null,
+          licenseNumber: driver.licenseNumber ?? null,
+          licenseValidTill: driver.licenseValidTill ?? null,
           language: driver.language
         }
       }
@@ -263,17 +305,7 @@ const getDriversByTransporter = async (req, res, next) => {
       success: true,
       message: 'Drivers retrieved successfully',
       data: {
-        drivers: drivers.map(driver => ({
-          id: driver._id,
-          mobile: driver.mobile,
-          name: driver.name,
-          status: driver.status,
-          riskLevel: driver.riskLevel,
-          language: driver.language,
-          walletBalance: driver.walletBalance,
-          createdAt: driver.createdAt,
-          updatedAt: driver.updatedAt
-        })),
+        drivers: drivers.map(formatDriverResponse),
         count: drivers.length
       }
     }
@@ -314,7 +346,14 @@ const createDriver = async (req, res, next) => {
       })
     }
 
-    const { mobile, name, status } = req.body
+    const {
+      mobile,
+      name,
+      alternateMobile,
+      licenseNumber,
+      licenseValidTill,
+      status
+    } = req.body
 
     // Validate mobile number
     if (!mobile) {
@@ -329,6 +368,24 @@ const createDriver = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: 'Mobile number must be 10 digits'
+      })
+    }
+
+    const alternateMobileResult = normalizeOptionalMobile(
+      alternateMobile,
+      'Alternate mobile number'
+    )
+    if (alternateMobileResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: alternateMobileResult.error
+      })
+    }
+    const licenseDateResult = normalizeLicenseValidTill(licenseValidTill)
+    if (licenseDateResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: licenseDateResult.error
       })
     }
 
@@ -365,6 +422,9 @@ const createDriver = async (req, res, next) => {
     const driver = await Driver.create({
       mobile: cleanedMobile,
       name: name?.trim() || '',
+      alternateMobile: alternateMobileResult.value,
+      licenseNumber: licenseNumber?.trim().toUpperCase() || null,
+      licenseValidTill: licenseDateResult.value,
       transporterId,
       status: driverStatus
     })
@@ -422,7 +482,14 @@ const updateDriver = async (req, res, next) => {
     }
 
     const { id } = req.params
-    const { name, status } = req.body
+    const {
+      name,
+      mobile,
+      alternateMobile,
+      licenseNumber,
+      licenseValidTill,
+      status
+    } = req.body
 
     // Find driver
     const driver = await Driver.findById(id)
@@ -445,6 +512,58 @@ const updateDriver = async (req, res, next) => {
     // Update fields
     if (name !== undefined) {
       driver.name = name?.trim() || ''
+    }
+
+    if (mobile !== undefined) {
+      const mobileResult = normalizeOptionalMobile(mobile, 'Mobile number')
+      if (mobileResult.error || !mobileResult.value) {
+        return res.status(400).json({
+          success: false,
+          message: mobileResult.error || 'Mobile number is required'
+        })
+      }
+      if (mobileResult.value !== driver.mobile) {
+        const existingDriver = await Driver.findOne({
+          mobile: mobileResult.value,
+          _id: { $ne: id }
+        })
+        if (existingDriver) {
+          return res.status(409).json({
+            success: false,
+            message: 'This mobile number is already linked to another driver.'
+          })
+        }
+      }
+      driver.mobile = mobileResult.value
+    }
+
+    if (alternateMobile !== undefined) {
+      const alternateMobileResult = normalizeOptionalMobile(
+        alternateMobile,
+        'Alternate mobile number'
+      )
+      if (alternateMobileResult.error) {
+        return res.status(400).json({
+          success: false,
+          message: alternateMobileResult.error
+        })
+      }
+      driver.alternateMobile = alternateMobileResult.value
+    }
+
+    if (licenseNumber !== undefined) {
+      driver.licenseNumber = licenseNumber?.trim().toUpperCase() || null
+    }
+
+    if (licenseValidTill !== undefined) {
+      const licenseDateResult = normalizeLicenseValidTill(licenseValidTill)
+      if (licenseDateResult.error) {
+        return res.status(400).json({
+          success: false,
+          message: licenseDateResult.error
+        })
+      }
+      driver.licenseValidTill = licenseDateResult.value
     }
 
     if (status !== undefined) {

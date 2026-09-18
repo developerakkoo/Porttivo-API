@@ -686,6 +686,9 @@ Create a new driver.
 {
   "mobile": "9876543211",
   "name": "Driver Name",
+  "alternateMobile": "9876543212",
+  "licenseNumber": "MH1234567890",
+  "licenseValidTill": "2028-12-31",
   "status": "pending" | "active" | "inactive" | "blocked"
 }
 ```
@@ -700,6 +703,9 @@ Create a new driver.
       "id": "driver-id",
       "mobile": "9876543211",
       "name": "Driver Name",
+      "alternateMobile": "9876543212",
+      "licenseNumber": "MH1234567890",
+      "licenseValidTill": "2028-12-31T00:00:00.000Z",
       "transporterId": "transporter-id",
       "status": "pending",
       "riskLevel": "low",
@@ -724,6 +730,10 @@ Update driver information.
 ```json
 {
   "name": "Updated Driver Name",
+  "mobile": "9876543211",
+  "alternateMobile": "9876543212",
+  "licenseNumber": "MH1234567890",
+  "licenseValidTill": "2028-12-31",
   "status": "active"
 }
 ```
@@ -738,6 +748,9 @@ Update driver information.
       "id": "driver-id",
       "mobile": "9876543211",
       "name": "Updated Driver Name",
+      "alternateMobile": "9876543212",
+      "licenseNumber": "MH1234567890",
+      "licenseValidTill": "2028-12-31T00:00:00.000Z",
       "status": "active"
     }
   }
@@ -839,6 +852,7 @@ Create a new vehicle.
 ```json
 {
   "vehicleNumber": "MH12AB1234",
+  "vehicleType": "Truck",
   "ownerType": "OWN" | "HIRED",
   "driverId": "driver-id",
   "trailerType": "20ft",
@@ -941,9 +955,14 @@ Update vehicle information.
   "driverId": "new-driver-id",
   "status": "active" | "inactive",
   "trailerType": "40ft",
-  "cargoWeightMt": 28
+  "cargoWeightMt": 28,
+  "forceReassign": true
 }
 ```
+
+If the selected driver is already assigned to another vehicle, the API returns
+`409` with the current vehicle details. Set `forceReassign` to `true` to
+remove the driver from that vehicle and assign the driver to this vehicle.
 
 **Response** (200 OK):
 ```json

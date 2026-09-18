@@ -50,7 +50,10 @@ test('createVehicle stores RC verification and returns a summary', async () => {
 
   const controller = loadWithMocks('../src/controllers/vehicle.controller.js', {
     '../models/Vehicle': {
-      findOne: async () => null,
+      findOne: (query) =>
+        query?.driverId
+          ? { select: async () => null }
+          : Promise.resolve(null),
       create: async (payload) => {
         captured.created = payload;
         return {
@@ -64,7 +67,11 @@ test('createVehicle stores RC verification and returns a summary', async () => {
     },
     '../models/Trip': {},
     '../models/Driver': {
-      findOne: async () => null,
+      findOne: async () => ({
+        _id: 'driver-1',
+        transporterId: 'transporter-1',
+        status: 'active',
+      }),
     },
     '../services/surepass.service': {
       verifyRcFull: async (vehicleNumber) => {
@@ -102,6 +109,8 @@ test('createVehicle stores RC verification and returns a summary', async () => {
   const req = {
     body: {
       vehicleNumber: 'MH 16 DY 6519',
+      vehicleType: 'Truck',
+      driverId: 'driver-1',
       trailerType: '20ft',
       cargoWeightMt: 25.5,
     },
