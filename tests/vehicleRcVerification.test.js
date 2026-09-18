@@ -103,6 +103,7 @@ test('createVehicle stores RC verification and returns a summary', async () => {
     body: {
       vehicleNumber: 'MH 16 DY 6519',
       trailerType: '20ft',
+      cargoWeightMt: 25.5,
     },
     user: {
       id: 'transporter-1',
@@ -117,7 +118,9 @@ test('createVehicle stores RC verification and returns a summary', async () => {
 
   assert.equal(res.statusCode, 201);
   assert.equal(captured.verificationInput, 'MH16DY6519');
+  assert.equal(captured.created.cargoWeightMt, 25.5);
   assert.equal(captured.created.rcVerification.status, 'verified');
+  assert.equal(res.body.data.vehicle.cargoWeightMt, 25.5);
   assert.equal(res.body.data.verification.verified, true);
   assert.equal(res.body.data.verification.status, 'verified');
 });

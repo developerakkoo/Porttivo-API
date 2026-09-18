@@ -57,6 +57,11 @@ const vehicleSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    cargoWeightMt: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
     documents: {
       rc: {
         url: String,

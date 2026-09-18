@@ -841,7 +841,8 @@ Create a new vehicle.
   "vehicleNumber": "MH12AB1234",
   "ownerType": "OWN" | "HIRED",
   "driverId": "driver-id",
-  "trailerType": "20ft"
+  "trailerType": "20ft",
+  "cargoWeightMt": 25.5
 }
 ```
 
@@ -866,6 +867,7 @@ Create a new vehicle.
       },
       "status": "active",
       "trailerType": "20ft",
+      "cargoWeightMt": 25.5,
       "documents": {},
       "hiredBy": [],
       "createdAt": "2024-01-01T00:00:00.000Z",
@@ -938,7 +940,8 @@ Update vehicle information.
 {
   "driverId": "new-driver-id",
   "status": "active" | "inactive",
-  "trailerType": "40ft"
+  "trailerType": "40ft",
+  "cargoWeightMt": 28
 }
 ```
 
@@ -953,7 +956,8 @@ Update vehicle information.
       "vehicleNumber": "MH12AB1234",
       "driverId": "new-driver-id",
       "status": "active",
-      "trailerType": "40ft"
+      "trailerType": "40ft",
+      "cargoWeightMt": 28
     }
   }
 }

@@ -19,6 +19,20 @@ const { verifyRechargeKitRc } = require('../services/rechargeKit.service')
 const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
 const logger = require('../utils/logger')
 
+const parseCargoWeightMt = value => {
+  if (value === undefined || value === null || value === '') {
+    return { value: null }
+  }
+
+  const parsedValue =
+    typeof value === 'string' && value.trim() === '' ? NaN : Number(value)
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return { error: 'Cargo weight must be a positive number in MT' }
+  }
+
+  return { value: parsedValue }
+}
+
 const formatVehicleResponse = vehicle => {
   if (!vehicle) return null
 
@@ -92,6 +106,7 @@ const formatVehicleResponse = vehicle => {
     isBusy: vehicle.isBusy,
     vehicleType: vehicle.vehicleType || null,
     trailerType: vehicle.trailerType || null,
+    cargoWeightMt: vehicle.cargoWeightMt ?? null,
     documents: vehicle.documents || {},
     rcVerification: vehicle.rcVerification
       ? {
@@ -313,8 +328,14 @@ const createVehicle = async (req, res, next) => {
       })
     }
 
-    const { vehicleNumber, ownerType, driverId, trailerType, vehicleType } =
-      req.body
+    const {
+      vehicleNumber,
+      ownerType,
+      driverId,
+      trailerType,
+      vehicleType,
+      cargoWeightMt
+    } = req.body
 
     // Validation
     if (!vehicleNumber) {
@@ -399,6 +420,14 @@ const createVehicle = async (req, res, next) => {
       finalVehicleType = typeCheck.name
     }
 
+    const cargoWeight = parseCargoWeightMt(cargoWeightMt)
+    if (cargoWeight.error) {
+      return res.status(400).json({
+        success: false,
+        message: cargoWeight.error
+      })
+    }
+
     const rcVerification = await verifyRcFull(cleanedVehicleNumber)
 
     // Create vehicle
@@ -410,6 +439,7 @@ const createVehicle = async (req, res, next) => {
       driverId: driverId || null,
       trailerType: trailerType?.trim() || null,
       vehicleType: finalVehicleType,
+      cargoWeightMt: cargoWeight.value,
       status: 'active',
       rcVerification: buildRcVerificationSnapshot(
         rcVerification,
@@ -594,7 +624,14 @@ const getVehicleById = async (req, res, next) => {
 const updateVehicle = async (req, res, next) => {
   try {
     const { id } = req.params
-    const { status, driverId, trailerType, ownerType, vehicleType } = req.body
+    const {
+      status,
+      driverId,
+      trailerType,
+      ownerType,
+      vehicleType,
+      cargoWeightMt
+    } = req.body
 
     // Transporters and company users with manageVehicles permission can update vehicles
     const transporterId = getTransporterId(req.user)
@@ -669,6 +706,17 @@ const updateVehicle = async (req, res, next) => {
 
     if (trailerType !== undefined) {
       updateData.trailerType = trailerType?.trim() || null
+    }
+
+    if (cargoWeightMt !== undefined) {
+      const cargoWeight = parseCargoWeightMt(cargoWeightMt)
+      if (cargoWeight.error) {
+        return res.status(400).json({
+          success: false,
+          message: cargoWeight.error
+        })
+      }
+      updateData.cargoWeightMt = cargoWeight.value
     }
 
     if (vehicleType !== undefined) {
@@ -763,6 +811,7 @@ const updateVehicle = async (req, res, next) => {
             : null,
           status: updatedVehicle.status,
           trailerType: updatedVehicle.trailerType,
+          cargoWeightMt: updatedVehicle.cargoWeightMt ?? null,
           documents: updatedVehicle.documents,
           createdAt: updatedVehicle.createdAt,
           updatedAt: updatedVehicle.updatedAt
