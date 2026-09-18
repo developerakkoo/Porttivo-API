@@ -26,11 +26,46 @@ const parseCargoWeightMt = value => {
 
   const parsedValue =
     typeof value === 'string' && value.trim() === '' ? NaN : Number(value)
-  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
-    return { error: 'Cargo weight must be a positive number in MT' }
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    return { error: 'Cargo weight must be a non-negative number in MT' }
   }
 
   return { value: parsedValue }
+}
+
+const DRIVER_ALREADY_ASSIGNED = 'DRIVER_ALREADY_ASSIGNED'
+
+const formatDriverAlreadyAssignedResponse = (driverValidation) => {
+  const currentVehicle = driverValidation.currentVehicle
+    ? {
+        id: driverValidation.currentVehicle.id?.toString?.()
+          || driverValidation.currentVehicle.id,
+        vehicleNumber: driverValidation.currentVehicle.vehicleNumber,
+        ...(driverValidation.currentVehicle.transporterId
+          ? { transporterId: driverValidation.currentVehicle.transporterId }
+          : {})
+      }
+    : null
+  const driver = driverValidation.driver
+    ? {
+        id: driverValidation.driver._id?.toString?.()
+          || driverValidation.driver.id
+          || driverValidation.driver._id,
+        name: driverValidation.driver.name ?? null,
+        mobile: driverValidation.driver.mobile ?? null
+      }
+    : null
+
+  return {
+    success: false,
+    code: DRIVER_ALREADY_ASSIGNED,
+    message: 'Driver is already assigned to another vehicle',
+    ...(currentVehicle ? { currentVehicle } : {}),
+    data: {
+      ...(driver ? { driver } : {}),
+      ...(currentVehicle ? { currentVehicle } : {})
+    }
+  }
 }
 
 const formatVehicleResponse = vehicle => {
@@ -168,8 +203,10 @@ const validateDriverVehicleLink = async ({
 
   if (existingVehicle) {
     return {
-      error: `Driver is already assigned to vehicle ${existingVehicle.vehicleNumber}.`,
+      error: 'Driver is already assigned to another vehicle',
       statusCode: 409,
+      code: DRIVER_ALREADY_ASSIGNED,
+      driver,
       currentVehicle: {
         id: existingVehicle._id,
         vehicleNumber: existingVehicle.vehicleNumber,
@@ -438,6 +475,9 @@ const createVehicle = async (req, res, next) => {
     if (driverValidation.error && !(
       forceReassign && driverValidation.statusCode === 409
     )) {
+      if (driverValidation.statusCode === 409) {
+        return res.status(409).json(formatDriverAlreadyAssignedResponse(driverValidation))
+      }
       return res.status(driverValidation.statusCode).json({
         success: false,
         message: driverValidation.error,
@@ -769,6 +809,9 @@ const updateVehicle = async (req, res, next) => {
         if (driverValidation.error && !(
           forceReassign && driverValidation.statusCode === 409
         )) {
+          if (driverValidation.statusCode === 409) {
+            return res.status(409).json(formatDriverAlreadyAssignedResponse(driverValidation))
+          }
           return res.status(driverValidation.statusCode).json({
             success: false,
             message: driverValidation.error,
