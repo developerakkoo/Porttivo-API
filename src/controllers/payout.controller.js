@@ -14,7 +14,6 @@ const {
   getRegisteredBeneficiary,
   handleCashfreePayoutWebhook,
   processDuePayoutRetries,
-  registerBeneficiary,
   removeRegisteredBeneficiary,
   serializePayout,
   startPayoutTransfer,
@@ -144,37 +143,78 @@ const unwrapRemoteBeneficiary = (payload) => {
   return payload
 }
 
-const serializeBeneficiaryForFrontend = (payee = {}, remoteBeneficiary = null) => {
-  const beneficiary = payee.cashfreeBeneficiary || {}
+const serializeBeneficiaryForFrontend = (
+  payee = {},
+  remoteBeneficiary = null,
+  submitted = {}
+) => {
+  const razorpay = payee.razorpayBeneficiary || {}
+  const cashfree = payee.cashfreeBeneficiary || {}
   const remote = unwrapRemoteBeneficiary(remoteBeneficiary)
   const instrument = remote.beneficiary_instrument_details || {}
   const contact = remote.beneficiary_contact_details || {}
   const last4 =
+    extractAccountLast4(submitted.bankAccount) ||
     extractAccountLast4(instrument.bank_account_number) ||
-    beneficiary.bankAccountLast4 ||
+    razorpay.bankAccountLast4 ||
+    cashfree.bankAccountLast4 ||
     null
-  const ifsc = String(instrument.bank_ifsc || '').trim().toUpperCase() || null
+  const ifsc =
+    String(submitted.ifsc || instrument.bank_ifsc || '').trim().toUpperCase() ||
+    null
+  const razorpayStatus = String(razorpay.status || '').trim() || null
+  const status =
+    razorpayStatus || remote.beneficiary_status || cashfree.status || null
 
   return {
     name:
+      submitted.name ||
       remote.beneficiary_name ||
-      beneficiary.name ||
+      cashfree.name ||
       payee.name ||
       payee.company ||
       payee.pumpName ||
       null,
-    verificationStatus:
-      remote.beneficiary_status || beneficiary.status || null,
+    verificationStatus: status,
     maskedAccountNumber: formatMaskedAccountNumber(last4),
     ifsc,
     phone:
-      contact.beneficiary_phone || beneficiary.phone || payee.mobile || null,
+      submitted.phone ||
+      contact.beneficiary_phone ||
+      cashfree.phone ||
+      payee.mobile ||
+      null,
+    razorpayContactId: razorpay.contactId || null,
+    razorpayFundAccountId: razorpay.fundAccountId || null,
+    razorpayFundAccountStatus: razorpayStatus,
     createdAt:
-      remote.added_on || beneficiary.createdAt || payee.createdAt || null,
-    updatedAt: beneficiary.updatedAt || payee.updatedAt || null,
-    verifiedAt: beneficiary.verifiedAt || null,
-    deletedAt: beneficiary.deletedAt || null
+      razorpay.createdAt ||
+      remote.added_on ||
+      cashfree.createdAt ||
+      payee.createdAt ||
+      null,
+    updatedAt:
+      razorpay.updatedAt || cashfree.updatedAt || payee.updatedAt || null,
+    verifiedAt: razorpay.verifiedAt || cashfree.verifiedAt || null,
+    deletedAt: cashfree.deletedAt || null
   }
+}
+
+const hasActiveRazorpayBeneficiary = (payee) => {
+  const fundAccountId = payee?.razorpayBeneficiary?.fundAccountId
+  const status = String(payee?.razorpayBeneficiary?.status || '')
+    .trim()
+    .toUpperCase()
+  return Boolean(fundAccountId) && status !== 'DELETED'
+}
+
+const hasActiveCashfreeBeneficiary = (payee) => {
+  const beneId =
+    payee?.cashfreeBeneficiary?.beneId || payee?.cashfreeBeneId || null
+  const status = String(payee?.cashfreeBeneficiary?.status || '')
+    .trim()
+    .toUpperCase()
+  return Boolean(beneId) && status !== 'DELETED'
 }
 
 const createBeneficiary = async (req, res, next) => {
@@ -186,13 +226,6 @@ const createBeneficiary = async (req, res, next) => {
     const phone = String(body.phone || '').trim()
     const bankAccount = String(body.bankAccount || '').trim()
     const ifsc = String(body.ifsc || '').trim().toUpperCase()
-    const address = {
-      address1: String(body.address1 || body.address || body.beneficiaryAddress || '').trim(),
-      city: String(body.city || body.beneficiaryCity || '').trim(),
-      state: String(body.state || body.beneficiaryState || '').trim(),
-      pincode: String(body.pincode || body.postalCode || body.beneficiaryPostalCode || '').trim(),
-      country: String(body.country || body.countryCode || body.beneficiaryCountry || 'IN').trim().toUpperCase()
-    }
 
     if (!name || !phone || !bankAccount || !ifsc) {
       return res.status(400).json({
@@ -209,53 +242,30 @@ const createBeneficiary = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Access denied' })
     }
 
-    const result = await registerBeneficiary(
-      { payeeId, name, email, phone, bankAccount, ifsc, address },
+    const result = await razorpayService.syncRazorpayBeneficiaryForPayee(
+      {
+        payeeId,
+        name,
+        email,
+        phone,
+        bankAccount,
+        ifsc
+      },
       req.fetch || global.fetch
     )
-
-    try {
-      await razorpayService.syncRazorpayBeneficiaryForPayee(
-        {
-          payeeId,
-          name,
-          email,
-          phone,
-          bankAccount,
-          ifsc
-        },
-        req.fetch || global.fetch
-      )
-    } catch (syncError) {
-      logger.warn('Razorpay beneficiary sync skipped', {
-        payeeId,
-        message: syncError.message,
-        stack: syncError.stack
-      })
-    }
-
-    // Build the response from the Cashfree result plus the submitted values
-    // (Cashfree is the only place the full bank details exist).
-    const remoteBeneficiary = {
-      ...unwrapRemoteBeneficiary(
-        result.beneficiaryResponse?.data || result.beneficiaryResponse?.raw
-      ),
-      beneficiary_instrument_details: {
-        bank_account_number: bankAccount,
-        bank_ifsc: ifsc
-      }
-    }
 
     return res.status(201).json({
       success: true,
       message: 'Beneficiary created successfully',
       data: {
-        beneficiary: serializeBeneficiaryForFrontend(
-          result.payee,
-          remoteBeneficiary
-        ),
-        validation: result.validation,
-        verificationWarning: result.verificationWarning
+        beneficiary: serializeBeneficiaryForFrontend(result.payee, null, {
+          name,
+          phone,
+          bankAccount,
+          ifsc
+        }),
+        validation: { verified: true },
+        verificationWarning: null
       }
     })
   } catch (error) {
@@ -302,20 +312,28 @@ const getBeneficiary = async (req, res, next) => {
     const resolvedPayeeId =
       safeObjectIdString(localLookup.payee?._id) || payeeId
 
-    // No beneficiary registered yet (nothing to look up at Cashfree).
-    const localBeneId =
-      localLookup.payee?.cashfreeBeneficiary?.beneId ||
-      localLookup.payee?.cashfreeBeneId ||
-      null
+    const hasRazorpay = hasActiveRazorpayBeneficiary(localLookup.payee)
+    const hasCashfree = hasActiveCashfreeBeneficiary(localLookup.payee)
+
     if (
       localLookup.payee &&
-      !localBeneId &&
+      !hasRazorpay &&
+      !hasCashfree &&
       !payload.beneficiaryId &&
       !(payload.bankAccountNumber && payload.bankIfsc)
     ) {
       return res
         .status(404)
         .json({ success: false, message: 'Beneficiary not found' })
+    }
+
+    if (hasRazorpay && !payload.beneficiaryId) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          beneficiary: serializeBeneficiaryForFrontend(localLookup.payee)
+        }
+      })
     }
 
     const result = await getRegisteredBeneficiary(
@@ -376,6 +394,22 @@ const removeBeneficiary = async (req, res, next) => {
 
     const resolvedPayeeId =
       safeObjectIdString(localLookup.payee?._id) || payeeId
+
+    if (hasActiveRazorpayBeneficiary(localLookup.payee) && localLookup.payee) {
+      localLookup.payee.razorpayBeneficiary.status = 'DELETED'
+      localLookup.payee.razorpayBeneficiary.fundAccountId = null
+      localLookup.payee.razorpayBeneficiary.updatedAt = new Date()
+      await localLookup.payee.save()
+      if (!hasActiveCashfreeBeneficiary(localLookup.payee)) {
+        return res.status(200).json({
+          success: true,
+          message: 'Beneficiary removed successfully',
+          data: {
+            beneficiary: serializeBeneficiaryForFrontend(localLookup.payee)
+          }
+        })
+      }
+    }
 
     const result = await removeRegisteredBeneficiary(
       { ...payload, payeeId: resolvedPayeeId },

@@ -134,28 +134,27 @@ const payoutTests = [
       const controller = loadWithMocks(
         path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
         {
-          '../services/cashfreePayout.service': {
-            registerBeneficiary: async (args) => {
+          '../services/cashfreePayout.service': {},
+          '../services/razorpayPayout.service': {
+            syncRazorpayBeneficiaryForPayee: async (args) => {
               capturedArgs = args
               return {
                 payee: {
                   name: 'Transporter One',
                   mobile: '9999999999',
-                  cashfreeBeneficiary: {
+                  razorpayBeneficiary: {
+                    contactId: 'cont_1',
+                    fundAccountId: 'fa_1',
                     status: 'ACTIVE',
                     bankAccountLast4: '7890',
                     createdAt: new Date('2026-07-20T00:00:00.000Z'),
                     updatedAt: new Date('2026-07-20T00:00:00.000Z')
                   }
                 },
-                beneId: 'TRANSPORTER_transporter-1',
-                validation: { verified: true },
-                verificationWarning: null
+                contactId: 'cont_1',
+                fundAccountId: 'fa_1'
               }
             }
-          },
-          '../services/razorpayPayout.service': {
-            syncRazorpayBeneficiaryForPayee: async () => ({})
           },
           '../models/Payout': {},
           '../models/PaymentSession': {}
@@ -187,6 +186,7 @@ const payoutTests = [
       assert.equal(capturedArgs.payeeId, 'transporter-1')
       assert.equal(res.body.data.beneficiary.name, 'Transporter One')
       assert.equal(res.body.data.beneficiary.maskedAccountNumber, '****7890')
+      assert.equal(res.body.data.beneficiary.razorpayFundAccountId, 'fa_1')
       assert.ok(!Object.prototype.hasOwnProperty.call(res.body.data, 'beneId'))
     }
   },
@@ -197,28 +197,27 @@ const payoutTests = [
       const controller = loadWithMocks(
         path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
         {
-          '../services/cashfreePayout.service': {
-            registerBeneficiary: async (args) => {
+          '../services/cashfreePayout.service': {},
+          '../services/razorpayPayout.service': {
+            syncRazorpayBeneficiaryForPayee: async (args) => {
               capturedArgs = args
               return {
                 payee: {
                   name: 'Customer One',
                   mobile: '8888888888',
-                  cashfreeBeneficiary: {
+                  razorpayBeneficiary: {
+                    contactId: 'cont_2',
+                    fundAccountId: 'fa_2',
                     status: 'ACTIVE',
                     bankAccountLast4: '7890',
                     createdAt: new Date('2026-07-20T00:00:00.000Z'),
                     updatedAt: new Date('2026-07-20T00:00:00.000Z')
                   }
                 },
-                beneId: 'CUSTOMER_customer-1',
-                validation: { verified: true },
-                verificationWarning: null
+                contactId: 'cont_2',
+                fundAccountId: 'fa_2'
               }
             }
-          },
-          '../services/razorpayPayout.service': {
-            syncRazorpayBeneficiaryForPayee: async () => ({})
           },
           '../models/Payout': {},
           '../models/PaymentSession': {}
@@ -250,6 +249,7 @@ const payoutTests = [
       assert.equal(capturedArgs.payeeId, 'customer-1')
       assert.equal(res.body.data.beneficiary.name, 'Customer One')
       assert.equal(res.body.data.beneficiary.maskedAccountNumber, '****7890')
+      assert.equal(res.body.data.beneficiary.razorpayFundAccountId, 'fa_2')
       assert.ok(!Object.prototype.hasOwnProperty.call(res.body.data, 'beneId'))
     }
   },
@@ -260,28 +260,27 @@ const payoutTests = [
       const controller = loadWithMocks(
         path.resolve(process.cwd(), 'src/controllers/payout.controller.js'),
         {
-          '../services/cashfreePayout.service': {
-            registerBeneficiary: async (args) => {
+          '../services/cashfreePayout.service': {},
+          '../services/razorpayPayout.service': {
+            syncRazorpayBeneficiaryForPayee: async (args) => {
               capturedArgs = args
               return {
                 payee: {
                   name: 'Driver One',
                   mobile: '9999999999',
-                  cashfreeBeneficiary: {
+                  razorpayBeneficiary: {
+                    contactId: 'cont_3',
+                    fundAccountId: 'fa_3',
                     status: 'ACTIVE',
                     bankAccountLast4: '7890',
                     createdAt: new Date('2026-07-20T00:00:00.000Z'),
                     updatedAt: new Date('2026-07-20T00:00:00.000Z')
                   }
                 },
-                beneId: 'DRIVER_driver-1',
-                validation: { verified: true },
-                verificationWarning: null
+                contactId: 'cont_3',
+                fundAccountId: 'fa_3'
               }
             }
-          },
-          '../services/razorpayPayout.service': {
-            syncRazorpayBeneficiaryForPayee: async () => ({})
           },
           '../models/Payout': {},
           '../models/PaymentSession': {}
@@ -313,6 +312,7 @@ const payoutTests = [
       assert.equal(capturedArgs.payeeId, 'driver-1')
       assert.equal(res.body.data.beneficiary.name, 'Driver One')
       assert.equal(res.body.data.beneficiary.maskedAccountNumber, '****7890')
+      assert.equal(res.body.data.beneficiary.razorpayFundAccountId, 'fa_3')
       assert.ok(!Object.prototype.hasOwnProperty.call(res.body.data, 'beneId'))
     }
   },
