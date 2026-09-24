@@ -216,6 +216,10 @@ const normalizeRazorpayContactType = type => {
   const aliases = {
     vendor: 'vendor',
     supplier: 'vendor',
+    transporter: 'vendor',
+    driver: 'employee',
+    pump_owner: 'vendor',
+    company_user: 'employee',
     customer: 'customer',
     employee: 'employee',
     merchant: 'merchant',

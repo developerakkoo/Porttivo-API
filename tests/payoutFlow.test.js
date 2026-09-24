@@ -47,6 +47,25 @@ const payoutTests = [
     }
   },
   {
+    name: 'createRazorpayContact maps transporter to the Razorpay-compatible vendor type',
+    async run() {
+      const razorpayService = require(path.resolve(process.cwd(), 'src/services/razorpayPayout.service.js'))
+      let capturedBody = null
+      const fakeFetch = async (_url, options) => {
+        capturedBody = JSON.parse(options.body)
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'contact_3' })
+        }
+      }
+
+      await razorpayService.createRazorpayContact({ name: 'Transporter', type: 'transporter' }, fakeFetch)
+
+      assert.equal(capturedBody.type, 'vendor')
+    }
+  },
+  {
     name: 'createRazorpayContact forwards a fetch function to the Razorpay service',
     async run() {
       let capturedFetchImpl = null
