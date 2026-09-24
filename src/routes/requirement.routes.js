@@ -14,6 +14,7 @@ const {
 } = require('../controllers/quote.controller')
 
 router.use(authenticate)
+router.use(requireTransporterKyc)
 
 // Requester: post a new inquiry
 router.post('/', createRequirement)

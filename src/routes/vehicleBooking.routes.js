@@ -19,6 +19,7 @@ const {
 
 // All endpoints require authentication
 router.use(authenticate);
+router.use(requireTransporterKyc);
 
 /**
  * @route   POST /api/vehicle-bookings

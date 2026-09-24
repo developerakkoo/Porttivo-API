@@ -1,156 +1,275 @@
-const assert = require('assert');
-const {
-  validatePAN,
-  normalizePAN,
-  validateAadhaar,
-  cleanAadhaar,
-  validateIFSC
-} = require('../src/utils/validation');
-const Transporter = require('../src/models/Transporter');
-const { requireTransporterKyc } = require('../src/middleware/auth.middleware');
-const { formatDocUrl, checkBankDetailsStatus } = require('../src/controllers/transporterKyc.controller');
+const assert = require('node:assert/strict')
+const path = require('node:path')
+const { loadWithMocks } = require('./helpers/loadWithMocks')
+const { createMockRes } = require('./helpers/http')
+const kycService = require('../src/services/kyc.service')
 
-console.log('Running Transporter KYC Tests...\n');
-
-// 1. Test PAN Validation
-console.log('Test 1: PAN validation');
-assert.strictEqual(validatePAN('ABCDE1234F'), true, 'Valid PAN should pass');
-assert.strictEqual(validatePAN('abcde1234f'), true, 'Lowercase PAN should normalize and pass');
-assert.strictEqual(validatePAN('ABCDE12345'), false, 'PAN with trailing digit should fail');
-assert.strictEqual(validatePAN('ABCD1234F'), false, 'Short PAN should fail');
-assert.strictEqual(validatePAN(''), false, 'Empty PAN should fail');
-assert.strictEqual(normalizePAN('  abcde1234f  '), 'ABCDE1234F', 'Normalization should trim and uppercase');
-console.log('✓ PAN validation passed\n');
-
-// 2. Test Aadhaar Validation
-console.log('Test 2: Aadhaar validation');
-assert.strictEqual(validateAadhaar('123456789012'), true, 'Valid 12-digit Aadhaar should pass');
-assert.strictEqual(validateAadhaar('1234 5678 9012'), true, 'Aadhaar with spaces should clean and pass');
-assert.strictEqual(validateAadhaar('1234-5678-9012'), true, 'Aadhaar with hyphens should clean and pass');
-assert.strictEqual(validateAadhaar('12345678901'), false, '11-digit Aadhaar should fail');
-assert.strictEqual(validateAadhaar('1234567890123'), false, '13-digit Aadhaar should fail');
-assert.strictEqual(validateAadhaar('abcdefghijkl'), false, 'Non-digit Aadhaar should fail');
-assert.strictEqual(cleanAadhaar(' 1234-5678 9012 '), '123456789012', 'Clean Aadhaar should strip spaces and hyphens');
-console.log('✓ Aadhaar validation passed\n');
-
-// 3. Test IFSC Validation
-console.log('Test 3: IFSC validation');
-assert.strictEqual(validateIFSC('HDFC0001234'), true, 'Valid IFSC should pass');
-assert.strictEqual(validateIFSC('SBIN0000001'), true, 'Valid SBI IFSC should pass');
-assert.strictEqual(validateIFSC('HDFC1234567'), false, '5th char non-zero should fail');
-assert.strictEqual(validateIFSC('HDF0001234'), false, 'Short IFSC should fail');
-console.log('✓ IFSC validation passed\n');
-
-// 4. Test Transporter Schema and isKycComplete method
-console.log('Test 4: Transporter Model KYC methods');
-const transporterPending = new Transporter({
-  mobile: '9876543210',
-  name: 'Test Transporter',
-  kyc: {
-    status: 'pending',
-    isCompleted: false,
-    panNumber: 'ABCDE1234F'
-  }
-});
-assert.strictEqual(transporterPending.isKycComplete(), false, 'Pending KYC should return false');
-
-const transporterCompleted = new Transporter({
-  mobile: '9876543211',
-  name: 'Completed Transporter',
-  kyc: {
-    status: 'completed',
-    isCompleted: true,
-    panNumber: 'ABCDE1234F',
-    panImage: '/uploads/kyc/pan.jpg',
-    aadhaarNumber: '123456789012',
-    aadhaarImage: '/uploads/kyc/aadhaar.jpg'
-  }
-});
-assert.strictEqual(transporterCompleted.isKycComplete(), true, 'Completed KYC should return true');
-console.log('✓ Transporter Model KYC methods passed\n');
-
-// 5. Test requireTransporterKyc Middleware
-console.log('Test 5: requireTransporterKyc Middleware');
-let blockedResponse = null;
-const mockResBlocked = {
-  status: function(code) {
-    this.statusCode = code;
-    return this;
+const kycTests = [
+  {
+    name: 'KYC completion requires PAN number, PAN image, Aadhaar number and Aadhaar image',
+    run() {
+      assert.equal(
+        kycService.hasRequiredDocuments({
+          panNumber: 'ABCDE1234F',
+          panImagePath: '/uploads/kyc/pan.jpg',
+          aadhaarNumber: '123456789012',
+          aadhaarImagePath: '/uploads/kyc/aadhaar.jpg'
+        }),
+        true
+      )
+      assert.equal(
+        kycService.hasRequiredDocuments({
+          panNumber: 'ABCDE1234F',
+          panImagePath: '/uploads/kyc/pan.jpg',
+          aadhaarNumber: '123456789012'
+        }),
+        false
+      )
+    }
   },
-  json: function(payload) {
-    blockedResponse = payload;
-    return this;
+  {
+    name: 'KYC completion does not require bank details',
+    run() {
+      const transporter = { hasAccess: false, kyc: {} }
+      const kyc = kycService.ensureKyc(transporter)
+      const errors = kycService.applyKycInput(kyc, {
+        body: {
+          panNumber: 'ABCDE1234F',
+          panImage: '/uploads/kyc/pan.jpg',
+          aadhaarNumber: '123456789012',
+          aadhaarImage: '/uploads/kyc/aadhaar.jpg'
+        }
+      })
+      assert.deepEqual(errors, [])
+      const completed = kycService.applyCompletionState(transporter, kyc)
+      assert.equal(completed, true)
+      assert.equal(kyc.status, 'completed')
+      assert.equal(kyc.isCompleted, true)
+      assert.equal(transporter.hasAccess, true)
+    }
+  },
+  {
+    name: 'invalid PAN and Aadhaar numbers are rejected',
+    run() {
+      assert.equal(
+        kycService.validatePanNumber('ABCDE1234').error,
+        'Enter a valid 10-character PAN number'
+      )
+      assert.equal(
+        kycService.validateAadhaarNumber('1234 5678').error,
+        'Enter a valid 12-digit Aadhaar number'
+      )
+      assert.equal(kycService.validatePanNumber('ABCDE1234F').value, 'ABCDE1234F')
+      assert.equal(
+        kycService.validateAadhaarNumber('1234 5678 9012').value,
+        '123456789012'
+      )
+    }
+  },
+  {
+    name: 'Razorpay beneficiary is exposed as bankDetails.isAdded without completing KYC',
+    run() {
+      const kyc = kycService.emptyKyc()
+      const bank = kycService.resolveBankDetails(
+        {
+          name: 'Transporter Name',
+          razorpayBeneficiary: {
+            fundAccountId: 'fa_1',
+            bankAccountLast4: '4321'
+          }
+        },
+        kyc
+      )
+      assert.equal(bank.isAdded, true)
+      assert.equal(bank.bankAccountLast4, '4321')
+      assert.equal(bank.source, 'razorpay')
+      assert.equal(kycService.hasRequiredDocuments(kyc), false)
+    }
+  },
+  {
+    name: 'GET KYC serializes public image URLs and pending status',
+    run() {
+      const payload = kycService.serializeKyc(
+        {
+          hasAccess: true,
+          kyc: {
+            status: 'pending',
+            isCompleted: false,
+            panNumber: 'ABCDE1234F',
+            panImagePath: '/uploads/kyc/pan.jpg'
+          }
+        },
+        {
+          protocol: 'https',
+          headers: { host: 'api.example.com' },
+          get: (name) => (name === 'host' ? 'api.example.com' : null)
+        }
+      )
+      assert.equal(payload.status, 'pending')
+      assert.equal(payload.isCompleted, false)
+      assert.equal(
+        payload.panImage,
+        'https://api.example.com/uploads/kyc/pan.jpg'
+      )
+      assert.equal(payload.networkAccessGranted, false)
+    }
+  },
+  {
+    name: 'upsert KYC JSON completes access when required documents exist',
+    async run() {
+      const transporter = {
+        _id: 't-1',
+        hasAccess: false,
+        kyc: {},
+        async save() {
+          return this
+        }
+      }
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/kyc.controller.js'),
+        {
+          '../models/Transporter': {
+            findById: async () => transporter
+          },
+          '../utils/cache': {
+            deleteCache: async () => true,
+            deleteCachePattern: async () => true
+          },
+          '../utils/logger': { info: () => {} }
+        }
+      )
+
+      const req = {
+        user: { id: 't-1' },
+        protocol: 'https',
+        headers: { host: 'api.example.com' },
+        get: (name) => (name === 'host' ? 'api.example.com' : null),
+        body: {
+          panNumber: 'ABCDE1234F',
+          panImage: 'https://api.example.com/uploads/kyc/pan.jpg',
+          aadhaarNumber: '123456789012',
+          aadhaarImage: 'https://api.example.com/uploads/kyc/aadhaar.jpg'
+        }
+      }
+      const res = createMockRes()
+      await controller.upsertKyc(req, res, (error) => {
+        throw error
+      })
+
+      assert.equal(res.statusCode, 200)
+      assert.equal(res.body.success, true)
+      assert.equal(res.body.data.kyc.isCompleted, true)
+      assert.equal(res.body.data.kyc.networkAccessGranted, true)
+      assert.match(res.body.message, /network and marketplace/)
+      assert.equal(transporter.hasAccess, true)
+    }
+  },
+  {
+    name: 'requireTransporterKyc returns KYC_REQUIRED for incomplete transporters',
+    async run() {
+      const middleware = loadWithMocks(
+        path.resolve(process.cwd(), 'src/middleware/kyc.middleware.js'),
+        {
+          '../models/Transporter': {
+            findById: async () => ({
+              kyc: { status: 'pending', isCompleted: false }
+            })
+          }
+        }
+      )
+      const req = {
+        user: {
+          id: 't-1',
+          userType: 'transporter',
+          userData: { kyc: { status: 'pending', isCompleted: false } }
+        }
+      }
+      const res = createMockRes()
+      let nextCalled = false
+      await middleware.requireTransporterKyc(req, res, () => {
+        nextCalled = true
+      })
+      assert.equal(nextCalled, false)
+      assert.equal(res.statusCode, 403)
+      assert.equal(res.body.code, 'KYC_REQUIRED')
+      assert.equal(res.body.data.isKycCompleted, false)
+    }
+  },
+  {
+    name: 'requireTransporterKyc allows completed transporters and non-transporters',
+    async run() {
+      const middleware = loadWithMocks(
+        path.resolve(process.cwd(), 'src/middleware/kyc.middleware.js'),
+        {
+          '../models/Transporter': { findById: async () => null }
+        }
+      )
+
+      const completedReq = {
+        user: {
+          id: 't-1',
+          userType: 'transporter',
+          userData: { kyc: { status: 'completed', isCompleted: true } }
+        }
+      }
+      const completedRes = createMockRes()
+      let completedNext = false
+      await middleware.requireTransporterKyc(completedReq, completedRes, () => {
+        completedNext = true
+      })
+      assert.equal(completedNext, true)
+
+      const adminReq = { user: { id: 'a-1', userType: 'admin' } }
+      const adminRes = createMockRes()
+      let adminNext = false
+      await middleware.requireTransporterKyc(adminReq, adminRes, () => {
+        adminNext = true
+      })
+      assert.equal(adminNext, true)
+    }
+  },
+  {
+    name: 'admin KYC review can complete or reject transporter access',
+    async run() {
+      const transporter = {
+        _id: 't-1',
+        hasAccess: false,
+        kyc: kycService.emptyKyc(),
+        async save() {
+          return this
+        }
+      }
+      const controller = loadWithMocks(
+        path.resolve(process.cwd(), 'src/controllers/kyc.controller.js'),
+        {
+          '../models/Transporter': {
+            findById: async () => transporter
+          },
+          '../utils/cache': {
+            deleteCache: async () => true,
+            deleteCachePattern: async () => true
+          },
+          '../utils/logger': { info: () => {} }
+        }
+      )
+
+      const req = {
+        params: { id: 't-1' },
+        body: { status: 'completed', adminNotes: 'Documents checked', hasAccess: true },
+        protocol: 'https',
+        headers: { host: 'api.example.com' },
+        get: () => 'api.example.com'
+      }
+      const res = createMockRes()
+      await controller.reviewTransporterKyc(req, res, (error) => {
+        throw error
+      })
+      assert.equal(res.statusCode, 200)
+      assert.equal(transporter.kyc.status, 'completed')
+      assert.equal(transporter.kyc.adminReviewed, true)
+      assert.equal(transporter.hasAccess, true)
+    }
   }
-};
+]
 
-const mockReqBlocked = {
-  user: {
-    userType: 'transporter',
-    userData: transporterPending
-  }
-};
-
-let nextCalledBlocked = false;
-requireTransporterKyc(mockReqBlocked, mockResBlocked, () => {
-  nextCalledBlocked = true;
-});
-
-assert.strictEqual(nextCalledBlocked, false, 'Middleware should not call next for pending KYC');
-assert.strictEqual(mockResBlocked.statusCode, 403, 'Middleware should return 403');
-assert.strictEqual(blockedResponse.code, 'KYC_REQUIRED', 'Response code should be KYC_REQUIRED');
-assert.strictEqual(
-  blockedResponse.message,
-  'KYC verification required. Please complete your KYC to access the network and marketplace.'
-);
-
-// Non-transporters (e.g. admin or customer) should pass through
-let nextCalledAdmin = false;
-requireTransporterKyc(
-  { user: { userType: 'admin' } },
-  mockResBlocked,
-  () => { nextCalledAdmin = true; }
-);
-assert.strictEqual(nextCalledAdmin, true, 'Non-transporters should pass through');
-
-// Completed transporter should pass through
-let nextCalledCompleted = false;
-requireTransporterKyc(
-  { user: { userType: 'transporter', userData: transporterCompleted } },
-  mockResBlocked,
-  () => { nextCalledCompleted = true; }
-);
-assert.strictEqual(nextCalledCompleted, true, 'Completed transporter should pass through');
-console.log('✓ requireTransporterKyc Middleware passed\n');
-
-// 6. Test formatDocUrl and checkBankDetailsStatus
-console.log('Test 6: Helper functions');
-const mockReq = {
-  protocol: 'https',
-  get: () => 'api.porttivo.com'
-};
-assert.strictEqual(
-  formatDocUrl(mockReq, '/uploads/kyc/doc.jpg'),
-  'https://api.porttivo.com/uploads/kyc/doc.jpg',
-  'formatDocUrl should prepend protocol and host'
-);
-assert.strictEqual(
-  formatDocUrl(mockReq, 'https://cdn.porttivo.com/doc.jpg'),
-  'https://cdn.porttivo.com/doc.jpg',
-  'formatDocUrl should leave full URLs intact'
-);
-
-const bankCheck = checkBankDetailsStatus({
-  cashfreeBeneficiary: {
-    beneId: 'BENE_123',
-    name: 'Transporter Ltd',
-    bankAccountLast4: '4321'
-  }
-});
-assert.strictEqual(bankCheck.isAdded, true, 'Bank details should be recognized from cashfreeBeneficiary');
-assert.strictEqual(bankCheck.bankAccountLast4, '4321');
-console.log('✓ Helper functions passed\n');
-
-console.log('====================================');
-console.log('ALL TRANSPORTER KYC TESTS PASSED! ✅');
-console.log('====================================');
-
+module.exports = kycTests

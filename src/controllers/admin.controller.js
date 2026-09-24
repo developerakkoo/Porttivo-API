@@ -1106,6 +1106,24 @@ const listAllTransporters = async (req, res, next) => {
         { 'kyc.aadhaarNumber': { $regex: search, $options: 'i' } },
       ];
     }
+    if (kycStatus) {
+      const kycFilter =
+        kycStatus === 'pending'
+          ? {
+              $or: [
+                { 'kyc.status': 'pending' },
+                { 'kyc.status': { $exists: false } },
+                { kyc: { $exists: false } },
+              ],
+            }
+          : { 'kyc.status': kycStatus };
+      if (query.$or) {
+        query.$and = [{ $or: query.$or }, kycFilter];
+        delete query.$or;
+      } else {
+        Object.assign(query, kycFilter);
+      }
+    }
 
     const sort = buildAdminListSort(sortBy, sortOrder);
 
@@ -1141,6 +1159,8 @@ const listAllTransporters = async (req, res, next) => {
             adminReviewed: Boolean(t.kyc?.adminReviewed),
           },
           createdAt: t.createdAt,
+          kycStatus: t.kyc?.status || 'pending',
+          isKycCompleted: t.kyc?.isCompleted === true || t.kyc?.status === 'completed',
         })),
         pagination: {
           page: parseInt(page),
@@ -1621,6 +1641,11 @@ const getTransporterDetails = async (req, res, next) => {
           hasAccess: transporter.hasAccess,
           hasPinSet: !!transporter.pin,
           walletBalance: transporter.walletBalance,
+          kycStatus: transporter.kyc?.status || 'pending',
+          isKycCompleted:
+            transporter.kyc?.isCompleted === true ||
+            transporter.kyc?.status === 'completed',
+          kyc: transporter.kyc || null,
           totalVehicles,
           totalDrivers,
           totalTrips,

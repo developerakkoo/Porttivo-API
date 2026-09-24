@@ -12,6 +12,7 @@ const {
 } = require('../utils/validation')
 const { TRIP_STATUS } = require('../utils/tripState')
 const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
+const { profileKycFields } = require('../services/kyc.service')
 // const { info } = require('../utils/logger')
 const logger = require('../utils/logger')
 /**
@@ -72,7 +73,8 @@ const getProfile = async (req, res, next) => {
           isKycCompleted,
           kycMessage,
           createdAt: transporter.createdAt,
-          updatedAt: transporter.updatedAt
+          updatedAt: transporter.updatedAt,
+          ...profileKycFields(transporter)
         }
       }
     }
@@ -180,7 +182,8 @@ const updateProfile = async (req, res, next) => {
           isKycCompleted,
           kycMessage,
           createdAt: transporter.createdAt,
-          updatedAt: transporter.updatedAt
+          updatedAt: transporter.updatedAt,
+          ...profileKycFields(transporter)
         }
       }
     })

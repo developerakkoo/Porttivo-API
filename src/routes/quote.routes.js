@@ -1,6 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const { authenticate } = require('../middleware/auth.middleware')
+const { requireTransporterKyc } = require('../middleware/kyc.middleware')
 const {
   selectQuote,
   counterQuote,
@@ -12,6 +13,7 @@ const {
 } = require('../controllers/transporterMessage.controller')
 
 router.use(authenticate)
+router.use(requireTransporterKyc)
 
 // Requester: award this quote
 router.put('/:id/select', selectQuote)

@@ -2,6 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth.middleware');
 const { getProfile, updateProfile, setPin, getDashboard } = require('../controllers/transporter.controller');
+const {
+  getKycStatus,
+  submitOrUpdateKyc,
+  uploadSingleKycDoc
+} = require('../controllers/transporterKyc.controller');
+const {
+  uploadKycDocs,
+  uploadKycSingle,
+  handleMulterError,
+} = require('../middleware/upload.middleware');
 
 // All routes require authentication
 router.use(authenticate);
@@ -16,17 +26,6 @@ router.use((req, res, next) => {
   }
   next();
 });
-
-const {
-  getKycStatus,
-  submitOrUpdateKyc,
-  uploadSingleKycDoc
-} = require('../controllers/transporterKyc.controller');
-const {
-  uploadKycDocs,
-  uploadKycSingle,
-  handleMulterError
-} = require('../middleware/upload.middleware');
 
 /**
  * @route   GET /api/transporters/profile

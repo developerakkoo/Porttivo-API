@@ -162,11 +162,13 @@ const kycAllowedMimes = [
 ];
 
 const kycFileFilter = (req, file, cb) => {
-  if (kycAllowedMimes.includes(file.mimetype)) {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const extAllowed = ['.jpg', '.jpeg', '.png', '.webp', '.pdf'].includes(ext);
+  if (kycAllowedMimes.includes(file.mimetype) || extAllowed) {
     cb(null, true);
   } else {
     cb(
-      new Error('Invalid file type. Only JPEG, JPG, PNG, WEBP images and PDF documents are allowed.'),
+      new Error('Invalid file type. Allowed: JPEG, JPG, PNG, WEBP, and PDF.'),
       false
     );
   }
@@ -175,19 +177,21 @@ const kycFileFilter = (req, file, cb) => {
 const kycStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDirs.kyc),
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname) || '.jpg';
-    const field = file.fieldname || 'doc';
     const transporterId = req.user?.id || 'transporter';
+    const field = file.fieldname || 'document';
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname || '') || '.jpg';
     cb(null, `kyc_${transporterId}_${field}_${uniqueSuffix}${ext}`);
   },
 });
 
-const uploadKycDocs = multer({
+const kycUpload = multer({
   storage: kycStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: kycFileFilter,
-}).fields([
+});
+
+const uploadKycDocuments = kycUpload.fields([
   { name: 'panImage', maxCount: 1 },
   { name: 'aadhaarImage', maxCount: 1 },
   { name: 'aadhaarBackImage', maxCount: 1 },
@@ -195,11 +199,17 @@ const uploadKycDocs = multer({
   { name: 'aadhaar', maxCount: 1 },
 ]);
 
-const uploadKycSingle = multer({
-  storage: kycStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
-  fileFilter: kycFileFilter,
-}).single('document');
+const uploadKycDocument = kycUpload.single('document');
+const uploadKycDocs = uploadKycDocuments;
+const uploadKycSingle = uploadKycDocument;
+
+const maybeUploadKycDocuments = (req, res, next) => {
+  const contentType = String(req.headers['content-type'] || '');
+  if (!contentType.includes('multipart/form-data')) {
+    return next();
+  }
+  uploadKycDocuments(req, res, (err) => handleMulterError(err, req, res, next));
+};
 
 // Error handler for multer errors
 const handleMulterError = (err, req, res, next) => {
@@ -234,5 +244,8 @@ module.exports = {
   uploadSpreadsheet,
   uploadKycDocs,
   uploadKycSingle,
+  uploadKycDocuments,
+  uploadKycDocument,
+  maybeUploadKycDocuments,
   handleMulterError,
 };
