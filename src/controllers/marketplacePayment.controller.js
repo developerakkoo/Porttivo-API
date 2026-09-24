@@ -806,8 +806,78 @@ const getMarketplaceTripPaymentStatus = async (req, res, next) => {
   }
 }
 
+const listMarketplacePayments = async (req, res, next) => {
+  try {
+    const actorId = getTransporterActorId(req.user)
+    if (!actorId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only transporter accounts can view marketplace payments'
+      })
+    }
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1)
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20))
+    const skip = (page - 1) * limit
+    const actorStr = String(actorId)
+
+    const filter = {
+      $or: [
+        { payerTransporterId: actorId },
+        { beneficiaryTransporterId: actorId }
+      ]
+    }
+
+    const [payments, total] = await Promise.all([
+      MarketplacePayment.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      MarketplacePayment.countDocuments(filter)
+    ])
+
+    const pages = Math.ceil(total / limit) || 0
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        payments: (payments || []).map(payment => {
+          const payerId = toObjectIdString(payment.payerTransporterId)
+          return {
+            id: getPaymentPublicId(payment),
+            tripId: toObjectIdString(payment.tripId),
+            bookingId: toObjectIdString(payment.bookingId),
+            amount: payment.amount,
+            status: payment.status,
+            currency: payment.currency || 'INR',
+            role: payerId === actorStr ? 'payer' : 'beneficiary',
+            provider: payment.provider || null,
+            providerOrderId: payment.providerOrderId || null,
+            providerTransactionId: payment.providerTransactionId || null,
+            createdAt: payment.createdAt || null,
+            completedAt: payment.completedAt || null,
+            initiatedAt: payment.initiatedAt || null
+          }
+        }),
+        pagination: {
+          page,
+          limit,
+          total,
+          pages,
+          hasNext: page < pages,
+          hasPrevious: page > 1
+        }
+      }
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   initiateMarketplaceTripRazorpayPayment,
   handleMarketplaceRazorpayWebhook,
-  getMarketplaceTripPaymentStatus
+  getMarketplaceTripPaymentStatus,
+  listMarketplacePayments
 }

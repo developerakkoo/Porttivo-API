@@ -6,6 +6,7 @@ const { createMockRes } = require('../tests/helpers/http');
 const paymentScreenTests = require('../tests/paymentScreen.test');
 const payoutFlowTests = require('../tests/payoutFlow.test');
 const marketplacePaymentBeneficiaryTests = require('../tests/marketplacePaymentBeneficiary.test');
+const marketplacePaymentListTests = require('../tests/marketplacePaymentList.test');
 const razorpayPaymentLinkTests = require('../tests/razorpayPaymentLink.test');
 const transporterPaymentHistoryTests = require('../tests/transporterPaymentHistory.test');
 const requirementCacheTests = require('../tests/requirementCache.test');
@@ -91,6 +92,7 @@ const tests = [
   ...paymentScreenTests,
   ...payoutFlowTests,
   ...marketplacePaymentBeneficiaryTests,
+  ...marketplacePaymentListTests,
   ...razorpayPaymentLinkTests,
   ...transporterPaymentHistoryTests,
   ...requirementCacheTests,
