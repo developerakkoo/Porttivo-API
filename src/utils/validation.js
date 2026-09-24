@@ -95,6 +95,58 @@ const validatePin = (pin) => {
   return /^[0-9]{4}$/.test(pin);
 };
 
+/**
+ * Normalize PAN number (trim and uppercase)
+ * @param {String} pan - PAN number
+ * @returns {String} Normalized PAN
+ */
+const normalizePAN = (pan) => {
+  if (!pan) return '';
+  return String(pan).trim().toUpperCase();
+};
+
+/**
+ * Validate PAN format (5 letters, 4 digits, 1 letter)
+ * Example: ABCDE1234F
+ * @param {String} pan - PAN number to validate
+ * @returns {Boolean} True if valid
+ */
+const validatePAN = (pan) => {
+  const normalized = normalizePAN(pan);
+  return /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(normalized);
+};
+
+/**
+ * Clean Aadhaar number (remove spaces and hyphens)
+ * @param {String} aadhaar - Aadhaar number
+ * @returns {String} Cleaned Aadhaar
+ */
+const cleanAadhaar = (aadhaar) => {
+  if (!aadhaar) return '';
+  return String(aadhaar).trim().replace(/[\s-]/g, '');
+};
+
+/**
+ * Validate Aadhaar format (12 digits)
+ * @param {String} aadhaar - Aadhaar number to validate
+ * @returns {Boolean} True if valid
+ */
+const validateAadhaar = (aadhaar) => {
+  const cleaned = cleanAadhaar(aadhaar);
+  return /^[0-9]{12}$/.test(cleaned);
+};
+
+/**
+ * Validate IFSC code format (4 letters, 0, 6 alphanumeric)
+ * Example: HDFC0001234
+ * @param {String} ifsc - IFSC to validate
+ * @returns {Boolean} True if valid
+ */
+const validateIFSC = (ifsc) => {
+  if (!ifsc) return false;
+  return /^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(ifsc).trim().toUpperCase());
+};
+
 module.exports = {
   validateMobile,
   cleanMobile,
@@ -105,4 +157,10 @@ module.exports = {
   validateContainerNumber,
   validateUserType,
   validatePin,
+  normalizePAN,
+  validatePAN,
+  cleanAadhaar,
+  validateAadhaar,
+  validateIFSC,
 };
+

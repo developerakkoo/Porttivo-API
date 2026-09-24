@@ -205,6 +205,105 @@ const transporterSchema = new mongoose.Schema(
       trim: true,
       default: null,
       index: true
+    },
+    kyc: {
+      status: {
+        type: String,
+        enum: ['pending', 'completed', 'rejected'],
+        default: 'pending'
+      },
+      isCompleted: {
+        type: Boolean,
+        default: false,
+        index: true
+      },
+      panNumber: {
+        type: String,
+        trim: true,
+        uppercase: true,
+        default: null
+      },
+      panImage: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      panUploadedAt: {
+        type: Date,
+        default: null
+      },
+      aadhaarNumber: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      aadhaarImage: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      aadhaarBackImage: {
+        type: String,
+        trim: true,
+        default: null
+      },
+      aadhaarUploadedAt: {
+        type: Date,
+        default: null
+      },
+      bankDetails: {
+        accountHolderName: {
+          type: String,
+          trim: true,
+          default: null
+        },
+        accountNumber: {
+          type: String,
+          trim: true,
+          default: null
+        },
+        bankAccountLast4: {
+          type: String,
+          trim: true,
+          default: null
+        },
+        ifscCode: {
+          type: String,
+          trim: true,
+          uppercase: true,
+          default: null
+        },
+        bankName: {
+          type: String,
+          trim: true,
+          default: null
+        },
+        isAdded: {
+          type: Boolean,
+          default: false
+        }
+      },
+      submittedAt: {
+        type: Date,
+        default: null
+      },
+      updatedAt: {
+        type: Date,
+        default: null
+      },
+      adminReviewed: {
+        type: Boolean,
+        default: false
+      },
+      adminReviewedAt: {
+        type: Date,
+        default: null
+      },
+      adminNotes: {
+        type: String,
+        trim: true,
+        default: null
+      }
     }
   },
   {
@@ -237,6 +336,11 @@ transporterSchema.methods.comparePin = async function (candidatePin) {
 // Method to check if PIN is set
 transporterSchema.methods.hasPinSet = function () {
   return !!this.pin
+}
+
+// Method to check if KYC is completed
+transporterSchema.methods.isKycComplete = function () {
+  return this.kyc?.status === 'completed' || this.kyc?.isCompleted === true
 }
 
 module.exports = mongoose.model('Transporter', transporterSchema)

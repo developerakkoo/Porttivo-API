@@ -1,6 +1,6 @@
 const express = require('express')
 const router = express.Router()
-const { authenticate } = require('../middleware/auth.middleware')
+const { authenticate, requireTransporterKyc } = require('../middleware/auth.middleware')
 const {
   createRequirement,
   getMyRequirements,
@@ -22,7 +22,7 @@ router.post('/', createRequirement)
 router.get('/mine', getMyRequirements)
 
 // Transporter: inquiries matching my active listings
-router.get('/incoming', getIncomingRequirements)
+router.get('/incoming', requireTransporterKyc, getIncomingRequirements)
 
 // Details (requester or transporter)
 router.get('/:id', getRequirementById)
@@ -31,7 +31,7 @@ router.get('/:id', getRequirementById)
 router.patch('/:id/cancel', cancelRequirement)
 
 // Quotes nested under a requirement
-router.post('/:id/quotes', submitQuote)
+router.post('/:id/quotes', requireTransporterKyc, submitQuote)
 router.get('/:id/quotes', getQuotesForRequirement)
 
 module.exports = router

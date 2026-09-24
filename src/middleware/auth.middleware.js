@@ -178,8 +178,40 @@ const authorizeRoles = (roles = []) => (req, res, next) => {
   }
 }
 
+/**
+ * Require KYC completion for transporters before accessing network/marketplace features
+ */
+const requireTransporterKyc = (req, res, next) => {
+  try {
+    if (req.user?.userType === 'transporter') {
+      const transporter = req.user.userData
+      const isCompleted =
+        transporter?.kyc?.status === 'completed' ||
+        transporter?.kyc?.isCompleted === true
+
+      if (!isCompleted) {
+        return res.status(403).json({
+          success: false,
+          code: 'KYC_REQUIRED',
+          message:
+            'KYC verification required. Please complete your KYC to access the network and marketplace.',
+          data: {
+            kycStatus: transporter?.kyc?.status || 'pending',
+            isKycCompleted: false
+          }
+        })
+      }
+    }
+    next()
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   authenticate,
   optionalAuth,
-  authorizeRoles
+  authorizeRoles,
+  requireTransporterKyc
 }
+

@@ -8,6 +8,7 @@ const uploadDirs = {
   milestones: path.join(__dirname, '../../uploads/milestones'),
   receipts: path.join(__dirname, '../../uploads/receipts'),
   chat: path.join(__dirname, '../../uploads/chat'),
+  kyc: path.join(__dirname, '../../uploads/kyc'),
 };
 
 Object.values(uploadDirs).forEach((dir) => {
@@ -152,6 +153,54 @@ const uploadSpreadsheet = multer({
   fileFilter: spreadsheetFileFilter,
 }).single('file');
 
+const kycAllowedMimes = [
+  'image/jpeg',
+  'image/jpg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+];
+
+const kycFileFilter = (req, file, cb) => {
+  if (kycAllowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(
+      new Error('Invalid file type. Only JPEG, JPG, PNG, WEBP images and PDF documents are allowed.'),
+      false
+    );
+  }
+};
+
+const kycStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDirs.kyc),
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname) || '.jpg';
+    const field = file.fieldname || 'doc';
+    const transporterId = req.user?.id || 'transporter';
+    cb(null, `kyc_${transporterId}_${field}_${uniqueSuffix}${ext}`);
+  },
+});
+
+const uploadKycDocs = multer({
+  storage: kycStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: kycFileFilter,
+}).fields([
+  { name: 'panImage', maxCount: 1 },
+  { name: 'aadhaarImage', maxCount: 1 },
+  { name: 'aadhaarBackImage', maxCount: 1 },
+  { name: 'pan', maxCount: 1 },
+  { name: 'aadhaar', maxCount: 1 },
+]);
+
+const uploadKycSingle = multer({
+  storage: kycStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: kycFileFilter,
+}).single('document');
+
 // Error handler for multer errors
 const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -183,5 +232,7 @@ module.exports = {
   upload,
   uploadChatFiles,
   uploadSpreadsheet,
+  uploadKycDocs,
+  uploadKycSingle,
   handleMulterError,
 };

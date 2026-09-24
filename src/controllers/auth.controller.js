@@ -293,7 +293,14 @@ const verifyOTP = async (req, res, next) => {
             userType: 'transporter',
             status: transporter.status,
             hasAccess: transporter.hasAccess,
-            hasPinSet: transporter.hasPinSet()
+            hasPinSet: transporter.hasPinSet(),
+            kycStatus: transporter.kyc?.status || 'pending',
+            isKycCompleted:
+              transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true,
+            kycMessage:
+              (transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true)
+                ? null
+                : 'KYC verification required. Please complete your KYC to access the network and marketplace.'
           }
         }
       })
@@ -701,7 +708,14 @@ const register = async (req, res, next) => {
           userType: 'transporter',
           status: transporter.status,
           hasAccess: transporter.hasAccess,
-          hasPinSet: transporter.hasPinSet()
+          hasPinSet: transporter.hasPinSet(),
+          kycStatus: transporter.kyc?.status || 'pending',
+          isKycCompleted:
+            transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true,
+          kycMessage:
+            (transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true)
+              ? null
+              : 'KYC verification required. Please complete your KYC to access the network and marketplace.'
         }
       }
     })
@@ -816,7 +830,14 @@ const pinLogin = async (req, res, next) => {
           userType: 'transporter',
           status: transporter.status,
           hasAccess: transporter.hasAccess,
-          hasPinSet: true
+          hasPinSet: true,
+          kycStatus: transporter.kyc?.status || 'pending',
+          isKycCompleted:
+            transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true,
+          kycMessage:
+            (transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true)
+              ? null
+              : 'KYC verification required. Please complete your KYC to access the network and marketplace.'
         }
       }
     })

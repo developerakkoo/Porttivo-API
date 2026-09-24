@@ -46,6 +46,13 @@ const getProfile = async (req, res, next) => {
       })
     }
 
+    const isKycCompleted =
+      transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true
+    const kycStatus = transporter.kyc?.status || 'pending'
+    const kycMessage = isKycCompleted
+      ? null
+      : 'KYC verification required. Please complete your KYC to access the network and marketplace.'
+
     const response = {
       success: true,
       message: 'Profile retrieved successfully',
@@ -61,6 +68,9 @@ const getProfile = async (req, res, next) => {
           hasAccess: transporter.hasAccess,
           hasPinSet: transporter.hasPinSet(),
           walletBalance: transporter.walletBalance,
+          kycStatus,
+          isKycCompleted,
+          kycMessage,
           createdAt: transporter.createdAt,
           updatedAt: transporter.updatedAt
         }
@@ -144,6 +154,13 @@ const updateProfile = async (req, res, next) => {
     })
     logger.info(`PROFILE CACHE REMOVE: ${profileCacheKey}`)
 
+    const isKycCompleted =
+      transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted === true
+    const kycStatus = transporter.kyc?.status || 'pending'
+    const kycMessage = isKycCompleted
+      ? null
+      : 'KYC verification required. Please complete your KYC to access the network and marketplace.'
+
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
@@ -159,6 +176,9 @@ const updateProfile = async (req, res, next) => {
           hasAccess: transporter.hasAccess,
           hasPinSet: transporter.hasPinSet(),
           walletBalance: transporter.walletBalance,
+          kycStatus,
+          isKycCompleted,
+          kycMessage,
           createdAt: transporter.createdAt,
           updatedAt: transporter.updatedAt
         }

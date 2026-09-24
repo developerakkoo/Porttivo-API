@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate } = require('../middleware/auth.middleware');
+const { authenticate, requireTransporterKyc } = require('../middleware/auth.middleware');
 const {
   createAvailability,
   searchAvailability,
@@ -21,7 +21,7 @@ router.use(authenticate);
  * POST /api/vehicle-posts
  * Create a vehicle availability post (transporter)
  */
-router.post('/', createAvailability);
+router.post('/', requireTransporterKyc, createAvailability);
 /**
  * PUT /api/vehicle-posts/:id/pause
  * Pause an active post (owner only) — hidden from marketplace search
@@ -32,19 +32,19 @@ router.put('/:id/pause', pausePost);
  * PUT /api/vehicle-posts/:id/resume
  * Resume a paused post (owner only)
  */
-router.put('/:id/resume', resumePost);
+router.put('/:id/resume', requireTransporterKyc, resumePost);
 
 /**
  * PUT /api/vehicle-posts/:id
  * Update an availability post (owner only)
  */
-router.put('/:id', updateAvailability);
+router.put('/:id', requireTransporterKyc, updateAvailability);
 
 /**
  * GET /api/vehicle-posts
  * Search availability posts (visible to transporters searching loads)
  */
-router.get('/', searchAvailability);
+router.get('/', requireTransporterKyc, searchAvailability);
 
 /**
  * GET /api/vehicle-posts/mine

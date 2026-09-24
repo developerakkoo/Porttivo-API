@@ -18,6 +18,8 @@ const {
   getVehicleAdminDetails,
   getTransporterRoutePosts,
   getTransporterDetails,
+  getTransporterKyc,
+  reviewTransporterKyc,
   updateTransporterStatus,
   listCustomersWithTripsAndActivities,
   listAllDrivers,
@@ -178,6 +180,20 @@ router.get('/transporters/:id', getTransporterDetails);
  * @access  Private (Admin only)
  */
 router.put('/transporters/:id/status', updateTransporterStatus);
+
+/**
+ * @route   GET /api/admin/transporters/:id/kyc
+ * @desc    Get transporter KYC details (Admin only)
+ * @access  Private (Admin only)
+ */
+router.get('/transporters/:id/kyc', getTransporterKyc);
+
+/**
+ * @route   PUT /api/admin/transporters/:id/kyc/review
+ * @desc    Review / check transporter KYC (Admin only)
+ * @access  Private (Admin only)
+ */
+router.put('/transporters/:id/kyc/review', reviewTransporterKyc);
 
 /**
  * @route   GET /api/admin/drivers

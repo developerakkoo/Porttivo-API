@@ -17,6 +17,17 @@ router.use((req, res, next) => {
   next();
 });
 
+const {
+  getKycStatus,
+  submitOrUpdateKyc,
+  uploadSingleKycDoc
+} = require('../controllers/transporterKyc.controller');
+const {
+  uploadKycDocs,
+  uploadKycSingle,
+  handleMulterError
+} = require('../middleware/upload.middleware');
+
 /**
  * @route   GET /api/transporters/profile
  * @desc    Get transporter profile
@@ -44,5 +55,33 @@ router.put('/set-pin', setPin);
  * @access  Private (Transporter only)
  */
 router.get('/dashboard', getDashboard);
+
+/**
+ * @route   GET /api/transporters/kyc
+ * @desc    Get transporter KYC details and uploaded documents
+ * @access  Private (Transporter only)
+ */
+router.get('/kyc', getKycStatus);
+
+/**
+ * @route   POST /api/transporters/kyc
+ * @desc    Submit or update transporter KYC documents
+ * @access  Private (Transporter only)
+ */
+router.post('/kyc', uploadKycDocs, handleMulterError, submitOrUpdateKyc);
+
+/**
+ * @route   PUT /api/transporters/kyc
+ * @desc    Edit/update transporter KYC documents
+ * @access  Private (Transporter only)
+ */
+router.put('/kyc', uploadKycDocs, handleMulterError, submitOrUpdateKyc);
+
+/**
+ * @route   POST /api/transporters/kyc/upload
+ * @desc    Upload single KYC document
+ * @access  Private (Transporter only)
+ */
+router.post('/kyc/upload', uploadKycSingle, handleMulterError, uploadSingleKycDoc);
 
 module.exports = router;

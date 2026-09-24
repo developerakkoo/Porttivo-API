@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { authenticate } = require('../middleware/auth.middleware');
+const { authenticate, requireTransporterKyc } = require('../middleware/auth.middleware');
 const {
   createBooking,
   getBooking,
@@ -25,7 +25,7 @@ router.use(authenticate);
  * @desc    Create a booking request for a vehicle
  * @access  Private (Transporter only)
  */
-router.post('/', createBooking);
+router.post('/', requireTransporterKyc, createBooking);
 
 /**
  * @route   GET /api/vehicle-bookings/my-bookings

@@ -1083,18 +1083,27 @@ const listAllTransporters = async (req, res, next) => {
     if (cachedResponse !== null) return res.status(200).json(cachedResponse);
     logger.info('ADMIN DB QUERY', { resource: 'transporters', cacheKey });
 
-    const { status, page = 1, limit = 20, search, sortBy, sortOrder } = req.query;
+    const { status, kycStatus, page = 1, limit = 20, search, sortBy, sortOrder } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Build query
     const query = {};
     if (status) query.status = status;
+    if (kycStatus) {
+      if (kycStatus === 'completed') {
+        query.$or = [{ 'kyc.status': 'completed' }, { 'kyc.isCompleted': true }];
+      } else {
+        query['kyc.status'] = kycStatus;
+      }
+    }
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
         { mobile: { $regex: search, $options: 'i' } },
         { email: { $regex: search, $options: 'i' } },
         { company: { $regex: search, $options: 'i' } },
+        { 'kyc.panNumber': { $regex: search, $options: 'i' } },
+        { 'kyc.aadhaarNumber': { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -1122,6 +1131,15 @@ const listAllTransporters = async (req, res, next) => {
           hasAccess: t.hasAccess,
           hasPinSet: !!t.pin,
           walletBalance: t.walletBalance,
+          kyc: {
+            status: t.kyc?.status || 'pending',
+            isCompleted: Boolean(t.kyc?.status === 'completed' || t.kyc?.isCompleted),
+            panNumber: t.kyc?.panNumber || null,
+            hasPanImage: Boolean(t.kyc?.panImage),
+            hasAadhaarImage: Boolean(t.kyc?.aadhaarImage),
+            submittedAt: t.kyc?.submittedAt || null,
+            adminReviewed: Boolean(t.kyc?.adminReviewed),
+          },
           createdAt: t.createdAt,
         })),
         pagination: {
@@ -1583,6 +1601,13 @@ const getTransporterDetails = async (req, res, next) => {
       Driver.find({ transporterId: transporter._id }).select('name mobile status').lean(),
     ]);
 
+    const formatAdminDocUrl = (filePath) => {
+      if (!filePath) return null;
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+      const cleanPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
+      return `${req.protocol}://${req.get('host')}${cleanPath}`;
+    };
+
     return res.status(200).json({
       success: true,
       data: {
@@ -1599,6 +1624,28 @@ const getTransporterDetails = async (req, res, next) => {
           totalVehicles,
           totalDrivers,
           totalTrips,
+          kyc: {
+            status: transporter.kyc?.status || 'pending',
+            isCompleted: Boolean(
+              transporter.kyc?.status === 'completed' || transporter.kyc?.isCompleted
+            ),
+            panNumber: transporter.kyc?.panNumber || null,
+            panImage: formatAdminDocUrl(transporter.kyc?.panImage),
+            panImagePath: transporter.kyc?.panImage || null,
+            panUploadedAt: transporter.kyc?.panUploadedAt || null,
+            aadhaarNumber: transporter.kyc?.aadhaarNumber || null,
+            aadhaarImage: formatAdminDocUrl(transporter.kyc?.aadhaarImage),
+            aadhaarImagePath: transporter.kyc?.aadhaarImage || null,
+            aadhaarBackImage: formatAdminDocUrl(transporter.kyc?.aadhaarBackImage),
+            aadhaarBackImagePath: transporter.kyc?.aadhaarBackImage || null,
+            aadhaarUploadedAt: transporter.kyc?.aadhaarUploadedAt || null,
+            bankDetails: transporter.kyc?.bankDetails || {},
+            submittedAt: transporter.kyc?.submittedAt || null,
+            updatedAt: transporter.kyc?.updatedAt || null,
+            adminReviewed: Boolean(transporter.kyc?.adminReviewed),
+            adminReviewedAt: transporter.kyc?.adminReviewedAt || null,
+            adminNotes: transporter.kyc?.adminNotes || null,
+          },
           createdAt: transporter.createdAt,
           vehicles: vehicles.map((v) => ({
             id: v._id,
@@ -1670,6 +1717,181 @@ const updateTransporterStatus = async (req, res, next) => {
           id: transporter._id,
           status: transporter.status,
         },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get transporter KYC details (Admin only)
+ * GET /api/admin/transporters/:id/kyc
+ */
+const getTransporterKyc = async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ID format',
+      });
+    }
+
+    const transporter = await Transporter.findById(req.params.id).select('-pin');
+
+    if (!transporter) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transporter not found',
+      });
+    }
+
+    const formatAdminDocUrl = (filePath) => {
+      if (!filePath) return null;
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) return filePath;
+      const cleanPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
+      return `${req.protocol}://${req.get('host')}${cleanPath}`;
+    };
+
+    const kyc = transporter.kyc || {};
+    const hasCashfree = Boolean(
+      transporter.cashfreeBeneficiary?.beneId || transporter.cashfreeBeneId
+    );
+    const hasRazorpay = Boolean(
+      transporter.razorpayBeneficiary?.fundAccountId
+    );
+    const bankDetails = {
+      isAdded: Boolean(
+        kyc.bankDetails?.isAdded ||
+        kyc.bankDetails?.accountNumber ||
+        hasCashfree ||
+        hasRazorpay
+      ),
+      accountHolderName:
+        kyc.bankDetails?.accountHolderName ||
+        transporter.cashfreeBeneficiary?.name ||
+        transporter.name ||
+        null,
+      bankAccountLast4:
+        kyc.bankDetails?.bankAccountLast4 ||
+        transporter.cashfreeBeneficiary?.bankAccountLast4 ||
+        transporter.razorpayBeneficiary?.bankAccountLast4 ||
+        null,
+      ifscCode: kyc.bankDetails?.ifscCode || null,
+      bankName: kyc.bankDetails?.bankName || null,
+      source: hasCashfree ? 'cashfree' : hasRazorpay ? 'razorpay' : 'direct',
+    };
+
+    const isCompleted = kyc.status === 'completed' || kyc.isCompleted === true;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        transporter: {
+          id: transporter._id,
+          name: transporter.name,
+          mobile: transporter.mobile,
+          email: transporter.email,
+          company: transporter.company,
+          status: transporter.status,
+          hasAccess: transporter.hasAccess,
+        },
+        kyc: {
+          status: kyc.status || 'pending',
+          isCompleted,
+          panNumber: kyc.panNumber || null,
+          panImage: formatAdminDocUrl(kyc.panImage),
+          panImagePath: kyc.panImage || null,
+          panUploadedAt: kyc.panUploadedAt || null,
+          aadhaarNumber: kyc.aadhaarNumber || null,
+          aadhaarImage: formatAdminDocUrl(kyc.aadhaarImage),
+          aadhaarImagePath: kyc.aadhaarImage || null,
+          aadhaarBackImage: formatAdminDocUrl(kyc.aadhaarBackImage),
+          aadhaarBackImagePath: kyc.aadhaarBackImage || null,
+          aadhaarUploadedAt: kyc.aadhaarUploadedAt || null,
+          bankDetails,
+          submittedAt: kyc.submittedAt || null,
+          updatedAt: kyc.updatedAt || null,
+          adminReviewed: Boolean(kyc.adminReviewed),
+          adminReviewedAt: kyc.adminReviewedAt || null,
+          adminNotes: kyc.adminNotes || null,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Review / Check transporter KYC (Admin only)
+ * PUT /api/admin/transporters/:id/kyc/review
+ */
+const reviewTransporterKyc = async (req, res, next) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid ID format',
+      });
+    }
+
+    const { status, adminNotes, hasAccess } = req.body;
+
+    const transporter = await Transporter.findById(req.params.id);
+
+    if (!transporter) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transporter not found',
+      });
+    }
+
+    if (!transporter.kyc) {
+      transporter.kyc = { status: 'pending', isCompleted: false };
+    }
+
+    // Set admin check/review metadata
+    transporter.kyc.adminReviewed = true;
+    transporter.kyc.adminReviewedAt = new Date();
+
+    if (adminNotes !== undefined) {
+      transporter.kyc.adminNotes = adminNotes?.trim() || null;
+    }
+
+    // If admin explicitly updates status (e.g., rejecting invalid documents)
+    if (status && ['pending', 'completed', 'rejected'].includes(status)) {
+      transporter.kyc.status = status;
+      transporter.kyc.isCompleted = status === 'completed';
+    }
+
+    // If admin explicitly overrides hasAccess
+    if (typeof hasAccess === 'boolean') {
+      transporter.hasAccess = hasAccess;
+    }
+
+    await transporter.save();
+
+    await deleteCache(`transporter:profile:${req.params.id}`);
+    await deleteCache(`transporter:dashboard:${req.params.id}`);
+    await invalidateAdminCaches([
+      'admin:dashboard-stats:*',
+      'admin:analytics:*',
+      'admin:transporters:*',
+      'admin:transporters-with-vehicles:*',
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Transporter KYC review updated successfully',
+      data: {
+        transporterId: transporter._id,
+        kycStatus: transporter.kyc.status,
+        isCompleted: transporter.kyc.isCompleted,
+        adminReviewed: transporter.kyc.adminReviewed,
+        adminReviewedAt: transporter.kyc.adminReviewedAt,
+        adminNotes: transporter.kyc.adminNotes,
+        hasAccess: transporter.hasAccess,
       },
     });
   } catch (error) {
@@ -3470,6 +3692,8 @@ module.exports = {
   getVehicleAdminDetails,
   getTransporterRoutePosts,
   getTransporterDetails,
+  getTransporterKyc,
+  reviewTransporterKyc,
   updateTransporterStatus,
   listAllDrivers,
   getDriverDetails,
