@@ -1991,6 +1991,7 @@ const getTripById = async (req, res, next) => {
       success: true,
       data
     }
+    const cacheKey = tripKey(id)
     await setTripReadCache(cacheKey, response, TRIP_TTL)
     res.json(response)
   } catch (error) {
