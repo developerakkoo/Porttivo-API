@@ -151,6 +151,38 @@ test('trip list cache includes all query params and avoids queue and Mongo work 
   assert.equal([...cache.keys()].filter((key) => key.startsWith('trips:list:') && !key.endsWith(':ttl')).length, 2);
 });
 
+test('trip group lookup uses the group id for its read cache key', { concurrency: false }, async () => {
+  reset();
+  const trip = {
+    ...makeTrip('trip-1'),
+    tripGroupId: 'GRP-1',
+    routeIndex: 0,
+    pickupLocation: null,
+    intermediateLocation: null,
+    dropLocation: null,
+  };
+  const Trip = {
+    find: () => {
+      const chain = {
+        populate: () => chain,
+        sort: async () => [trip],
+      };
+      return chain;
+    },
+  };
+  const controller = createController(Trip);
+  const response = createMockRes();
+
+  await controller.getTripGroup(
+    { user, params: { groupId: 'GRP-1' } },
+    response,
+    (error) => { throw error; }
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.data.group.tripGroupId, 'GRP-1');
+});
+
 test('trip cache invalidation clears both trip and draft namespaces', { concurrency: false }, async () => {
   const deletedPatterns = [];
   const { invalidateTripCaches } = loadWithMocks(path.resolve(__dirname, '..', 'src', 'utils', 'tripCache.js'), {

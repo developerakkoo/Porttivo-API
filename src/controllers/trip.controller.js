@@ -1708,7 +1708,7 @@ const getTripGroup = async (req, res, next) => {
       }
     }
 
-    const cacheKey = tripKey(id)
+    const cacheKey = tripKey(groupId)
     const cached = await getTripReadCache(cacheKey)
     if (cached) return res.json(cached)
 
