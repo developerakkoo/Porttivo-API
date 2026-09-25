@@ -21,6 +21,18 @@ const {
 } = require('../services/wati.service')
 const path = require('path')
 const { TRIP_STATUS } = require('../utils/tripState')
+const { isClosedTripStatus } = require('../utils/tripState')
+const {
+  MILESTONE_TTL,
+  TIMELINE_TTL,
+  COMPLETED_LOCATION_TTL,
+  milestoneKey,
+  timelineKey,
+  completedLocationKey,
+  getTripReadCache,
+  setTripReadCache,
+  invalidateTripReadCache
+} = require('../utils/tripReadCache')
 const { ensureMilestonePhoto, toAuditUserType } = require('../services/tripLifecycle.service')
 const {
   TRACKABLE_STATUSES,
@@ -234,6 +246,7 @@ const updateMilestone = async (req, res, next) => {
       userType: toAuditUserType(userType)
     }
     await trip.save()
+    await invalidateTripReadCache(id)
 
     // Get current milestone info for next milestone
     const currentMilestone = trip.getCurrentMilestone()
@@ -405,11 +418,15 @@ const getCurrentMilestone = async (req, res, next) => {
       })
     }
 
+    const cacheKey = milestoneKey(id)
+    const cached = await getTripReadCache(cacheKey)
+    if (cached) return res.json(cached)
+
     // Get current milestone
     const currentMilestone = trip.getCurrentMilestone()
 
     if (!currentMilestone) {
-      return res.json({
+      const response = {
         success: true,
         message: 'All milestones completed',
         data: {
@@ -418,12 +435,14 @@ const getCurrentMilestone = async (req, res, next) => {
           milestoneType: null,
           label: null
         }
-      })
+      }
+      await setTripReadCache(cacheKey, response, MILESTONE_TTL)
+      return res.json(response)
     }
 
     const milestoneLabel = getDriverLabel(currentMilestone.milestoneType)
 
-    res.json({
+    const response = {
       success: true,
       data: {
         completed: false,
@@ -431,7 +450,9 @@ const getCurrentMilestone = async (req, res, next) => {
         milestoneType: currentMilestone.milestoneType,
         label: milestoneLabel
       }
-    })
+    }
+    await setTripReadCache(cacheKey, response, MILESTONE_TTL)
+    res.json(response)
   } catch (error) {
     next(error)
   }
@@ -482,6 +503,10 @@ const getTripTimeline = async (req, res, next) => {
       })
     }
 
+    const cacheKey = timelineKey(id, req.query)
+    const cached = await getTripReadCache(cacheKey)
+    if (cached) return res.json(cached)
+
     // Build timeline with all 5 milestones
     const allMilestones = [
       'CONTAINER_PICKED',
@@ -530,7 +555,7 @@ const getTripTimeline = async (req, res, next) => {
       }
     })
 
-    res.json({
+    const response = {
       success: true,
       data: {
         trip: {
@@ -553,7 +578,9 @@ const getTripTimeline = async (req, res, next) => {
         },
         timeline
       }
-    })
+    }
+    await setTripReadCache(cacheKey, response, TIMELINE_TTL)
+    res.json(response)
   } catch (error) {
     next(error)
   }
@@ -610,26 +637,34 @@ const getTripLocationTrail = async (req, res, next) => {
       })
     }
 
-    if (!TRACKABLE_STATUSES.includes(trip.status)) {
+    const isCompleted = isClosedTripStatus(trip.status)
+    if (!TRACKABLE_STATUSES.includes(trip.status) && !isCompleted) {
       return res.status(400).json({
         success: false,
         message: 'Location trail is only available for active, paused, or POD pending trips'
       })
     }
 
+    const query = { since: req.query.since || null, limit: req.query.limit || null }
+    const cacheKey = isCompleted ? completedLocationKey(id, query) : null
+    const cached = cacheKey ? await getTripReadCache(cacheKey) : null
+    if (cached) return res.json(cached)
+
     const { points, total, returned } = await getLocationTrailForTrip(id, {
       since: req.query.since,
       limit: req.query.limit
     })
 
-    return res.json({
+    const response = {
       success: true,
       data: {
         points,
         total,
         returned
       }
-    })
+    }
+    if (cacheKey) await setTripReadCache(cacheKey, response, COMPLETED_LOCATION_TTL)
+    return res.json(response)
   } catch (error) {
     if (error.status) {
       return res.status(error.status).json({

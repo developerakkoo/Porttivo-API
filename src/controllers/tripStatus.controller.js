@@ -30,6 +30,7 @@ const {
 const {
   completeMarketplaceBookingAfterTripClosed,
 } = require('../utils/marketplaceBookingComplete');
+const { invalidateTripReadCache } = require('../utils/tripReadCache');
 
 const toAuditUserType = (userType) => {
   switch (userType) {
@@ -237,6 +238,7 @@ const acceptTripByDriver = async (req, res, next) => {
       userType: toAuditUserType('driver'),
     };
     await trip.save();
+    await invalidateTripReadCache(trip._id);
 
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
@@ -458,6 +460,7 @@ const pauseTrip = async (req, res, next) => {
       userType: toAuditUserType(userType),
     };
     await trip.save();
+    await invalidateTripReadCache(id);
 
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
@@ -540,6 +543,7 @@ const resumeTrip = async (req, res, next) => {
       userType: toAuditUserType(userType),
     };
     await trip.save();
+    await invalidateTripReadCache(id);
 
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
     await trip.populate('driverId', 'name mobile');
@@ -650,6 +654,7 @@ const completeTrip = async (req, res, next) => {
       userType: toAuditUserType(userType),
     };
     await trip.save();
+    await invalidateTripReadCache(id);
 
     // Populate references
     await trip.populate('vehicleId', 'vehicleNumber trailerType');
@@ -767,6 +772,7 @@ const closeTripWithoutPOD = async (req, res, next) => {
       userType: toAuditUserType(req.user.userType),
     };
     await trip.save();
+    await invalidateTripReadCache(id);
     await releaseTripResources(trip);
 
     await trip.populate('vehicleId', 'vehicleNumber trailerType');

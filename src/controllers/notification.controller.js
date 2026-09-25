@@ -1,4 +1,10 @@
 const Notification = require('../models/Notification');
+const {
+  notificationKey,
+  getNotificationCache,
+  setNotificationCache,
+  invalidateNotificationCache
+} = require('../utils/notificationCache')
 
 /**
  * Get user notifications
@@ -28,6 +34,16 @@ const getNotifications = async (req, res, next) => {
     }
 
     const skip = (parseInt(page, 10) - 1) * limit
+    const cacheKey = notificationKey(userId, {
+      page: parseInt(page, 10),
+      limit,
+      read: read === undefined ? null : read,
+      type: type || null,
+      types: typesQ || null,
+      userType
+    })
+    const cached = await getNotificationCache(cacheKey)
+    if (cached) return res.status(200).json(cached)
 
     const notifications = await Notification.find(query)
       .sort({ createdAt: -1 })
@@ -39,7 +55,7 @@ const getNotifications = async (req, res, next) => {
     if (query.type) unreadFilter.type = query.type
     const unreadCount = await Notification.countDocuments(unreadFilter)
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Notifications retrieved successfully',
       data: {
@@ -62,7 +78,9 @@ const getNotifications = async (req, res, next) => {
           pages: Math.ceil(total / limit),
         },
       },
-    })
+    }
+    await setNotificationCache(cacheKey, response)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -124,6 +142,7 @@ const markAsRead = async (req, res, next) => {
     }
 
     await notification.markAsRead();
+    await invalidateNotificationCache(userId);
 
     return res.status(200).json({
       success: true,
@@ -165,6 +184,7 @@ const markAllAsRead = async (req, res, next) => {
     const result = await Notification.updateMany(filter, {
       $set: { read: true, readAt: new Date() },
     })
+    await invalidateNotificationCache(userId)
 
     return res.status(200).json({
       success: true,
@@ -212,6 +232,7 @@ const sendNotification = async (req, res, next) => {
     });
 
     await notification.save();
+    await invalidateNotificationCache(userId);
 
     return res.status(201).json({
       success: true,

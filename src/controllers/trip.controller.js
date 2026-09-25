@@ -90,6 +90,13 @@ const {
   buildTripListCacheKey
 } = require('../utils/tripCache')
 const { getCache, setCache } = require('../utils/cache')
+const {
+  TRIP_TTL,
+  tripKey,
+  getTripReadCache,
+  setTripReadCache,
+  invalidateTripReadCache
+} = require('../utils/tripReadCache')
 
 const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
   bookedBy: 'CUSTOMER',
@@ -1701,6 +1708,10 @@ const getTripGroup = async (req, res, next) => {
       }
     }
 
+    const cacheKey = tripKey(id)
+    const cached = await getTripReadCache(cacheKey)
+    if (cached) return res.json(cached)
+
     const routes = Array.from(routesByIndex.values()).sort(
       (a, b) => a.routeIndex - b.routeIndex
     )
@@ -1976,10 +1987,12 @@ const getTripById = async (req, res, next) => {
       data.marketplacePayment = marketplacePayment
     }
 
-    res.json({
+    const response = {
       success: true,
       data
-    })
+    }
+    await setTripReadCache(cacheKey, response, TRIP_TTL)
+    res.json(response)
   } catch (error) {
     next(error)
   }
@@ -2045,6 +2058,7 @@ const updateTrip = async (req, res, next) => {
       }
       setAuditActor(trip, req.user)
       await trip.save()
+      await invalidateTripReadCache(id)
       if (
         pickupLocation !== undefined ||
         intermediateLocation !== undefined ||
@@ -2358,6 +2372,7 @@ const updateTrip = async (req, res, next) => {
 
     setAuditActor(trip, req.user)
     await trip.save()
+    await invalidateTripReadCache(id)
     if (
       trip.status === TRIP_STATUS.PLANNED &&
       (vehicleId !== undefined ||

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { invalidateNotificationCache } = require('../utils/notificationCache');
 
 const notificationSchema = new mongoose.Schema(
   {
@@ -95,5 +96,13 @@ notificationSchema.methods.markAsRead = function () {
   this.readAt = new Date();
   return this.save();
 };
+
+notificationSchema.post('save', async (notification) => {
+  await invalidateNotificationCache(notification.userId);
+});
+
+notificationSchema.post('findOneAndDelete', async (notification) => {
+  if (notification) await invalidateNotificationCache(notification.userId);
+});
 
 module.exports = mongoose.model('Notification', notificationSchema);

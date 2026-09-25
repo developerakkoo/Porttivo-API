@@ -16,12 +16,16 @@ const {
 } = require('../utils/marketplaceChatAttachments');
 const {
   conversationKey,
-  unreadKey,
   getChatCache,
   setConversationCache,
-  setUnreadCache,
   invalidateChatCache
 } = require('../utils/chatCache');
+const {
+  unreadMessageKey,
+  getUnreadMessageCache,
+  setUnreadMessageCache,
+  invalidateUnreadMessageCache
+} = require('../utils/unreadMessageCache')
 
 /**
  * Send a message in booking conversation
@@ -103,6 +107,7 @@ const sendMessage = async (req, res, next) => {
     });
     await invalidateChatCache({ bookingId, userId: senderId });
     await invalidateChatCache({ bookingId, userId: receiverId });
+    await invalidateUnreadMessageCache(receiverId)
 
     const populatedMessage = await TransporterMessage.findById(message._id)
       .populate('senderId', 'name mobile company')
@@ -234,6 +239,7 @@ const getConversation = async (req, res, next) => {
       }
     );
     await invalidateChatCache({ bookingId, userId });
+    await invalidateUnreadMessageCache(userId)
 
     const messageFilter = { bookingId };
     let incremental = false;
@@ -408,6 +414,7 @@ const markAsRead = async (req, res, next) => {
       bookingId: message.bookingId,
       userId
     });
+    await invalidateUnreadMessageCache(userId)
 
     try {
       const io = getIO();
@@ -444,8 +451,8 @@ const getUnreadCount = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Only transporter accounts can view unread counts' });
     }
 
-    const cacheKey = unreadKey(userId);
-    const cached = await getChatCache(cacheKey);
+    const cacheKey = unreadMessageKey(userId);
+    const cached = await getUnreadMessageCache(cacheKey);
     if (cached) {
       return res.status(200).json(cached);
     }
@@ -480,7 +487,7 @@ const getUnreadCount = async (req, res, next) => {
         })),
       },
     };
-    await setUnreadCache(cacheKey, response);
+    await setUnreadMessageCache(cacheKey, response);
     return res.status(200).json(response);
   } catch (error) {
     next(error);
@@ -525,6 +532,7 @@ const deleteMessage = async (req, res, next) => {
       bookingId: message.bookingId,
       userId: message.senderId
     });
+    await invalidateUnreadMessageCache(message.receiverId)
 
     return res.status(200).json({
       success: true,

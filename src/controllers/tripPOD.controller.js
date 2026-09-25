@@ -23,6 +23,7 @@ const {
   getMilestoneTypeByNumber
 } = require('../utils/milestoneMapping')
 const { sendTripCompletedTemplate } = require('../services/wati.service')
+const { invalidateTripReadCache } = require('../utils/tripReadCache')
 
 const triggerWatiTemplate = async (handler, contextLabel) => {
   try {
@@ -156,6 +157,7 @@ const uploadPOD = async (req, res, next) => {
     }
 
     await trip.save()
+    await invalidateTripReadCache(id)
     await releaseTripResources(trip)
 
     // Populate references
@@ -299,6 +301,7 @@ const approvePOD = async (req, res, next) => {
       userType: toAuditUserType(req.user.userType)
     }
     await trip.save()
+    await invalidateTripReadCache(id)
 
     await completeMarketplaceBookingAfterTripClosed(trip)
 
