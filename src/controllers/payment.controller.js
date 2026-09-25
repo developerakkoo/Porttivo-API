@@ -23,6 +23,13 @@ const {
 
 const Payout = require('../models/Payout')
 const { getTransporterUnifiedPaymentHistory } = require('../services/paymentHistory.service')
+const {
+  transporterPaymentHistoryKey,
+  adminPaymentHistoryKey,
+  getPaymentHistoryCache,
+  setPaymentHistoryCache,
+  invalidatePaymentHistoryCache
+} = require('../utils/paymentHistoryCache')
 
 const toObjectIdString = value => {
   if (!value) return null
@@ -823,6 +830,7 @@ const handleGatewayWebhook = async (req, res, next) => {
         payment.failedAt = new Date()
 
         await payment.save()
+        await invalidatePaymentHistoryCache()
 
         logger.error(`[${requestId}] Invalid webhook signature`, {
           paymentId: payment._id.toString()
@@ -901,6 +909,9 @@ const handleGatewayWebhook = async (req, res, next) => {
     }
 
     await payment.save()
+    if (previousStatus !== payment.status) {
+      await invalidatePaymentHistoryCache()
+    }
 
     logger.info(`[${requestId}] Payment updated`, {
       paymentId: payment._id.toString(),
@@ -1011,6 +1022,13 @@ const getTransporterPaymentHistory = async (req, res, next) => {
     const search = req.query.search || null
     const page = Math.max(Number(req.query.page) || 1, 1)
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+    const query = {
+      direction, status, provider, category, period, fromDate, toDate,
+      startTime, endTime, search, page, limit
+    }
+    const cacheKey = transporterPaymentHistoryKey(transporterId, query)
+    const cached = await getPaymentHistoryCache(cacheKey)
+    if (cached) return res.status(200).json(cached)
 
     const result = await getTransporterUnifiedPaymentHistory({
       transporterId,
@@ -1028,11 +1046,13 @@ const getTransporterPaymentHistory = async (req, res, next) => {
       limit
     })
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Transporter payment history retrieved successfully',
       data: result
-    })
+    }
+    await setPaymentHistoryCache(cacheKey, response)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -1069,6 +1089,13 @@ const getAdminPaymentHistory = async (req, res, next) => {
       const search = req.query.search || null
       const page = Math.max(Number(req.query.page) || 1, 1)
       const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+      const query = {
+        transporterId, direction, status, provider, category, period,
+        fromDate, toDate, startTime, endTime, search, page, limit
+      }
+      const cacheKey = adminPaymentHistoryKey(query)
+      const cached = await getPaymentHistoryCache(cacheKey)
+      if (cached) return res.status(200).json(cached)
 
       const result = await getTransporterUnifiedPaymentHistory({
         transporterId,
@@ -1086,15 +1113,26 @@ const getAdminPaymentHistory = async (req, res, next) => {
         limit
       })
 
-      return res.status(200).json({
+      const response = {
         success: true,
         message: 'Transporter payment history retrieved successfully',
         data: result
-      })
+      }
+      await setPaymentHistoryCache(cacheKey, response)
+      return res.status(200).json(response)
     }
 
     const page = Math.max(Number(req.query.page) || 1, 1)
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100)
+    const cacheKey = adminPaymentHistoryKey({
+      query: Object.keys(req.query)
+        .sort()
+        .reduce((result, key) => ({ ...result, [key]: req.query[key] }), {}),
+      page,
+      limit
+    })
+    const cached = await getPaymentHistoryCache(cacheKey)
+    if (cached) return res.status(200).json(cached)
     const skip = (page - 1) * limit
 
     const filter = {}
@@ -1310,7 +1348,7 @@ const getAdminPaymentHistory = async (req, res, next) => {
       results = results.filter(item => item.payoutStatus === payoutStatus)
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         page,
@@ -1321,7 +1359,9 @@ const getAdminPaymentHistory = async (req, res, next) => {
         hasPrevious: page > 1,
         payments: results
       }
-    })
+    }
+    await setPaymentHistoryCache(cacheKey, response)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }

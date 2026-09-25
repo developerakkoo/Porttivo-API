@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const { invalidatePaymentHistoryCache } = require('../utils/paymentHistoryCache')
 
 const payoutSchema = new mongoose.Schema(
   {
@@ -244,5 +245,13 @@ payoutSchema.index(
 )
 payoutSchema.index({ 'razorpay.fundAccountId': 1 })
 payoutSchema.index({ status: 1, 'retry.nextRetryAt': 1, updatedAt: -1 })
+
+payoutSchema.post('save', async () => {
+  await invalidatePaymentHistoryCache()
+})
+
+payoutSchema.post('findOneAndUpdate', async () => {
+  await invalidatePaymentHistoryCache()
+})
 
 module.exports = mongoose.model('Payout', payoutSchema)

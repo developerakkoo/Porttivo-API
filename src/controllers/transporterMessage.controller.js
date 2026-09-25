@@ -14,6 +14,14 @@ const {
   bookingAllowsParticipantChat,
   effectiveChatMessageType
 } = require('../utils/marketplaceChatAttachments');
+const {
+  conversationKey,
+  unreadKey,
+  getChatCache,
+  setConversationCache,
+  setUnreadCache,
+  invalidateChatCache
+} = require('../utils/chatCache');
 
 /**
  * Send a message in booking conversation
@@ -93,6 +101,8 @@ const sendMessage = async (req, res, next) => {
       status: 'DELIVERED',
       attachments,
     });
+    await invalidateChatCache({ bookingId, userId: senderId });
+    await invalidateChatCache({ bookingId, userId: receiverId });
 
     const populatedMessage = await TransporterMessage.findById(message._id)
       .populate('senderId', 'name mobile company')
@@ -223,10 +233,16 @@ const getConversation = async (req, res, next) => {
         readAt: new Date(),
       }
     );
+    await invalidateChatCache({ bookingId, userId });
 
     const messageFilter = { bookingId };
     let incremental = false;
     const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
+
+    const cacheKey = !afterMessageId && !afterCreatedAt
+      ? conversationKey(bookingId, Number(page) || 1, lim)
+      : null;
+    const cachedConversation = cacheKey ? await getChatCache(cacheKey) : null;
 
     if (afterMessageId && mongoose.Types.ObjectId.isValid(afterMessageId)) {
       const anchor = await TransporterMessage.findById(afterMessageId)
@@ -253,13 +269,18 @@ const getConversation = async (req, res, next) => {
     }
 
     let messages;
-    if (incremental) {
+    let pagination;
+    if (cachedConversation) {
+      messages = cachedConversation.messages;
+      pagination = cachedConversation.pagination;
+    } else if (incremental) {
       messages = await TransporterMessage.find(messageFilter)
         .populate('senderId', 'name mobile company')
         .populate('receiverId', 'name mobile')
         .sort({ createdAt: 1 })
         .limit(lim)
         .lean();
+      pagination = null;
     } else {
       const skip = (Number(page) - 1) * lim;
       messages = await TransporterMessage.find(messageFilter)
@@ -269,9 +290,17 @@ const getConversation = async (req, res, next) => {
         .skip(skip)
         .limit(lim)
         .lean();
+      pagination = {
+        page: Number(page),
+        limit: lim,
+        total: await TransporterMessage.countDocuments({ bookingId }),
+        pages: 0
+      };
+      pagination.pages = Math.ceil(pagination.total / lim);
+      if (cacheKey) await setConversationCache(cacheKey, { messages, pagination });
     }
 
-    const total = await TransporterMessage.countDocuments({ bookingId });
+    const total = pagination?.total ?? await TransporterMessage.countDocuments({ bookingId });
 
     const unreadCount = await TransporterMessage.countDocuments({
       bookingId,
@@ -284,14 +313,7 @@ const getConversation = async (req, res, next) => {
       data: {
         messages,
         incremental,
-        pagination: incremental
-          ? null
-          : {
-              page: Number(page),
-              limit: lim,
-              total,
-              pages: Math.ceil(total / lim),
-            },
+        pagination: incremental ? null : pagination,
         unreadCount,
         otherParty: {
           id: otherPartyId,
@@ -338,6 +360,7 @@ const markBookingReadAll = async (req, res, next) => {
         readAt: now,
       }
     );
+    await invalidateChatCache({ bookingId, userId });
 
     return res.status(200).json({
       success: true,
@@ -381,6 +404,10 @@ const markAsRead = async (req, res, next) => {
     message.status = 'READ';
     message.readAt = new Date();
     await message.save();
+    await invalidateChatCache({
+      bookingId: message.bookingId,
+      userId
+    });
 
     try {
       const io = getIO();
@@ -417,6 +444,12 @@ const getUnreadCount = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Only transporter accounts can view unread counts' });
     }
 
+    const cacheKey = unreadKey(userId);
+    const cached = await getChatCache(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
     const totalUnread = await TransporterMessage.countDocuments({
       receiverId: userId,
       status: { $ne: 'READ' },
@@ -437,7 +470,7 @@ const getUnreadCount = async (req, res, next) => {
       },
     ]);
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         totalUnread,
@@ -446,7 +479,9 @@ const getUnreadCount = async (req, res, next) => {
           unreadCount: item.count,
         })),
       },
-    });
+    };
+    await setUnreadCache(cacheKey, response);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -482,6 +517,14 @@ const deleteMessage = async (req, res, next) => {
     // Mark as deleted by updating content
     message.content = '[Message deleted]';
     await message.save();
+    await invalidateChatCache({
+      bookingId: message.bookingId,
+      userId: message.receiverId
+    });
+    await invalidateChatCache({
+      bookingId: message.bookingId,
+      userId: message.senderId
+    });
 
     return res.status(200).json({
       success: true,

@@ -12,6 +12,7 @@ const transporterPaymentHistoryTests = require('../tests/transporterPaymentHisto
 const requirementCacheTests = require('../tests/requirementCache.test');
 const requirementQuotesCacheTests = require('../tests/requirementQuotesCache.test');
 const kycTests = require('../tests/kyc.test');
+const paymentChatCacheTests = require('../tests/paymentChatCache.test');
 
 const buildTripCreateController = (overrides = {}) =>
   loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
@@ -98,6 +99,7 @@ const tests = [
   ...requirementCacheTests,
   ...requirementQuotesCacheTests,
   ...kycTests,
+  ...paymentChatCacheTests,
   {
     name: 'active customer trips include driver location and trip progress',
     async run() {

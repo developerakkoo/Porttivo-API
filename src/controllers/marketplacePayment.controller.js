@@ -15,6 +15,7 @@ const {
   getGatewayPayloadMetadata,
   verifyGatewayWebhook
 } = require('../services/paymentGateway.service')
+const { invalidatePaymentHistoryCache } = require('../utils/paymentHistoryCache')
 const {
   createAutomaticPayoutForPayment
 } = require('../services/cashfreePayout.service')
@@ -370,6 +371,7 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
       payment.paymentResponse = { ...body, verified: false }
       payment.failedAt = new Date()
       await payment.save()
+      await invalidatePaymentHistoryCache()
 
       logger.error(
         `[${requestId}] Marketplace Razorpay webhook failed verification`,
@@ -411,6 +413,9 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
     }
 
     await payment.save()
+    if (previousStatus !== payment.status) {
+      await invalidatePaymentHistoryCache()
+    }
 
     const booking = await VehicleBooking.findById(payment.bookingId)
     if (booking) {
