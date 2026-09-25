@@ -4,7 +4,7 @@ const path = require('node:path')
 const { loadWithMocks } = require('./helpers/loadWithMocks')
 const { createMockRes } = require('./helpers/http')
 
-const loadAdminController = (cache, logs) =>
+const loadAdminController = (cache, logs, overrides = {}) =>
   loadWithMocks(path.resolve(__dirname, '..', 'src', 'controllers', 'admin.controller.js'), {
     '../models/Admin': {},
     '../models/Transporter': {
@@ -21,8 +21,8 @@ const loadAdminController = (cache, logs) =>
     '../models/PumpOwner': {},
     '../models/PumpStaff': {},
     '../models/CompanyUser': {},
-    '../models/Customer': {},
-    '../models/Trip': {},
+    '../models/Customer': overrides.Customer || {},
+    '../models/Trip': overrides.Trip || {},
     '../models/Vehicle': {},
     '../models/VehicleRouteAvailability': {},
     '../models/VehicleRouteAssignment': {},
@@ -30,10 +30,10 @@ const loadAdminController = (cache, logs) =>
     '../models/FuelTransaction': {},
     '../models/Settlement': {},
     '../models/Wallet': {},
-    '../models/SystemConfig': {},
+    '../models/SystemConfig': overrides.SystemConfig || {},
     '../models/AdminAuditLog': {},
     '../models/AuditLog': {},
-    '../models/SavedLocation': {},
+    '../models/SavedLocation': overrides.SavedLocation || {},
     '../services/jwt.service': { generateTokens: () => ({}) },
     '../utils/tripState': {
       TRIP_STATUS: { ACTIVE: 'ACTIVE', PAUSED: 'PAUSED', POD_PENDING: 'POD_PENDING', CANCELLED: 'CANCELLED' },
@@ -113,4 +113,80 @@ test('admin cache invalidation logs patterns after transporter status update', {
   assert.equal(res.statusCode, 200)
   assert.deepEqual(patterns, ['admin:dashboard-stats:*', 'admin:analytics:*', 'admin:transporters:*'])
   assert.ok(logs.some((entry) => entry[1] === 'ADMIN CACHE INVALIDATION'))
+})
+
+test('admin customer list caches hits and separates query keys', { concurrency: false }, async () => {
+  const cacheStore = new Map()
+  const writes = []
+  const logs = []
+  let customerQueries = 0
+  const cache = {
+    getCache: async (key) => cacheStore.get(key) || null,
+    setCache: async (key, value, ttl) => {
+      cacheStore.set(key, value)
+      writes.push({ key, ttl })
+      return true
+    },
+    deleteCache: async () => true,
+    deleteCachePattern: async () => true,
+  }
+  const controller = loadAdminController(cache, logs, {
+    Customer: {
+      find: () => {
+        customerQueries += 1
+        const chain = {
+          sort: () => chain,
+          skip: () => chain,
+          limit: () => chain,
+          lean: async () => [{ _id: `customer-${customerQueries}`, mobile: '9000000000', name: 'Customer', status: 'active' }],
+        }
+        return chain
+      },
+      countDocuments: async () => 1,
+    },
+    Trip: { countDocuments: async () => 2 },
+  })
+  const user = { id: 'admin-1', userType: 'admin' }
+
+  const first = createMockRes()
+  await controller.listAllCustomers({ user, query: { page: '1', limit: '20', search: 'alpha' } }, first, (error) => { throw error })
+  const second = createMockRes()
+  await controller.listAllCustomers({ user, query: { page: '1', limit: '20', search: 'alpha' } }, second, (error) => { throw error })
+  await controller.listAllCustomers({ user, query: { page: '1', limit: '20', search: 'beta' } }, createMockRes(), (error) => { throw error })
+
+  assert.equal(customerQueries, 2)
+  assert.equal(writes.length, 2)
+  assert.equal(writes[0].ttl, 60)
+  assert.deepEqual(second.body, first.body)
+  assert.equal([...cacheStore.keys()].filter((key) => key.startsWith('admin:customers:') && !key.endsWith(':ttl')).length, 2)
+  assert.ok(logs.some((entry) => entry[1] === 'CACHE HIT'))
+  assert.ok(logs.some((entry) => entry[1] === 'CACHE MISS'))
+  assert.ok(logs.some((entry) => entry[1] === 'DB QUERY'))
+  assert.ok(logs.some((entry) => entry[1] === 'CACHE SET'))
+})
+
+test('admin milestone rules cache fails safely when Redis SET is unavailable', { concurrency: false }, async () => {
+  const logs = []
+  const controller = loadAdminController({
+    getCache: async () => null,
+    setCache: async () => false,
+    deleteCache: async () => false,
+    deleteCachePattern: async () => false,
+  }, logs, {
+    SystemConfig: {
+      findOne: async () => ({ milestoneRules: { pickup: 10 }, updatedAt: new Date(), updatedBy: 'admin-1' }),
+    },
+  })
+
+  const res = createMockRes()
+  await controller.getMilestoneRules(
+    { user: { id: 'admin-1', userType: 'admin' }, query: {} },
+    res,
+    (error) => { throw error }
+  )
+
+  assert.equal(res.statusCode, 200)
+  assert.ok(logs.some((entry) => entry[1] === 'CACHE MISS'))
+  assert.ok(logs.some((entry) => entry[1] === 'DB QUERY'))
+  assert.ok(logs.some((entry) => entry[1] === 'CACHE SET SKIPPED'))
 })

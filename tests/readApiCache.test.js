@@ -105,7 +105,8 @@ test('trip read cache uses requested TTLs and invalidates every affected key fam
   ])
   assert.deepEqual(calls.patterns, [
     'porttivo:trip:trip-3:timeline:*',
-    'porttivo:trip:trip-3:location-trail:completed:*'
+    'porttivo:trip:trip-3:location-trail:completed:*',
+    'driver:trips:*'
   ])
 })
 

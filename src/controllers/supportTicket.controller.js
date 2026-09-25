@@ -4,6 +4,8 @@ const SupportTicketEvent = require('../models/SupportTicketEvent')
 const { getIO } = require('../services/socket.service')
 const { getTransporterActorId } = require('../utils/transporterActor')
 const supportTicketService = require('../services/supportTicket.service')
+const { getCache, setCache, deleteCachePattern } = require('../utils/cache')
+const logger = require('../utils/logger')
 const {
   buildCategoryFilter,
   getCategoriesMetadata
@@ -37,8 +39,53 @@ function addRequesterFilter(filter, { requesterType, requesterId }) {
   }
 }
 
-async function listTickets(req, res, filter) {
+function stableAdminSupportQuery(query = {}) {
+  const sortValue = value => {
+    if (Array.isArray(value)) return value.map(sortValue)
+    if (value && typeof value === 'object') {
+      return Object.keys(value).sort().reduce((result, key) => {
+        result[key] = sortValue(value[key])
+        return result
+      }, {})
+    }
+    return value
+  }
+
+  return encodeURIComponent(JSON.stringify(sortValue(query)))
+}
+
+function buildAdminSupportCacheKey(resource, req, id = '') {
+  const adminId = encodeURIComponent(String(req.user?.id || req.user?._id || ''))
+  const identifier = id ? `${encodeURIComponent(String(id))}:` : ''
+  return `admin:support:${resource}:${adminId}:${identifier}${stableAdminSupportQuery(req.query)}`
+}
+
+async function readAdminSupportCache(cacheKey) {
+  const cached = await getCache(cacheKey)
+  logger.info(cached !== null ? 'CACHE HIT' : 'CACHE MISS', { scope: 'ADMIN', cacheKey })
+  return cached
+}
+
+async function writeAdminSupportCache(cacheKey, response, ttlSeconds) {
+  const cached = await setCache(cacheKey, response, ttlSeconds)
+  logger.info(cached ? 'CACHE SET' : 'CACHE SET SKIPPED', {
+    scope: 'ADMIN',
+    cacheKey,
+    ttlSeconds
+  })
+}
+
+async function invalidateAdminSupportCaches() {
+  const pattern = 'admin:support:*'
+  const result = await deleteCachePattern(pattern)
+  logger.info('CACHE INVALIDATION', { scope: 'ADMIN', pattern, skipped: !result })
+}
+
+async function listTickets(req, res, filter, cacheOptions = null) {
   const { page, limit, skip } = normalizePage(req.query)
+  if (cacheOptions) {
+    logger.info('DB QUERY', { scope: 'ADMIN', resource: 'support-tickets', cacheKey: cacheOptions.cacheKey })
+  }
   const [tickets, total] = await Promise.all([
     SupportTicket.find(filter)
       .sort({ updatedAt: -1 })
@@ -50,13 +97,18 @@ async function listTickets(req, res, filter) {
     SupportTicket.countDocuments(filter)
   ])
 
-  return res.json({
+  const response = {
     success: true,
     data: {
       tickets,
       pagination: { page, limit, total, pages: Math.ceil(total / limit) }
     }
-  })
+  }
+
+  if (cacheOptions) {
+    await writeAdminSupportCache(cacheOptions.cacheKey, response, cacheOptions.ttlSeconds)
+  }
+  return res.json(response)
 }
 
 async function getTicketById(ticketId, access) {
@@ -85,6 +137,7 @@ async function sendSupportMessage(req, res, next, senderType, senderId, access) 
         attachmentsRaw: req.body.attachments
       }
     )
+    await invalidateAdminSupportCaches()
 
     return res.status(201).json({
       success: true,
@@ -129,7 +182,25 @@ exports.getSupportCategories = async (req, res, next) => {
   }
 }
 
-exports.getSupportCategoriesAdmin = exports.getSupportCategories
+exports.getSupportCategoriesAdmin = async (req, res, next) => {
+  if (req.user?.userType !== 'admin') {
+    return res.status(403).json({ success: false, message: 'Forbidden' })
+  }
+
+  const cacheKey = buildAdminSupportCacheKey('categories', req)
+  const cachedResponse = await readAdminSupportCache(cacheKey)
+  if (cachedResponse !== null) {
+    return res.json(cachedResponse)
+  }
+
+  logger.info('DB QUERY', { scope: 'ADMIN', resource: 'support-categories', cacheKey })
+  const response = {
+    success: true,
+    data: { categories: getCategoriesMetadata() }
+  }
+  await writeAdminSupportCache(cacheKey, response, 60)
+  return res.json(response)
+}
 exports.getSupportCategoriesTransporter = exports.getSupportCategories
 exports.getSupportCategoriesCustomer = exports.getSupportCategories
 
@@ -145,6 +216,7 @@ exports.createTicketTransporter = async (req, res, next) => {
       supportTicketService.getRequesterInfoFromUser(req.user),
       req.body
     )
+      await invalidateAdminSupportCaches()
     return res.status(201).json({ success: true, data: { ticket, message } })
   } catch (err) {
     if (err.status) {
@@ -170,6 +242,7 @@ exports.createTicketCustomer = async (req, res, next) => {
       },
       req.body
     )
+      await invalidateAdminSupportCaches()
     return res.status(201).json({ success: true, data: { ticket, message } })
   } catch (err) {
     if (err.status) {
@@ -320,6 +393,7 @@ exports.postTicketRatingTransporter = async (req, res, next) => {
       transporterId,
       { score: req.body.score, comment: req.body.comment }
     )
+      await invalidateAdminSupportCaches()
     return res.json({ success: true, data: { ticket } })
   } catch (err) {
     if (err.status) {
@@ -345,6 +419,7 @@ exports.postTicketRatingCustomer = async (req, res, next) => {
       customerId,
       { score: req.body.score, comment: req.body.comment }
     )
+      await invalidateAdminSupportCaches()
     return res.json({ success: true, data: { ticket } })
   } catch (err) {
     if (err.status) {
@@ -367,6 +442,7 @@ exports.patchTicketTransporter = async (req, res, next) => {
     const io = safeIO()
     const freshTicket = await SupportTicket.findById(ticket._id).lean()
     supportTicketService.broadcastTicketUpdated(io, freshTicket)
+      await invalidateAdminSupportCaches()
     return res.json({ success: true, data: { ticket: freshTicket } })
   } catch (err) {
     if (err.status === 404) {
@@ -392,6 +468,7 @@ exports.patchTicketCustomer = async (req, res, next) => {
     const io = safeIO()
     const freshTicket = await SupportTicket.findById(ticket._id).lean()
     supportTicketService.broadcastTicketUpdated(io, freshTicket)
+      await invalidateAdminSupportCaches()
     return res.json({ success: true, data: { ticket: freshTicket } })
   } catch (err) {
     if (err.status === 404) {
@@ -420,6 +497,10 @@ exports.markMessageReadCustomer = async (req, res, next) => {
 
 exports.listTicketsAdmin = async (req, res, next) => {
   try {
+    if (req.user?.userType !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Forbidden' })
+    }
+
     const filter = {}
     if (req.query.status) filter.status = req.query.status
     if (req.query.requesterType && ['transporter', 'customer'].includes(req.query.requesterType)) {
@@ -444,7 +525,13 @@ exports.listTicketsAdmin = async (req, res, next) => {
       Object.assign(filter, categoryFilter)
     }
 
-    return await listTickets(req, res, filter)
+    const cacheKey = buildAdminSupportCacheKey('tickets', req)
+    const cachedResponse = await readAdminSupportCache(cacheKey)
+    if (cachedResponse !== null) {
+      return res.json(cachedResponse)
+    }
+
+    return await listTickets(req, res, filter, { cacheKey, ttlSeconds: 30 })
   } catch (err) {
     next(err)
   }
@@ -505,6 +592,7 @@ exports.postMessageAdmin = async (req, res, next) => {
         attachmentsRaw: req.body.attachments
       }
     )
+    await invalidateAdminSupportCaches()
     return res.status(201).json({
       success: true,
       data: { message, ticket: fresh }
@@ -529,6 +617,7 @@ exports.patchTicketAdmin = async (req, res, next) => {
       req.user.id,
       { status: req.body.status, subject: req.body.subject }
     )
+      await invalidateAdminSupportCaches()
     return res.json({ success: true, data: { ticket: fresh } })
   } catch (err) {
     if (err.status) {

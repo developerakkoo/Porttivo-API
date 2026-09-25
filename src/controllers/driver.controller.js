@@ -10,6 +10,26 @@ const { getDriverAvailabilityState } = require('../utils/vehicleValidation')
 const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
 const logger = require('../utils/logger')
 
+const DRIVER_ACTIVE_TRIP_CACHE_TTL = 10
+const DRIVER_QUEUED_TRIPS_CACHE_TTL = 15
+const DRIVER_TRIP_HISTORY_CACHE_TTL = 60
+
+const buildDriverTripCacheKey = (type, driverId, query = {}) => {
+  const querySuffix = type === 'history'
+    ? `:page=${query.page}:limit=${query.limit}:status=${query.status || ''}`
+    : ''
+  return `driver:trips:${type}:${driverId}${querySuffix}`
+}
+
+const cacheDriverTripResponse = async (cacheKey, response, ttl) => {
+  const cached = await setCache(cacheKey, response, ttl)
+  if (cached) {
+    logger.info('CACHE SET', { cacheKey, ttl })
+  } else {
+    logger.info('CACHE SET SKIPPED', { cacheKey, ttl })
+  }
+}
+
 const normalizeOptionalMobile = (value, fieldName) => {
   if (value === undefined || value === null || value === '') return null
   const cleanedMobile = String(value).replace(/\D/g, '')
@@ -701,6 +721,16 @@ const getActiveTrip = async (req, res, next) => {
     }
 
     const driverId = req.user.id
+    const cacheKey = buildDriverTripCacheKey('active', driverId)
+    const cachedResponse = await getCache(cacheKey)
+
+    if (cachedResponse) {
+      logger.info('CACHE HIT', { cacheKey })
+      return res.status(200).json(cachedResponse)
+    }
+
+    logger.info('CACHE MISS', { cacheKey })
+    logger.info('DB QUERY', { cacheKey })
 
     // Find active trip assigned to driver
     const activeTrip = await Trip.findOne({
@@ -711,29 +741,30 @@ const getActiveTrip = async (req, res, next) => {
       .populate('transporterId', 'name company')
       .sort({ createdAt: -1 })
 
-    if (!activeTrip) {
-      return res.status(200).json({
+    const response = !activeTrip
+      ? {
         success: true,
         message: 'No active trip found',
         data: {
           trip: null
         }
-      })
-    }
-
-    // Get current milestone info
-    const currentMilestone = activeTrip.getCurrentMilestone()
-
-    return res.status(200).json({
-      success: true,
-      message: 'Active trip retrieved successfully',
-      data: {
-        trip: {
-          ...activeTrip.toObject(),
-          currentMilestone
-        }
       }
-    })
+      : (() => {
+        const currentMilestone = activeTrip.getCurrentMilestone()
+        return {
+          success: true,
+          message: 'Active trip retrieved successfully',
+          data: {
+            trip: {
+              ...activeTrip.toObject(),
+              currentMilestone
+            }
+          }
+        }
+      })()
+
+    await cacheDriverTripResponse(cacheKey, response, DRIVER_ACTIVE_TRIP_CACHE_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -754,6 +785,16 @@ const getQueuedTrips = async (req, res, next) => {
     }
 
     const driverId = req.user.id
+    const cacheKey = buildDriverTripCacheKey('queued', driverId)
+    const cachedResponse = await getCache(cacheKey)
+
+    if (cachedResponse) {
+      logger.info('CACHE HIT', { cacheKey })
+      return res.status(200).json(cachedResponse)
+    }
+
+    logger.info('CACHE MISS', { cacheKey })
+    logger.info('DB QUERY', { cacheKey })
 
     // Find queued trips assigned to driver
     const queuedTrips = await Trip.find({
@@ -764,14 +805,17 @@ const getQueuedTrips = async (req, res, next) => {
       .populate('transporterId', 'name company')
       .sort({ createdAt: 1 }) // Oldest first (FIFO)
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Queued trips retrieved successfully',
       data: {
         trips: queuedTrips,
         count: queuedTrips.length
       }
-    })
+    }
+
+    await cacheDriverTripResponse(cacheKey, response, DRIVER_QUEUED_TRIPS_CACHE_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -793,6 +837,22 @@ const getTripHistory = async (req, res, next) => {
 
     const driverId = req.user.id
     const { page = 1, limit = 20, status } = req.query
+    const pageNum = parseInt(page)
+    const limitNum = parseInt(limit)
+    const cacheKey = buildDriverTripCacheKey('history', driverId, {
+      page: pageNum,
+      limit: limitNum,
+      status
+    })
+    const cachedResponse = await getCache(cacheKey)
+
+    if (cachedResponse) {
+      logger.info('CACHE HIT', { cacheKey })
+      return res.status(200).json(cachedResponse)
+    }
+
+    logger.info('CACHE MISS', { cacheKey })
+    logger.info('DB QUERY', { cacheKey })
 
     // Build query - exclude PLANNED and ACTIVE trips (those are current/queued)
     const query = {
@@ -805,8 +865,6 @@ const getTripHistory = async (req, res, next) => {
     }
 
     // Pagination
-    const pageNum = parseInt(page)
-    const limitNum = parseInt(limit)
     const skip = (pageNum - 1) * limitNum
 
     const trips = await Trip.find(query)
@@ -818,7 +876,7 @@ const getTripHistory = async (req, res, next) => {
 
     const total = await Trip.countDocuments(query)
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Trip history retrieved successfully',
       data: {
@@ -830,7 +888,10 @@ const getTripHistory = async (req, res, next) => {
           pages: Math.ceil(total / limitNum)
         }
       }
-    })
+    }
+
+    await cacheDriverTripResponse(cacheKey, response, DRIVER_TRIP_HISTORY_CACHE_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }

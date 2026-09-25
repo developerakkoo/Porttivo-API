@@ -83,13 +83,20 @@ const {
 const { buildTrackingMetrics } = require('../services/tripEta.service')
 const {
   TRIP_LIST_CACHE_TTL,
+  TRIP_SEARCH_CACHE_TTL,
+  TRIP_ACTIVE_CACHE_TTL,
+  TRIP_STATUS_CACHE_TTL,
+  TRIP_MARKETPLACE_AWARDED_CACHE_TTL,
+  TRIP_PENDING_POD_CACHE_TTL,
   TRIP_DRAFT_LIST_CACHE_TTL,
   TRIP_DRAFT_DETAIL_CACHE_TTL,
   buildTripDraftListCacheKey,
   buildTripDraftDetailCacheKey,
-  buildTripListCacheKey
+  buildTripListCacheKey,
+  buildTripReadCacheKey
 } = require('../utils/tripCache')
 const { getCache, setCache } = require('../utils/cache')
+const logger = require('../utils/logger')
 const {
   TRIP_TTL,
   tripKey,
@@ -104,6 +111,19 @@ const TRANSPORTER_VISIBLE_BOOKING_QUERY = {
   bookingStatus: BOOKING_STATUS.OPEN,
   acceptedTransporterId: null
 }
+
+const getTripListCacheResponse = async cacheKey => {
+  const cachedResponse = await getCache(cacheKey)
+  logger.info(cachedResponse ? 'CACHE HIT' : 'CACHE MISS', { cacheKey })
+  return cachedResponse
+}
+
+const setTripListCacheResponse = async (cacheKey, response, ttl) => {
+  const cached = await setCache(cacheKey, response, ttl)
+  logger.info(cached ? 'CACHE SET' : 'CACHE SET SKIPPED', { cacheKey, ttl })
+}
+
+const logTripDbQuery = cacheKey => logger.info('DB QUERY', { cacheKey })
 
 const isFiniteCoordinate = value => Number.isFinite(Number(value))
 
@@ -2613,6 +2633,13 @@ const searchTrips = async (req, res, next) => {
       })
     }
 
+    const cacheKey = buildTripReadCacheKey('search', req.user, transporterId, req.query)
+    const cachedResponse = await getTripListCacheResponse(cacheKey)
+    if (cachedResponse) {
+      return res.status(200).json(cachedResponse)
+    }
+    logTripDbQuery(cacheKey)
+
     const searchTerm = (q || containerNumber || reference).trim()
     const searchClause = {
       $or: [
@@ -2645,7 +2672,7 @@ const searchTrips = async (req, res, next) => {
 
     const total = await Trip.countDocuments(query)
 
-    res.json({
+    const response = {
       success: true,
       data: await serializeTripsWithQueue(
         trips,
@@ -2657,7 +2684,10 @@ const searchTrips = async (req, res, next) => {
         total,
         pages: Math.ceil(total / limitNum)
       }
-    })
+    }
+
+    await setTripListCacheResponse(cacheKey, response, TRIP_SEARCH_CACHE_TTL)
+    res.json(response)
   } catch (error) {
     next(error)
   }
@@ -2693,6 +2723,12 @@ const getActiveTrips = async (req, res, next) => {
     }
 
     const { transporterId: queryTransporterId } = req.query
+    const cacheKey = buildTripReadCacheKey('active', req.user, transporterId, req.query)
+    const cachedResponse = await getTripListCacheResponse(cacheKey)
+    if (cachedResponse) {
+      return res.status(200).json(cachedResponse)
+    }
+    logTripDbQuery(cacheKey)
 
     // Build query - admins can see all or filter by transporterId
     const query = { status: { $in: [TRIP_STATUS.ACTIVE, TRIP_STATUS.PAUSED] } }
@@ -2707,7 +2743,7 @@ const getActiveTrips = async (req, res, next) => {
       .populate('driverId', 'name mobile')
       .sort({ createdAt: -1 })
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Active trips retrieved successfully',
       data: {
@@ -2717,7 +2753,10 @@ const getActiveTrips = async (req, res, next) => {
         ),
         count: activeTrips.length
       }
-    })
+    }
+
+    await setTripListCacheResponse(cacheKey, response, TRIP_ACTIVE_CACHE_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -2752,6 +2791,12 @@ const getPendingPODTrips = async (req, res, next) => {
       })
     }
     const { page = 1, limit = 20 } = req.query
+    const cacheKey = buildTripReadCacheKey('pending-pod', req.user, transporterId, req.query)
+    const cachedResponse = await getTripListCacheResponse(cacheKey)
+    if (cachedResponse) {
+      return res.status(200).json(cachedResponse)
+    }
+    logTripDbQuery(cacheKey)
 
     // Build query - trips with POD uploaded but not approved
     const query = {
@@ -2779,7 +2824,7 @@ const getPendingPODTrips = async (req, res, next) => {
 
     const total = await Trip.countDocuments(query)
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Pending POD trips retrieved successfully',
       data: {
@@ -2794,7 +2839,10 @@ const getPendingPODTrips = async (req, res, next) => {
           pages: Math.ceil(total / limitNum)
         }
       }
-    })
+    }
+
+    await setTripListCacheResponse(cacheKey, response, TRIP_PENDING_POD_CACHE_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -2844,6 +2892,16 @@ const getTripsByStatus = async (req, res, next) => {
       })
     }
 
+    const cacheKey = buildTripReadCacheKey('status', req.user, transporterId, {
+      ...req.query,
+      status
+    })
+    const cachedResponse = await getTripListCacheResponse(cacheKey)
+    if (cachedResponse) {
+      return res.status(200).json(cachedResponse)
+    }
+    logTripDbQuery(cacheKey)
+
     // Build query - admins can see all or filter by transporterId
     const query = { status }
     if (!isAdmin) {
@@ -2866,7 +2924,7 @@ const getTripsByStatus = async (req, res, next) => {
 
     const total = await Trip.countDocuments(query)
 
-    res.json({
+    const response = {
       success: true,
       data: await serializeTripsWithQueue(
         trips,
@@ -2878,7 +2936,10 @@ const getTripsByStatus = async (req, res, next) => {
         total,
         pages: Math.ceil(total / limitNum)
       }
-    })
+    }
+
+    await setTripListCacheResponse(cacheKey, response, TRIP_STATUS_CACHE_TTL)
+    res.json(response)
   } catch (error) {
     next(error)
   }
@@ -4636,6 +4697,13 @@ const getMarketplaceAwardedTrips = async (req, res, next) => {
     }
 
     const { page = 1, limit = 20 } = req.query
+    const cacheKey = buildTripReadCacheKey('marketplace-awarded', req.user, transporterId, req.query)
+    const cachedResponse = await getTripListCacheResponse(cacheKey)
+    if (cachedResponse) {
+      return res.status(200).json(cachedResponse)
+    }
+    logTripDbQuery(cacheKey)
+
     const pageNum = parseInt(page)
     const limitNum = parseInt(limit)
     const skip = (pageNum - 1) * limitNum
@@ -4655,7 +4723,7 @@ const getMarketplaceAwardedTrips = async (req, res, next) => {
 
     const total = await Trip.countDocuments(query)
 
-    res.json({
+    const response = {
       success: true,
       data: await serializeTripsWithQueue(trips, {
         viewerTransporterId: transporterId
@@ -4666,7 +4734,10 @@ const getMarketplaceAwardedTrips = async (req, res, next) => {
         total,
         pages: Math.ceil(total / limitNum)
       }
-    })
+    }
+
+    await setTripListCacheResponse(cacheKey, response, TRIP_MARKETPLACE_AWARDED_CACHE_TTL)
+    res.json(response)
   } catch (error) {
     next(error)
   }

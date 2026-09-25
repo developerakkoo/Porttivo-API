@@ -5,6 +5,7 @@ const {
   deleteCache,
   deleteCachePattern
 } = require('./cache')
+const logger = require('./logger')
 
 const TRIP_TTL = 30
 const MILESTONE_TTL = 10
@@ -58,6 +59,14 @@ const invalidateTripReadCache = async tripId => {
       : await deleteCache(key)
     if (result) console.info(`INVALIDATE ${key}`)
   }))
+
+  const driverTripPattern = 'driver:trips:*'
+  const driverCacheInvalidated = await deleteCachePattern(driverTripPattern)
+  logger.info('CACHE INVALIDATION', {
+    pattern: driverTripPattern,
+    tripId,
+    skipped: !driverCacheInvalidated
+  })
 }
 
 module.exports = {

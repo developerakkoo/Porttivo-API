@@ -40,6 +40,8 @@ const ADMIN_ANALYTICS_CACHE_TTL = 60;
 const ADMIN_LIST_CACHE_TTL = 60;
 const ADMIN_DETAIL_CACHE_TTL = 120;
 const ADMIN_VEHICLE_TYPES_CACHE_TTL = 60 * 60;
+const ADMIN_RESOURCE_CACHE_TTL = 60;
+const ADMIN_AUDIT_CACHE_TTL = 30;
 
 const stableAdminQuery = (query = {}) => {
   const sortValue = (value) => {
@@ -57,15 +59,17 @@ const stableAdminQuery = (query = {}) => {
 };
 
 const buildAdminCacheKey = (resource, req, id = '') =>
-  `admin:${resource}:${id ? `${encodeURIComponent(String(id))}:` : ''}${stableAdminQuery(req.query)}`;
+  `admin:${resource}:${encodeURIComponent(String(req.user?.id || req.user?._id || ''))}:${id ? `${encodeURIComponent(String(id))}:` : ''}${stableAdminQuery(req.query)}`;
 
 const readAdminCache = async (cacheKey) => {
   const cached = await getCache(cacheKey);
   if (cached !== null) {
     logger.info('ADMIN CACHE HIT', { cacheKey });
+    logger.info('CACHE HIT', { scope: 'ADMIN', cacheKey });
     return cached;
   }
   logger.info('ADMIN CACHE MISS', { cacheKey });
+  logger.info('CACHE MISS', { scope: 'ADMIN', cacheKey });
   return null;
 };
 
@@ -73,14 +77,22 @@ const writeAdminCache = async (cacheKey, response, ttlSeconds) => {
   const cached = await setCache(cacheKey, response, ttlSeconds);
   if (cached) {
     logger.info('ADMIN CACHE SET', { cacheKey, ttlSeconds });
+    logger.info('CACHE SET', { scope: 'ADMIN', cacheKey, ttlSeconds });
   } else {
     logger.warn('ADMIN CACHE SKIP', { cacheKey, reason: 'Redis unavailable or SET failed' });
+    logger.info('CACHE SET SKIPPED', { scope: 'ADMIN', cacheKey, ttlSeconds });
   }
 };
 
 const invalidateAdminCaches = async (patterns) => {
-  await Promise.all(patterns.map((pattern) => deleteCachePattern(pattern)));
+  const results = await Promise.all(patterns.map((pattern) => deleteCachePattern(pattern)));
   logger.info('ADMIN CACHE INVALIDATION', { patterns });
+  logger.info('CACHE INVALIDATION', { scope: 'ADMIN', patterns, skipped: results.some((result) => !result) });
+};
+
+const logAdminDbQuery = (resource, cacheKey) => {
+  logger.info('ADMIN DB QUERY', { resource, cacheKey });
+  logger.info('DB QUERY', { scope: 'ADMIN', resource, cacheKey });
 };
 
 /**
@@ -784,6 +796,11 @@ const listAdminTrips = async (req, res, next) => {
  */
 const getAdminTripDetails = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('trip', req, req.params.id);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('trip', cacheKey);
+
     const trip = await Trip.findById(req.params.id)
       .populate('vehicleId', 'vehicleNumber trailerType status')
       .populate('driverId', 'name mobile status')
@@ -800,7 +817,7 @@ const getAdminTripDetails = async (req, res, next) => {
       });
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         trip: {
@@ -820,7 +837,9 @@ const getAdminTripDetails = async (req, res, next) => {
           },
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -973,6 +992,7 @@ const createSavedLocation = async (req, res, next) => {
         userType: 'ADMIN',
       },
     });
+    await invalidateAdminCaches(['admin:*']);
 
     await logAdminAction({
       adminId: req.user.id,
@@ -1003,6 +1023,11 @@ const createSavedLocation = async (req, res, next) => {
  */
 const listSavedLocationCatalog = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('saved-locations', req);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('saved-locations', cacheKey);
+
     const { page = 1, limit = 20, q, isActive } = req.query;
     const pageNum = parseInt(page, 10);
     const limitNum = parseInt(limit, 10);
@@ -1029,7 +1054,7 @@ const listSavedLocationCatalog = async (req, res, next) => {
       SavedLocation.countDocuments(query),
     ]);
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         savedLocations,
@@ -1040,7 +1065,9 @@ const listSavedLocationCatalog = async (req, res, next) => {
           pages: Math.ceil(total / limitNum),
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -1052,6 +1079,11 @@ const listSavedLocationCatalog = async (req, res, next) => {
  */
 const getSavedLocationDetails = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('saved-location', req, req.params.id);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('saved-location', cacheKey);
+
     const savedLocation = await SavedLocation.findById(req.params.id);
 
     if (!savedLocation) {
@@ -1061,12 +1093,14 @@ const getSavedLocationDetails = async (req, res, next) => {
       });
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         savedLocation,
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -1284,6 +1318,11 @@ const getVehicleAdminDetails = async (req, res, next) => {
       });
     }
 
+    const cacheKey = buildAdminCacheKey('vehicle', req, id);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('vehicle', cacheKey);
+
     const vehicle = await Vehicle.findById(id)
       .populate('transporterId', 'mobile name email company status hasAccess')
       .populate('originalOwnerId', 'mobile name email company status hasAccess')
@@ -1296,7 +1335,7 @@ const getVehicleAdminDetails = async (req, res, next) => {
       });
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         vehicle: {
@@ -1358,7 +1397,9 @@ const getVehicleAdminDetails = async (req, res, next) => {
           updatedAt: vehicle.updatedAt,
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -1376,6 +1417,11 @@ const getTransporterRoutePosts = async (req, res, next) => {
         message: 'Invalid ID format',
       });
     }
+
+    const cacheKey = buildAdminCacheKey('transporter-route-posts', req, req.params.id);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('transporter-route-posts', cacheKey);
 
     const transporter = await Transporter.findById(req.params.id)
       .select('mobile name email company status hasAccess walletBalance createdAt updatedAt pin')
@@ -1557,7 +1603,7 @@ const getTransporterRoutePosts = async (req, res, next) => {
       };
     });
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         transporter: {
@@ -1580,7 +1626,9 @@ const getTransporterRoutePosts = async (req, res, next) => {
           completedBookings: bookings.filter((booking) => booking.status === 'COMPLETED').length,
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -1598,6 +1646,11 @@ const getTransporterDetails = async (req, res, next) => {
         message: 'Invalid ID format',
       });
     }
+
+    const cacheKey = buildAdminCacheKey('transporter', req, req.params.id);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('transporter', cacheKey);
 
     // Vehicles/drivers are not embedded on Transporter; they reference transporterId.
     const transporter = await Transporter.findById(req.params.id).select('-pin');
@@ -1628,7 +1681,7 @@ const getTransporterDetails = async (req, res, next) => {
       return `${req.protocol}://${req.get('host')}${cleanPath}`;
     };
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         transporter: {
@@ -1693,7 +1746,9 @@ const getTransporterDetails = async (req, res, next) => {
           })),
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -2072,6 +2127,10 @@ const getDriverTimeline = async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
     const driverId = req.params.id;
+    const cacheKey = buildAdminCacheKey('driver-timeline', req, driverId);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('driver-timeline', cacheKey);
 
     // Build date filter
     const dateFilter = { driverId };
@@ -2124,10 +2183,12 @@ const getDriverTimeline = async (req, res, next) => {
 
     timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: { timeline },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -2585,6 +2646,11 @@ const listAllCompanyUsers = async (req, res, next) => {
  */
 const getCompanyUserDetails = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('company-user', req, req.params.id);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('company-user', cacheKey);
+
     const user = await CompanyUser.findById(req.params.id)
       .select('-pin')
       .populate('transporterId', 'name company');
@@ -2596,7 +2662,7 @@ const getCompanyUserDetails = async (req, res, next) => {
       });
     }
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         user: {
@@ -2617,7 +2683,9 @@ const getCompanyUserDetails = async (req, res, next) => {
           createdAt: user.createdAt,
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -2650,6 +2718,8 @@ const updateCompanyUserStatus = async (req, res, next) => {
         message: 'Company user not found',
       });
     }
+
+    await invalidateAdminCaches(['admin:*']);
 
     return res.status(200).json({
       success: true,
@@ -2715,6 +2785,11 @@ const updatePumpStaffStatus = async (req, res, next) => {
  */
 const listAllCustomers = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('customers', req);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('customers', cacheKey);
+
     const { page = 1, limit = 20, status, search } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -2753,7 +2828,7 @@ const listAllCustomers = async (req, res, next) => {
       createdAt: c.createdAt,
     }));
 
-    res.status(200).json({
+    const response = {
       success: true,
       data: {
         customers: customersWithCount,
@@ -2764,7 +2839,9 @@ const listAllCustomers = async (req, res, next) => {
           pages: Math.ceil(total / parseInt(limit)),
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -2776,6 +2853,11 @@ const listAllCustomers = async (req, res, next) => {
  */
 const listCustomersWithTripsAndActivities = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('customers-with-trips-activities', req);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('customers-with-trips-activities', cacheKey);
+
     const { status, search } = req.query;
 
     const query = {};
@@ -2918,7 +3000,7 @@ const listCustomersWithTripsAndActivities = async (req, res, next) => {
       };
     });
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         customers: customersWithRelations,
@@ -2928,7 +3010,9 @@ const listCustomersWithTripsAndActivities = async (req, res, next) => {
           activities: activities.length,
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    return res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -3015,6 +3099,8 @@ const updateCustomerStatus = async (req, res, next) => {
         message: 'Customer not found',
       });
     }
+
+    await invalidateAdminCaches(['admin:*']);
 
     await logAdminAction({
       adminId: req.user.id,
@@ -3264,6 +3350,11 @@ const adminReassignTrip = async (req, res, next) => {
  */
 const getDuplicateCustomers = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('customer-duplicates', req);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('customer-duplicates', cacheKey);
+
     const duplicates = await Customer.aggregate([
       {
         $addFields: {
@@ -3308,12 +3399,14 @@ const getDuplicateCustomers = async (req, res, next) => {
       },
     ]);
 
-    res.status(200).json({
+    const response = {
       success: true,
       data: {
         duplicates,
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -3367,6 +3460,7 @@ const mergeCustomers = async (req, res, next) => {
 
     await targetCustomer.save();
     await Customer.findByIdAndDelete(sourceCustomer._id);
+    await invalidateAdminCaches(['admin:*']);
 
     await logAdminAction({
       adminId: req.user.id,
@@ -3400,16 +3494,23 @@ const mergeCustomers = async (req, res, next) => {
  */
 const getMilestoneRules = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('milestone-rules', req);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('milestone-rules', cacheKey);
+
     const config = await getTripRulesConfig();
 
-    res.status(200).json({
+    const response = {
       success: true,
       data: {
         milestoneRules: config.milestoneRules,
         updatedAt: config.updatedAt,
         updatedBy: config.updatedBy,
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_RESOURCE_CACHE_TTL);
+    res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -3428,6 +3529,7 @@ const updateMilestoneRules = async (req, res, next) => {
     };
     config.updatedBy = req.user.id;
     await config.save();
+    await invalidateAdminCaches(['admin:*']);
 
     await logAdminAction({
       adminId: req.user.id,
@@ -3604,6 +3706,11 @@ const getSettlementOversight = async (req, res, next) => {
  */
 const getSystemAuditLogs = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('system-audit-logs', req);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('system-audit-logs', cacheKey);
+
     const {
       page = 1,
       limit = 50,
@@ -3641,7 +3748,7 @@ const getSystemAuditLogs = async (req, res, next) => {
       AuditLog.countDocuments(query),
     ]);
 
-    res.status(200).json({
+    const response = {
       success: true,
       data: {
         logs,
@@ -3652,7 +3759,9 @@ const getSystemAuditLogs = async (req, res, next) => {
           pages: Math.ceil(total / limitNum),
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_AUDIT_CACHE_TTL);
+    res.status(200).json(response);
   } catch (error) {
     next(error);
   }
@@ -3664,6 +3773,11 @@ const getSystemAuditLogs = async (req, res, next) => {
  */
 const getAuditLogs = async (req, res, next) => {
   try {
+    const cacheKey = buildAdminCacheKey('audit-logs', req);
+    const cachedResponse = await readAdminCache(cacheKey);
+    if (cachedResponse !== null) return res.status(200).json(cachedResponse);
+    logAdminDbQuery('audit-logs', cacheKey);
+
     const { page = 1, limit = 50, action, entityType } = req.query;
     const query = {};
     if (action) query.action = action;
@@ -3682,7 +3796,7 @@ const getAuditLogs = async (req, res, next) => {
       AdminAuditLog.countDocuments(query),
     ]);
 
-    res.status(200).json({
+    const response = {
       success: true,
       data: {
         logs,
@@ -3693,7 +3807,9 @@ const getAuditLogs = async (req, res, next) => {
           pages: Math.ceil(total / limitNum),
         },
       },
-    });
+    };
+    await writeAdminCache(cacheKey, response, ADMIN_AUDIT_CACHE_TTL);
+    res.status(200).json(response);
   } catch (error) {
     next(error);
   }
