@@ -17,6 +17,13 @@ const {
 } = require('../services/paymentGateway.service')
 const { invalidatePaymentHistoryCache } = require('../utils/paymentHistoryCache')
 const {
+  MARKETPLACE_PAYMENT_LIST_TTL,
+  paymentListKey,
+  getMarketplaceCache,
+  setMarketplaceCache,
+  invalidateMarketplacePaymentCaches
+} = require('../utils/marketplaceCache')
+const {
   createAutomaticPayoutForPayment
 } = require('../services/cashfreePayout.service')
 const {
@@ -190,7 +197,6 @@ const initiateMarketplaceTripRazorpayPayment = async (req, res, next) => {
         mobile: payerPhone
       }
     })
-
     if (payment.status === 'SUCCESS') {
       return res.status(200).json({
         success: true,
@@ -371,6 +377,10 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
       payment.paymentResponse = { ...body, verified: false }
       payment.failedAt = new Date()
       await payment.save()
+      await invalidateMarketplacePaymentCaches(
+        payment.payerTransporterId,
+        payment.beneficiaryTransporterId
+      )
       await invalidatePaymentHistoryCache()
 
       logger.error(
@@ -413,6 +423,10 @@ const handleMarketplaceRazorpayWebhook = async (req, res, next) => {
     }
 
     await payment.save()
+    await invalidateMarketplacePaymentCaches(
+      payment.payerTransporterId,
+      payment.beneficiaryTransporterId
+    )
     if (previousStatus !== payment.status) {
       await invalidatePaymentHistoryCache()
     }
@@ -823,6 +837,9 @@ const listMarketplacePayments = async (req, res, next) => {
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1)
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20))
+    const cacheKey = paymentListKey(actorId, { page, limit })
+    const cachedResponse = await getMarketplaceCache(cacheKey)
+    if (cachedResponse) return res.status(200).json(cachedResponse)
     const skip = (page - 1) * limit
     const actorStr = String(actorId)
 
@@ -844,7 +861,7 @@ const listMarketplacePayments = async (req, res, next) => {
 
     const pages = Math.ceil(total / limit) || 0
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         payments: (payments || []).map(payment => {
@@ -874,7 +891,9 @@ const listMarketplacePayments = async (req, res, next) => {
           hasPrevious: page > 1
         }
       }
-    })
+    }
+    await setMarketplaceCache(cacheKey, response, MARKETPLACE_PAYMENT_LIST_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }

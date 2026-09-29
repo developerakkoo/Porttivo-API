@@ -2,6 +2,10 @@ const mongoose = require('mongoose')
 const Trip = require('../models/Trip')
 const VehicleBooking = require('../models/VehicleBooking')
 const MarketplacePayment = require('../models/MarketplacePayment')
+const {
+  invalidateMarketplaceBookingCaches,
+  invalidateMarketplacePaymentCaches
+} = require('../utils/marketplaceCache')
 const logger = require('../utils/logger')
 const { isMarketplaceBookingTrip } = require('./tripAccess.service')
 const {
@@ -182,6 +186,14 @@ const createMarketplacePaymentRequestForTrip = async ({
 
     await session.commitTransaction()
     session.endSession()
+    await invalidateMarketplaceBookingCaches(
+      booking.buyerId,
+      booking.sellerId
+    )
+    await invalidateMarketplacePaymentCaches(
+      booking.buyerId,
+      booking.sellerId
+    )
 
     logger.info('[MARKETPLACE_PAYMENT] Marketplace payment request created', {
       paymentId: payment._id?.toString(),

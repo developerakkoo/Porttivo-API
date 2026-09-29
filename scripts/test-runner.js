@@ -14,6 +14,7 @@ const requirementQuotesCacheTests = require('../tests/requirementQuotesCache.tes
 const kycTests = require('../tests/kyc.test');
 const paymentChatCacheTests = require('../tests/paymentChatCache.test');
 const readApiCacheTests = require('../tests/readApiCache.test');
+const marketplaceCacheTests = require('../tests/marketplaceCache.test');
 
 const buildTripCreateController = (overrides = {}) =>
   loadWithMocks(path.resolve(process.cwd(), 'src/controllers/trip.controller.js'), {
@@ -102,6 +103,7 @@ const tests = [
   ...kycTests,
   ...paymentChatCacheTests,
   ...readApiCacheTests,
+  ...marketplaceCacheTests,
   {
     name: 'active customer trips include driver location and trip progress',
     async run() {

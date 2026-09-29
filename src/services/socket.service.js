@@ -71,6 +71,7 @@ const supportTicketService = require('./supportTicket.service')
 const {
   fetchMarketplacePaymentSnapshotByTrip
 } = require('./marketplacePayment.service')
+const { invalidateMarketplaceBookingCaches } = require('../utils/marketplaceCache')
 const env = require('../config/env')
 let io = null
 let staleDriverTrackingTimer = null
@@ -1979,6 +1980,10 @@ const initializeSocketIO = httpServer => {
           status: 'DELIVERED',
           attachments
         })
+        await invalidateMarketplaceBookingCaches(
+          booking.buyerId,
+          booking.sellerId
+        )
         logSocketEvent('chat:message:send', socket, {
           bookingId,
           messageId: createdMsg._id?.toString?.() || null,
@@ -2104,6 +2109,7 @@ const initializeSocketIO = httpServer => {
           },
           { new: true }
         )
+        await invalidateMarketplaceBookingCaches(actorId)
 
         const readPayload = {
           bookingId: message.bookingId,

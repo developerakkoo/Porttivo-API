@@ -24,6 +24,19 @@ const {
 } = require('../utils/marketplaceNotification')
 const { liveAssignmentFilter } = require('../utils/liveVehicleAssignment')
 const { resolveRouteDirectionRate } = require('../utils/vehiclePostRoutes.util')
+const {
+  MARKETPLACE_BOOKING_LIST_TTL,
+  MARKETPLACE_BOOKING_STATS_TTL,
+  bookingListKey,
+  bookingStatsKey,
+  getMarketplaceCache,
+  setMarketplaceCache,
+  invalidateMarketplaceCaches,
+  invalidateMarketplaceBookingCaches
+} = require('../utils/marketplaceCache')
+
+const invalidateBookingReadCaches = booking =>
+  invalidateMarketplaceBookingCaches(booking?.buyerId, booking?.sellerId)
 
 function geoFieldToLabel(v) {
   if (v == null) return null
@@ -58,6 +71,7 @@ async function releaseBookingAssignmentResources(booking) {
   await VehicleRouteAssignment.findByIdAndUpdate(assignmentId, {
     $set: { isReleased: true }
   })
+  await invalidateMarketplaceCaches(booking.postId)
 }
 
 async function consumeConfirmedBookingSlot(postId, session) {
@@ -243,6 +257,7 @@ const createBooking = async (req, res, next) => {
       estimatedPrice,
       status: 'DRAFT'
     })
+    await invalidateBookingReadCaches(booking)
 
     // Create audit log
     await VehicleBookingAudit.logAction({
@@ -340,6 +355,7 @@ const getBooking = async (req, res, next) => {
         readAt: new Date()
       }
     )
+    await invalidateMarketplaceBookingCaches(userId)
 
     const messages = await TransporterMessage.find({ bookingId: id })
       .populate('senderId', 'name mobile')
@@ -374,6 +390,9 @@ const getMyBookings = async (req, res, next) => {
     }
 
     const { status, role } = req.query // role: 'buyer' or 'seller'
+    const cacheKey = bookingListKey(userId, { status, role })
+    const cachedResponse = await getMarketplaceCache(cacheKey)
+    if (cachedResponse) return res.status(200).json(cachedResponse)
 
     const query = {}
 
@@ -427,14 +446,16 @@ const getMyBookings = async (req, res, next) => {
       unreadMessageCount: unreadMap[b._id.toString()] || 0
     }))
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Bookings retrieved successfully',
       data: {
         bookings: results,
         total: results.length
       }
-    })
+    }
+    await setMarketplaceCache(cacheKey, response, MARKETPLACE_BOOKING_LIST_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     return forwardControllerError(next, error)
   }
@@ -500,6 +521,7 @@ const proposePriceOffer = async (req, res, next) => {
     booking.status = 'NEGOTIATING'
 
     await booking.save()
+    await invalidateBookingReadCaches(booking)
 
     // Create message for price proposal
     const msgContent = messageText || `Proposed price: ₹${proposedPrice}`
@@ -511,6 +533,7 @@ const proposePriceOffer = async (req, res, next) => {
       content: msgContent,
       proposedPrice
     })
+    await invalidateBookingReadCaches(booking)
 
     // Create audit log
     await VehicleBookingAudit.logAction({
@@ -656,6 +679,7 @@ const acceptProposal = async (req, res, next) => {
     booking.proposalAcknowledgedBy = userId
     booking.proposalAcknowledgedAt = new Date()
     await booking.save()
+    await invalidateBookingReadCaches(booking)
 
     await VehicleBookingAudit.logAction({
       bookingId: id,
@@ -679,6 +703,7 @@ const acceptProposal = async (req, res, next) => {
         proposedPrice: null,
         status: 'DELIVERED'
       })
+      await invalidateBookingReadCaches(booking)
       const io = getIO()
       const populatedMsg = await TransporterMessage.findById(sysMessage._id)
         .populate('senderId', 'name mobile company')
@@ -804,6 +829,7 @@ const declineProposal = async (req, res, next) => {
     booking.proposalAcknowledgedBy = null
     booking.proposalAcknowledgedAt = null
     await booking.save()
+    await invalidateBookingReadCaches(booking)
 
     await TransporterMessage.create({
       bookingId: id,
@@ -813,6 +839,7 @@ const declineProposal = async (req, res, next) => {
       content: 'Declined the latest price offer.',
       status: 'DELIVERED'
     })
+    await invalidateBookingReadCaches(booking)
 
     await VehicleBookingAudit.logAction({
       bookingId: id,
@@ -986,6 +1013,8 @@ const acceptBooking = async (req, res, next) => {
     }
 
     session.endSession()
+    await invalidateMarketplaceCaches(booking.postId)
+    await invalidateBookingReadCaches(booking)
 
     try {
       await TransporterMessage.create({
@@ -996,6 +1025,7 @@ const acceptBooking = async (req, res, next) => {
         content: `Booking accepted at ₹${finalPrice}`,
         proposedPrice: finalPrice
       })
+      await invalidateBookingReadCaches(booking)
     } catch (e) {
       console.warn('TransporterMessage create failed (accept booking):', e.message || e)
     }
@@ -1114,6 +1144,7 @@ const rejectBooking = async (req, res, next) => {
     booking.rejectReason = reason || 'No reason provided'
 
     await booking.save()
+    await invalidateBookingReadCaches(booking)
 
     // Create rejection message
     const rejectionMessage = await TransporterMessage.create({
@@ -1123,6 +1154,7 @@ const rejectBooking = async (req, res, next) => {
       messageType: 'REJECTED',
       content: `Booking rejected. Reason: ${reason || 'No reason provided'}`
     })
+    await invalidateBookingReadCaches(booking)
 
     // Create audit log
     await VehicleBookingAudit.logAction({
@@ -1205,6 +1237,7 @@ const cancelBooking = async (req, res, next) => {
     const previousStatus = booking.status
     booking.status = 'CANCELLED'
     await booking.save()
+    await invalidateBookingReadCaches(booking)
 
     // Create audit log
     await VehicleBookingAudit.logAction({
@@ -1263,6 +1296,10 @@ const getBookingStats = async (req, res, next) => {
       })
     }
 
+    const cacheKey = bookingStatsKey(userId)
+    const cachedResponse = await getMarketplaceCache(cacheKey)
+    if (cachedResponse) return res.status(200).json(cachedResponse)
+
     const [
       totalAsNeeded,
       totalAsVendor,
@@ -1277,7 +1314,7 @@ const getBookingStats = async (req, res, next) => {
       VehicleBooking.countDocuments({ buyerId: userId, status: 'REJECTED' })
     ])
 
-    return res.status(200).json({
+    const response = {
       success: true,
       data: {
         stats: {
@@ -1292,7 +1329,9 @@ const getBookingStats = async (req, res, next) => {
               : 0
         }
       }
-    })
+    }
+    await setMarketplaceCache(cacheKey, response, MARKETPLACE_BOOKING_STATS_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     return forwardControllerError(next, error)
   }
@@ -1341,6 +1380,7 @@ const submitBooking = async (req, res, next) => {
     booking.status = 'REQUESTED'
     booking.submittedAt = new Date()
     await booking.save()
+    await invalidateBookingReadCaches(booking)
 
     // Create audit log
     await VehicleBookingAudit.logAction({
@@ -1556,6 +1596,7 @@ const hideBookingFromInbox = async (req, res, next) => {
       { _id: id },
       { $addToSet: { inboxHiddenBy: actorOid } }
     )
+    await invalidateBookingReadCaches(booking)
 
     return res.status(200).json({
       success: true,

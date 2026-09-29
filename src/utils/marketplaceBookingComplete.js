@@ -1,6 +1,7 @@
 const VehicleBooking = require('../models/VehicleBooking')
 const { getIO } = require('../services/socket.service')
 const { CLOSED_TRIP_STATUSES } = require('./tripState')
+const { invalidateMarketplaceBookingCaches } = require('./marketplaceCache')
 
 /**
  * Notify both transporter parties that a marketplace booking reached COMPLETED (trip closed).
@@ -55,7 +56,13 @@ async function completeMarketplaceBookingAfterTripClosed(trip) {
     .populate('tripId', 'status closedAt closedReason')
     .lean()
 
-  if (booking) emitBookingCompleted(booking)
+  if (booking) {
+    await invalidateMarketplaceBookingCaches(
+      booking.buyerId,
+      booking.sellerId
+    )
+    emitBookingCompleted(booking)
+  }
   return booking
 }
 

@@ -37,6 +37,15 @@ const {
   hasBookableInventory,
   countPostsWithBookableInventory
 } = require('../utils/marketplaceAvailability.util')
+const {
+  MARKETPLACE_SEARCH_TTL,
+  MARKETPLACE_POST_DETAIL_TTL,
+  vehiclePostSearchKey,
+  vehiclePostDetailKey,
+  getMarketplaceCache,
+  setMarketplaceCache,
+  invalidateMarketplaceCaches
+} = require('../utils/marketplaceCache')
 
 const MAX_DESTINATION_STOPS = 10
 const MAX_FORMATTED_ADDRESS_LEN = 500
@@ -405,6 +414,7 @@ const createAvailability = async (req, res, next) => {
       note: note || null,
       status: 'draft'
     })
+    await invalidateMarketplaceCaches(post._id)
 
     // 🧾 Activity: listing created
     await VehiclePostActivity.logAction({
@@ -492,6 +502,17 @@ const searchAvailability = async (req, res, next) => {
       page = 1,
       limit = 20
     } = req.query
+
+    const cacheKey = vehiclePostSearchKey({
+      origin,
+      destination,
+      date,
+      vehicleType,
+      page,
+      limit
+    })
+    const cachedResponse = await getMarketplaceCache(cacheKey)
+    if (cachedResponse) return res.status(200).json(cachedResponse)
 
     const query = { status: 'active', slotsLeft: { $gt: 0 } }
 
@@ -692,11 +713,13 @@ const searchAvailability = async (req, res, next) => {
       )
     } catch (e) {}
 
-    return res.status(200).json({
+    const response = {
       success: true,
       message: 'Availability posts retrieved',
       data: { results, total }
-    })
+    }
+    await setMarketplaceCache(cacheKey, response, MARKETPLACE_SEARCH_TTL)
+    return res.status(200).json(response)
   } catch (error) {
     next(error)
   }
@@ -792,6 +815,12 @@ const getById = async (req, res, next) => {
     }
 
     const viewerTransporterId = getTransporterId(req.user)
+    const viewerScope = viewerTransporterId
+      ? `transporter:${viewerTransporterId}`
+      : 'public'
+    const cacheKey = vehiclePostDetailKey(id, viewerScope)
+    const cachedResponse = await getMarketplaceCache(cacheKey)
+    if (cachedResponse) return res.status(200).json(cachedResponse)
 
     const post = await VehicleRouteAvailability.findById(id)
       .populate('vehicleId', 'vehicleNumber vehicleType trailerType')
@@ -865,7 +894,9 @@ const getById = async (req, res, next) => {
       lastEdited: p.updatedAt
     }
 
-    return res.status(200).json({ success: true, data: { post: response } })
+    const body = { success: true, data: { post: response } }
+    await setMarketplaceCache(cacheKey, body, MARKETPLACE_POST_DETAIL_TTL)
+    return res.status(200).json(body)
   } catch (error) {
     next(error)
   }
@@ -1124,6 +1155,7 @@ const updateAvailability = async (req, res, next) => {
     } catch (e) {
       // non-fatal
     }
+    await invalidateMarketplaceCaches(post._id)
 
     // 🧾 Activity: diff before/after and record granular events
     try {
@@ -1294,6 +1326,7 @@ const cancelPost = async (req, res, next) => {
 
     post.status = 'cancelled'
     await post.save()
+    await invalidateMarketplaceCaches(post._id)
 
     // 🧾 Activity: listing cancelled
     await VehiclePostActivity.logAction({
@@ -1444,6 +1477,7 @@ const setPostPausedState = async (req, res, next, { pause }) => {
       if (post.availableTo && post.availableTo < new Date()) {
         post.status = 'expired'
         await post.save()
+        await invalidateMarketplaceCaches(post._id)
         return res.status(400).json({
           success: false,
           message: 'This post has expired and cannot be resumed. Edit the dates to relist it.'
@@ -1453,6 +1487,7 @@ const setPostPausedState = async (req, res, next, { pause }) => {
         (await countLiveAssignments(post._id)) > 0 ? 'active' : 'draft'
     }
     await post.save()
+    await invalidateMarketplaceCaches(post._id)
 
     // 🧾 Activity: pause / resume
     await VehiclePostActivity.logAction({
@@ -1671,6 +1706,7 @@ const addVehicleToPost = async (req, res, next) => {
       const created = await VehicleRouteAssignment.insertMany(docs, { session })
       await session.commitTransaction()
       session.endSession()
+      await invalidateMarketplaceCaches(post._id)
 
       let justPublished = false
       if (post.status === 'draft') {
@@ -1678,7 +1714,6 @@ const addVehicleToPost = async (req, res, next) => {
         await post.save()
         justPublished = true
       }
-
       // 🧾 Activity: vehicle(s) added (+ activation if it just went live)
       await VehiclePostActivity.logAction({
         postId: post._id,

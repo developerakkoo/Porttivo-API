@@ -26,6 +26,7 @@ const {
   setUnreadMessageCache,
   invalidateUnreadMessageCache
 } = require('../utils/unreadMessageCache')
+const { invalidateMarketplaceBookingCaches } = require('../utils/marketplaceCache')
 
 /**
  * Send a message in booking conversation
@@ -105,6 +106,7 @@ const sendMessage = async (req, res, next) => {
       status: 'DELIVERED',
       attachments,
     });
+    await invalidateMarketplaceBookingCaches(booking.buyerId, booking.sellerId)
     await invalidateChatCache({ bookingId, userId: senderId });
     await invalidateChatCache({ bookingId, userId: receiverId });
     await invalidateUnreadMessageCache(receiverId)
@@ -238,6 +240,7 @@ const getConversation = async (req, res, next) => {
         readAt: new Date(),
       }
     );
+    await invalidateMarketplaceBookingCaches(userId)
     await invalidateChatCache({ bookingId, userId });
     await invalidateUnreadMessageCache(userId)
 
@@ -366,6 +369,7 @@ const markBookingReadAll = async (req, res, next) => {
         readAt: now,
       }
     );
+      await invalidateMarketplaceBookingCaches(userId)
     await invalidateChatCache({ bookingId, userId });
 
     return res.status(200).json({
@@ -410,6 +414,7 @@ const markAsRead = async (req, res, next) => {
     message.status = 'READ';
     message.readAt = new Date();
     await message.save();
+    await invalidateMarketplaceBookingCaches(userId)
     await invalidateChatCache({
       bookingId: message.bookingId,
       userId
@@ -524,6 +529,7 @@ const deleteMessage = async (req, res, next) => {
     // Mark as deleted by updating content
     message.content = '[Message deleted]';
     await message.save();
+    await invalidateMarketplaceBookingCaches(message.senderId, message.receiverId)
     await invalidateChatCache({
       bookingId: message.bookingId,
       userId: message.receiverId

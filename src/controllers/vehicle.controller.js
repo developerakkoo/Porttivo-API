@@ -1,5 +1,7 @@
 const XLSX = require('xlsx')
 const Vehicle = require('../models/Vehicle')
+const VehicleRouteAvailability = require('../models/VehicleRouteAvailability')
+const VehicleRouteAssignment = require('../models/VehicleRouteAssignment')
 const Trip = require('../models/Trip')
 const Driver = require('../models/Driver')
 const {
@@ -18,6 +20,35 @@ const { verifyRcFull } = require('../services/surepass.service')
 const { verifyRechargeKitRc } = require('../services/rechargeKit.service')
 const { getCache, setCache, deleteCache, deleteCachePattern } = require('../utils/cache')
 const logger = require('../utils/logger')
+const {
+  invalidateMarketplaceSearchCache,
+  invalidateMarketplacePostCache
+} = require('../utils/marketplaceCache')
+
+const invalidateMarketplaceVehicleCaches = async vehicleId => {
+  await invalidateMarketplaceSearchCache()
+  try {
+    const [posts, assignments] = await Promise.all([
+      VehicleRouteAvailability.find({ vehicleId }).select('_id').lean(),
+      VehicleRouteAssignment.find({
+        vehicleId,
+        isReleased: { $ne: true }
+      }).select('postId').lean()
+    ])
+    const postIds = new Set([
+      ...(posts || []).map(post => String(post._id)),
+      ...(assignments || []).map(assignment => String(assignment.postId))
+    ])
+    await Promise.all(
+      [...postIds].map(postId => invalidateMarketplacePostCache(postId))
+    )
+  } catch (error) {
+    logger.warn('Marketplace vehicle detail cache invalidation lookup failed', {
+      vehicleId: String(vehicleId),
+      error: error.message
+    })
+  }
+}
 
 const parseCargoWeightMt = value => {
   if (value === undefined || value === null || value === '') {
@@ -892,6 +923,9 @@ const updateVehicle = async (req, res, next) => {
       'driverId',
       'name mobile alternateMobile licenseNumber licenseValidTill status'
     )
+    if (vehicleType !== undefined) {
+      await invalidateMarketplaceVehicleCaches(id)
+    }
 
     if (forceReassign && driverValidation?.currentVehicle) {
       try {
@@ -1037,6 +1071,7 @@ const deleteVehicle = async (req, res, next) => {
 
     // Delete vehicle
     await Vehicle.findByIdAndDelete(id)
+    await invalidateMarketplaceVehicleCaches(id)
 
     const vehicleCachePattern = `vehicles:${transporterId}*`
     await deleteCachePattern(vehicleCachePattern)

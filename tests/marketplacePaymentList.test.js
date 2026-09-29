@@ -34,6 +34,14 @@ const loadListController = (overrides = {}) =>
         getTransporterActorId: overrides.getTransporterActorId ||
           (user => user?.id || null)
       },
+      '../utils/marketplaceCache': overrides.marketplaceCache || {
+        MARKETPLACE_PAYMENT_LIST_TTL: 45,
+        paymentListKey: (userId, query) =>
+          `marketplace:payments:user:${userId}:${JSON.stringify(query)}`,
+        getMarketplaceCache: async () => null,
+        setMarketplaceCache: async () => true,
+        invalidateMarketplacePaymentCaches: async () => true
+      },
       '../services/tripAccess.service': {
         canTransporterPartyViewTripExecution: async () => true,
         isMarketplaceBookingTrip: () => true
@@ -144,6 +152,56 @@ const marketplacePaymentListTests = [
 
       assert.equal(res.statusCode, 403)
       assert.equal(res.body.success, false)
+    }
+  },
+  {
+    name: 'GET marketplace payments caches per transporter and pagination',
+    async run() {
+      const cached = new Map()
+      const ttls = new Map()
+      const marketplaceCache = {
+        MARKETPLACE_PAYMENT_LIST_TTL: 45,
+        paymentListKey: (userId, query) =>
+          `marketplace:payments:user:${userId}:${JSON.stringify(query)}`,
+        getMarketplaceCache: async key => cached.get(key) || null,
+        setMarketplaceCache: async (key, value, ttl) => {
+          cached.set(key, value)
+          ttls.set(key, ttl)
+          return true
+        },
+        invalidateMarketplacePaymentCaches: async () => true
+      }
+      let findCalls = 0
+      let countCalls = 0
+      const controller = loadListController({
+        marketplaceCache,
+        find: () => {
+          findCalls += 1
+          return mockFindChain([])
+        },
+        countDocuments: async () => {
+          countCalls += 1
+          return 0
+        }
+      })
+      const request = (id, page) => ({
+        user: { id, userType: 'transporter' },
+        query: { page: String(page), limit: '20' }
+      })
+
+      const first = createMockRes()
+      const hit = createMockRes()
+      const nextPage = createMockRes()
+      const otherUser = createMockRes()
+      await controller.listMarketplacePayments(request('transporter-1', 1), first, error => { throw error })
+      await controller.listMarketplacePayments(request('transporter-1', 1), hit, error => { throw error })
+      await controller.listMarketplacePayments(request('transporter-1', 2), nextPage, error => { throw error })
+      await controller.listMarketplacePayments(request('transporter-2', 1), otherUser, error => { throw error })
+
+      assert.deepEqual(hit.body, first.body)
+      assert.equal(findCalls, 3)
+      assert.equal(countCalls, 3)
+      assert.ok([...ttls.values()].every(ttl => ttl === 45))
     }
   }
 ]
