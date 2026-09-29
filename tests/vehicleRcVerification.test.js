@@ -1,8 +1,93 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 
 const { loadWithMocks } = require('./helpers/loadWithMocks');
 const { createMockRes } = require('./helpers/http');
+
+const vehicleControllerPath = path.resolve(
+  process.cwd(),
+  'src/controllers/vehicle.controller.js'
+);
+const surepassServicePath = path.resolve(
+  process.cwd(),
+  'src/services/surepass.service.js'
+);
+const adminControllerPath = path.resolve(
+  process.cwd(),
+  'src/controllers/admin.controller.js'
+);
+
+const createVehicleWithVerification = async verifyRcFull => {
+  const captured = { created: null, verificationInput: null };
+  const controller = loadWithMocks(vehicleControllerPath, {
+    '../models/Vehicle': {
+      findOne: query =>
+        query?.driverId
+          ? { select: async () => null }
+          : Promise.resolve(null),
+      create: async payload => {
+        captured.created = payload;
+        return {
+          _id: 'vehicle-1',
+          ...payload,
+          async populate() {
+            return this;
+          },
+        };
+      },
+    },
+    '../models/Trip': {},
+    '../models/Driver': {
+      findOne: async () => ({
+        _id: 'driver-1',
+        transporterId: 'transporter-1',
+        status: 'active',
+      }),
+    },
+    '../services/surepass.service': {
+      verifyRcFull: async vehicleNumber => {
+        captured.verificationInput = vehicleNumber;
+        return verifyRcFull(vehicleNumber);
+      },
+    },
+    '../services/vehicleTypeCatalog.service': {
+      assertVehicleTypeAllowed: async () => ({ ok: true, name: 'Truck' }),
+    },
+    '../middleware/permission.middleware': {
+      getTransporterId: user =>
+        user.userType === 'transporter' ? user.id : null,
+      hasPermission: () => true,
+    },
+    '../utils/vehicleValidation': {
+      checkVehicleHasTripHistory: async () => false,
+      getVehicleAvailabilityState: async () => ({}),
+      validateIndianVehicleRegistrationFormat: raw => ({
+        normalized: raw.replace(/\s+/g, '').toUpperCase(),
+      }),
+    },
+  });
+  const res = createMockRes();
+
+  await controller.createVehicle(
+    {
+      body: {
+        vehicleNumber: 'MH 16 DY 6519',
+        vehicleType: 'Truck',
+        driverId: 'driver-1',
+        trailerType: '20ft',
+        cargoWeightMt: 25.5,
+      },
+      user: { id: 'transporter-1', userType: 'transporter' },
+    },
+    res,
+    error => {
+      throw error;
+    }
+  );
+
+  return { captured, res };
+};
 
 test('SurePass service normalizes a successful RC lookup', async () => {
   const originalFetch = global.fetch;
@@ -23,7 +108,7 @@ test('SurePass service normalizes a successful RC lookup', async () => {
       }),
     });
 
-    const { verifyRcFull } = loadWithMocks('../src/services/surepass.service.js', {
+    const { verifyRcFull } = loadWithMocks(surepassServicePath, {
       '../config/env': {
         surepassApiToken: 'token-123',
         surepassRcFullUrl: 'https://example.test',
@@ -42,88 +127,19 @@ test('SurePass service normalizes a successful RC lookup', async () => {
   }
 });
 
-test('createVehicle stores RC verification and returns a summary', async () => {
-  const captured = {
-    created: null,
-    verificationInput: null,
-  };
-
-  const controller = loadWithMocks('../src/controllers/vehicle.controller.js', {
-    '../models/Vehicle': {
-      findOne: (query) =>
-        query?.driverId
-          ? { select: async () => null }
-          : Promise.resolve(null),
-      create: async (payload) => {
-        captured.created = payload;
-        return {
-          _id: 'vehicle-1',
-          ...payload,
-          async populate() {
-            return this;
-          },
-        };
-      },
-    },
-    '../models/Trip': {},
-    '../models/Driver': {
-      findOne: async () => ({
-        _id: 'driver-1',
-        transporterId: 'transporter-1',
-        status: 'active',
-      }),
-    },
-    '../services/surepass.service': {
-      verifyRcFull: async (vehicleNumber) => {
-        captured.verificationInput = vehicleNumber;
-        return {
-          ok: true,
-          verified: true,
-          status: 'verified',
-          statusCode: 200,
-          message: 'Vehicle verified successfully',
-          messageCode: 'success',
-          rawResponse: { success: true, data: { rc_number: vehicleNumber } },
-          data: { rc_number: vehicleNumber },
-          verifiedAt: new Date('2026-07-01T00:00:00.000Z'),
-          source: 'surepass',
-        };
-      },
-    },
-    '../services/vehicleTypeCatalog.service': {
-      assertVehicleTypeAllowed: async () => ({ ok: true, name: 'Truck' }),
-    },
-    '../middleware/permission.middleware': {
-      getTransporterId: (user) => (user.userType === 'transporter' ? user.id : null),
-      hasPermission: () => true,
-    },
-    '../utils/vehicleValidation': {
-      checkVehicleHasTripHistory: async () => false,
-      getVehicleAvailabilityState: async () => ({}),
-      validateIndianVehicleRegistrationFormat: (raw) => ({
-        normalized: raw.replace(/\s+/g, '').toUpperCase(),
-      }),
-    },
-  });
-
-  const req = {
-    body: {
-      vehicleNumber: 'MH 16 DY 6519',
-      vehicleType: 'Truck',
-      driverId: 'driver-1',
-      trailerType: '20ft',
-      cargoWeightMt: 25.5,
-    },
-    user: {
-      id: 'transporter-1',
-      userType: 'transporter',
-    },
-  };
-  const res = createMockRes();
-
-  await controller.createVehicle(req, res, (error) => {
-    throw error;
-  });
+test('createVehicle saves a vehicle when SurePass verifies the RC', async () => {
+  const { captured, res } = await createVehicleWithVerification(vehicleNumber => ({
+    ok: true,
+    verified: true,
+    status: 'verified',
+    statusCode: 200,
+    message: 'Vehicle verified successfully',
+    messageCode: 'success',
+    rawResponse: { success: true, data: { rc_number: vehicleNumber } },
+    data: { rc_number: vehicleNumber },
+    verifiedAt: new Date('2026-07-01T00:00:00.000Z'),
+    source: 'surepass',
+  }));
 
   assert.equal(res.statusCode, 201);
   assert.equal(captured.verificationInput, 'MH16DY6519');
@@ -134,8 +150,85 @@ test('createVehicle stores RC verification and returns a summary', async () => {
   assert.equal(res.body.data.verification.status, 'verified');
 });
 
+const nonBlockingVerificationCases = [
+  {
+    name: 'not_verified',
+    verification: () => ({
+      ok: true,
+      verified: false,
+      status: 'not_verified',
+      statusCode: 200,
+      message: 'No matching RC record',
+      rawResponse: { internal_provider_detail: 'not exposed' },
+      source: 'surepass',
+    }),
+    expectedStatus: 'not_verified',
+  },
+  {
+    name: 'server or network error',
+    verification: () => ({
+      ok: false,
+      verified: false,
+      status: 'error',
+      statusCode: 503,
+      message: 'Surepass upstream connection refused',
+      rawResponse: { token: 'must-not-be-exposed' },
+      source: 'surepass',
+    }),
+    expectedStatus: 'error',
+  },
+  {
+    name: 'timeout',
+    verification: () => ({
+      ok: false,
+      verified: false,
+      status: 'timeout',
+      message: 'Surepass request timed out',
+      source: 'surepass',
+    }),
+    expectedStatus: 'timeout',
+  },
+  {
+    name: '401 or 403 token error',
+    verification: () => ({
+      ok: false,
+      verified: false,
+      status: 'error',
+      statusCode: 401,
+      message: 'Surepass token rejected',
+      rawResponse: { authorization: 'Bearer must-not-be-exposed' },
+      source: 'surepass',
+    }),
+    expectedStatus: 'error',
+  },
+];
+
+for (const scenario of nonBlockingVerificationCases) {
+  test(`createVehicle saves a vehicle when SurePass returns ${scenario.name}`, async () => {
+    const { captured, res } = await createVehicleWithVerification(scenario.verification);
+
+    assert.equal(res.statusCode, 201);
+    assert.equal(captured.created.rcVerification.status, scenario.expectedStatus);
+    assert.equal(captured.created.rcVerification.rawResponse, null);
+    assert.equal(res.body.data.vehicle.rcVerification.rawResponse, null);
+    assert.equal(JSON.stringify(res.body).includes('must-not-be-exposed'), false);
+  });
+}
+
+test('createVehicle saves a vehicle when SurePass throws unexpectedly', async () => {
+  const { captured, res } = await createVehicleWithVerification(() => {
+    throw new Error('Surepass token must-not-be-exposed');
+  });
+
+  assert.equal(res.statusCode, 201);
+  assert.equal(captured.created.rcVerification.status, 'error');
+  assert.equal(captured.created.rcVerification.rawResponse, null);
+  assert.equal(res.body.data.verification.message, 'Vehicle verification is currently unavailable');
+  assert.equal(JSON.stringify(res.body).includes('must-not-be-exposed'), false);
+});
+
 test('verifyVehicleNumber returns simplified SurePass verification result', async () => {
-  const controller = loadWithMocks('../src/controllers/vehicle.controller.js', {
+  const controller = loadWithMocks(vehicleControllerPath, {
     '../services/surepass.service': {
       verifyRcFull: async (vehicleNumber) => ({
         ok: true,
@@ -176,7 +269,7 @@ test('verifyVehicleNumber returns simplified SurePass verification result', asyn
 });
 
 test('admin vehicle details expose the stored RC payload', async () => {
-  const controller = loadWithMocks('../src/controllers/admin.controller.js', {
+  const controller = loadWithMocks(adminControllerPath, {
     '../models/Admin': {},
     '../models/Transporter': {},
     '../models/Driver': {},
@@ -186,7 +279,8 @@ test('admin vehicle details expose the stored RC payload', async () => {
     '../models/Customer': {},
     '../models/Trip': {},
     '../models/Vehicle': {
-      findById: async () => ({
+      findById: () => {
+        const vehicle = {
         populate() {
           return this;
         },
@@ -240,8 +334,17 @@ test('admin vehicle details expose the stored RC payload', async () => {
           },
         },
         createdAt: new Date('2026-07-01T00:00:00.000Z'),
-        updatedAt: new Date('2026-07-01T00:00:00.000Z'),
-      }),
+          updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+        };
+        return {
+          populate() {
+            return this;
+          },
+          then(resolve, reject) {
+            return Promise.resolve(vehicle).then(resolve, reject);
+          },
+        };
+      },
     },
     '../models/VehicleRouteAvailability': {},
     '../models/VehicleRouteAssignment': {},
@@ -271,7 +374,7 @@ test('admin vehicle details expose the stored RC payload', async () => {
   });
 
   const req = {
-    params: { id: 'vehicle-1' },
+    params: { id: '507f191e810c19729de860ea' },
     user: { id: 'admin-1', userType: 'admin' },
   };
   const res = createMockRes();

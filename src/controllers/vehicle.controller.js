@@ -249,17 +249,29 @@ const validateDriverVehicleLink = async ({
   return { driver }
 }
 
-const buildRcVerificationSnapshot = (verification, vehicleNumber) => ({
-  verified: !!verification?.verified,
-  status: verification?.status || 'pending',
-  source: verification?.source || 'surepass',
-  checkedAt: verification?.verifiedAt || null,
-  statusCode: verification?.statusCode ?? null,
-  message: verification?.message || null,
-  messageCode: verification?.messageCode || null,
-  verifiedVehicleNumber: vehicleNumber,
-  rawResponse: verification?.rawResponse || null
-})
+const buildRcVerificationSnapshot = (verification, vehicleNumber) => {
+  const verified = !!verification?.verified
+  const status = verification?.status || 'pending'
+  const failureMessage = status === 'timeout'
+    ? 'Vehicle verification timed out'
+    : status === 'not_verified'
+      ? 'Vehicle could not be verified'
+      : 'Vehicle verification is currently unavailable'
+
+  return {
+    verified,
+    status,
+    source: verification?.source || 'surepass',
+    checkedAt: verification?.verifiedAt || null,
+    statusCode: verification?.statusCode ?? null,
+    // Upstream failure payloads and messages can contain provider details. Store
+    // only a safe summary for failed verification attempts.
+    message: verified ? (verification?.message || null) : failureMessage,
+    messageCode: verified ? (verification?.messageCode || null) : null,
+    verifiedVehicleNumber: vehicleNumber,
+    rawResponse: verified ? (verification?.rawResponse || null) : null
+  }
+}
 
 const invalidateVehicleDriverCaches = async (transporterId, driverId) => {
   const vehicleCachePattern = `vehicles:${transporterId}*`
@@ -546,7 +558,22 @@ const createVehicle = async (req, res, next) => {
       })
     }
 
-    const rcVerification = await verifyRcFull(cleanedVehicleNumber)
+    let rcVerification
+    try {
+      rcVerification = await verifyRcFull(cleanedVehicleNumber)
+    } catch (error) {
+      // RC verification is an external enrichment step, not a prerequisite for
+      // creating a valid Porttivo vehicle.
+      logger.warn('Surepass RC verification failed during vehicle creation', {
+        vehicleNumber: cleanedVehicleNumber
+      })
+      rcVerification = {
+        ok: false,
+        verified: false,
+        status: 'error',
+        source: 'surepass'
+      }
+    }
 
     // Create vehicle
     const vehicle = await Vehicle.create({
