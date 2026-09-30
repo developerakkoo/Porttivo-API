@@ -246,8 +246,44 @@ const validateDriverVehicleLink = async ({
     }
   }
 
+  const linkedVehicleId = driver.vehicleId?.toString?.()
+  if (linkedVehicleId && linkedVehicleId !== excludeVehicleId?.toString?.()) {
+    const linkedVehicle = await Vehicle.findById(linkedVehicleId)
+      .select('_id vehicleNumber transporterId')
+    return {
+      error: 'Driver is already assigned to another vehicle',
+      statusCode: 409,
+      code: DRIVER_ALREADY_ASSIGNED,
+      driver,
+      currentVehicle: linkedVehicle
+        ? {
+            id: linkedVehicle._id,
+            vehicleNumber: linkedVehicle.vehicleNumber,
+            transporterId: linkedVehicle.transporterId
+          }
+        : { id: linkedVehicleId }
+    }
+  }
+
   return { driver }
 }
+
+const setDriverVehicle = (driverId, vehicleId, transporterId) =>
+  Driver.findOneAndUpdate(
+    {
+      _id: driverId,
+      transporterId,
+      $or: [{ vehicleId: null }, { vehicleId }]
+    },
+    { $set: { vehicleId } },
+    { new: true, runValidators: true }
+  )
+
+const clearDriverVehicle = (driverId, vehicleId) =>
+  Driver.updateOne(
+    { _id: driverId, vehicleId },
+    { $set: { vehicleId: null } }
+  )
 
 const buildRcVerificationSnapshot = (verification, vehicleNumber) => {
   const verified = !!verification?.verified
@@ -592,6 +628,7 @@ const createVehicle = async (req, res, next) => {
       )
     })
 
+    let previousVehicleUnlinked = false
     if (forceReassign && driverValidation.currentVehicle) {
       try {
         const oldVehicle = await Vehicle.findByIdAndUpdate(
@@ -602,10 +639,46 @@ const createVehicle = async (req, res, next) => {
         if (!oldVehicle) {
           throw new Error('Could not remove the driver from the current vehicle')
         }
+        previousVehicleUnlinked = true
+        await clearDriverVehicle(driverId, oldVehicle._id)
       } catch (error) {
         await Vehicle.deleteOne({ _id: vehicle._id })
+        if (previousVehicleUnlinked) {
+          await Vehicle.findByIdAndUpdate(
+            driverValidation.currentVehicle.id,
+            { driverId },
+            { new: true, runValidators: true }
+          )
+          await setDriverVehicle(
+            driverId,
+            driverValidation.currentVehicle.id,
+            transporterId
+          )
+        }
         throw error
       }
+    }
+
+    const linkedDriver = await setDriverVehicle(driverId, vehicle._id, transporterId)
+    if (!linkedDriver) {
+      await Vehicle.deleteOne({ _id: vehicle._id })
+      if (previousVehicleUnlinked && driverValidation.currentVehicle) {
+        await Vehicle.findByIdAndUpdate(
+          driverValidation.currentVehicle.id,
+          { driverId },
+          { new: true, runValidators: true }
+        )
+        await setDriverVehicle(
+          driverId,
+          driverValidation.currentVehicle.id,
+          transporterId
+        )
+      }
+      return res.status(409).json({
+        success: false,
+        code: DRIVER_ALREADY_ASSIGNED,
+        message: 'Driver is already assigned to another vehicle'
+      })
     }
 
     const vehicleCachePattern = `vehicles:${transporterId}*`
@@ -942,33 +1015,95 @@ const updateVehicle = async (req, res, next) => {
       }
     }
 
+    let previousVehicleUnlinked = false
+    if (forceReassign && driverValidation?.currentVehicle) {
+      const oldVehicle = await Vehicle.findByIdAndUpdate(
+        driverValidation.currentVehicle.id,
+        { driverId: null },
+        { new: true, runValidators: true }
+      )
+      if (!oldVehicle) {
+        return res.status(409).json({
+          success: false,
+          message: 'Could not remove the driver from the current vehicle'
+        })
+      }
+      previousVehicleUnlinked = true
+      await clearDriverVehicle(driverId, oldVehicle._id)
+    }
+
+    let claimedDriver = null
+    if (driverId !== undefined && driverId !== null && driverId !== '') {
+      claimedDriver = await setDriverVehicle(driverId, id, transporterId)
+      if (!claimedDriver) {
+        if (previousVehicleUnlinked && driverValidation?.currentVehicle) {
+          await Vehicle.findByIdAndUpdate(
+            driverValidation.currentVehicle.id,
+            { driverId },
+            { new: true, runValidators: true }
+          )
+          await setDriverVehicle(
+            driverId,
+            driverValidation.currentVehicle.id,
+            transporterId
+          )
+        }
+        return res.status(409).json({
+          success: false,
+          code: DRIVER_ALREADY_ASSIGNED,
+          message: 'Driver is already assigned to another vehicle'
+        })
+      }
+    }
+
     // Update vehicle
-    const updatedVehicle = await Vehicle.findByIdAndUpdate(id, updateData, {
-      new: true,
-      runValidators: true
-    }).populate(
-      'driverId',
-      'name mobile alternateMobile licenseNumber licenseValidTill status'
-    )
+    let updatedVehicle
+    try {
+      updatedVehicle = await Vehicle.findByIdAndUpdate(id, updateData, {
+        new: true,
+        runValidators: true
+      }).populate(
+        'driverId',
+        'name mobile alternateMobile licenseNumber licenseValidTill status'
+      )
+      if (!updatedVehicle) {
+        throw new Error('Vehicle could not be updated')
+      }
+    } catch (error) {
+      const priorReverseVehicleId = driverValidation?.driver?.vehicleId?.toString?.()
+      if (
+        driverId !== undefined &&
+        driverId !== null &&
+        driverId !== '' &&
+        driverId.toString() !== previousDriverId &&
+        priorReverseVehicleId !== id
+      ) {
+        await clearDriverVehicle(driverId, id)
+      }
+      if (previousVehicleUnlinked && driverValidation?.currentVehicle) {
+        await Vehicle.findByIdAndUpdate(
+          driverValidation.currentVehicle.id,
+          { driverId },
+          { new: true, runValidators: true }
+        )
+        await setDriverVehicle(
+          driverId,
+          driverValidation.currentVehicle.id,
+          transporterId
+        )
+      }
+      throw error
+    }
     if (vehicleType !== undefined) {
       await invalidateMarketplaceVehicleCaches(id)
     }
 
-    if (forceReassign && driverValidation?.currentVehicle) {
-      try {
-        const oldVehicle = await Vehicle.findByIdAndUpdate(
-          driverValidation.currentVehicle.id,
-          { driverId: null },
-          { new: true, runValidators: true }
-        )
-        if (!oldVehicle) {
-          throw new Error('Could not remove the driver from the current vehicle')
-        }
-      } catch (error) {
-        await Vehicle.findByIdAndUpdate(id, {
-          driverId: vehicle.driverId || null
-        })
-        throw error
+    if (driverId !== undefined) {
+      const nextDriverId = driverId === null || driverId === ''
+        ? null
+        : driverId.toString()
+      if (previousDriverId && previousDriverId !== nextDriverId) {
+        await clearDriverVehicle(previousDriverId, id)
       }
     }
 
@@ -1098,6 +1233,9 @@ const deleteVehicle = async (req, res, next) => {
 
     // Delete vehicle
     await Vehicle.findByIdAndDelete(id)
+    if (vehicle.driverId) {
+      await clearDriverVehicle(vehicle.driverId, id)
+    }
     await invalidateMarketplaceVehicleCaches(id)
 
     const vehicleCachePattern = `vehicles:${transporterId}*`
@@ -1415,6 +1553,17 @@ const bulkImportVehicles = async (req, res, next) => {
           status: 'active',
           rcVerification: deferredRcSnapshot(cleanedVehicleNumber)
         })
+        if (driverId) {
+          const linkedDriver = await setDriverVehicle(
+            driverId,
+            vehicle._id,
+            transporterId
+          )
+          if (!linkedDriver) {
+            await Vehicle.deleteOne({ _id: vehicle._id })
+            throw new Error('Driver is already assigned to another vehicle')
+          }
+        }
 
         succeeded += 1
         results.push({

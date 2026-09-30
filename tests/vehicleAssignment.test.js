@@ -10,8 +10,14 @@ const controllerPath = path.resolve(
   'src/controllers/vehicle.controller.js'
 )
 
-const buildController = ({ driver, currentVehicle = null, onUnlink } = {}) => {
+const buildController = ({
+  driver,
+  currentVehicle = null,
+  vehicleToUpdate = null,
+  onUnlink
+} = {}) => {
   const unlinkCalls = []
+  const driverUpdates = []
   const vehicleModel = {
     findOne: query =>
       query?.ownerType
@@ -19,6 +25,7 @@ const buildController = ({ driver, currentVehicle = null, onUnlink } = {}) => {
         : {
             select: async () => currentVehicle
           },
+    findById: async id => id === vehicleToUpdate?._id ? vehicleToUpdate : null,
     create: async payload => ({
       _id: 'new-vehicle',
       ...payload,
@@ -26,10 +33,21 @@ const buildController = ({ driver, currentVehicle = null, onUnlink } = {}) => {
         return this
       }
     }),
-    findByIdAndUpdate: async (id, update) => {
+    findByIdAndUpdate: (id, update) => {
       unlinkCalls.push({ id, update })
       onUnlink?.(id, update)
-      return { _id: id, driverId: update.driverId }
+      if (id === vehicleToUpdate?._id) {
+        return {
+          populate: async () => ({
+            ...vehicleToUpdate,
+            ...update,
+            driverId: update.driverId
+              ? { _id: update.driverId, name: 'Driver', status: 'active' }
+              : null
+          })
+        }
+      }
+      return Promise.resolve({ _id: id, driverId: update.driverId })
     },
     deleteOne: async () => ({ acknowledged: true })
   }
@@ -38,7 +56,15 @@ const buildController = ({ driver, currentVehicle = null, onUnlink } = {}) => {
     '../models/Vehicle': vehicleModel,
     '../models/Trip': {},
     '../models/Driver': {
-      findOne: async () => driver
+      findOne: async () => driver,
+      findOneAndUpdate: async (filter, update) => {
+        driverUpdates.push({ filter, update })
+        return { _id: filter._id, ...update.$set }
+      },
+      updateOne: async (filter, update) => {
+        driverUpdates.push({ filter, update })
+        return { modifiedCount: 1 }
+      }
     },
     '../services/surepass.service': {
       verifyRcFull: async () => ({ ok: true, verified: true, status: 'verified' })
@@ -66,7 +92,7 @@ const buildController = ({ driver, currentVehicle = null, onUnlink } = {}) => {
     }
   })
 
-  return { controller, unlinkCalls }
+  return { controller, unlinkCalls, driverUpdates }
 }
 
 const createRequest = (overrides = {}) => ({
@@ -139,8 +165,8 @@ test('vehicle creation rejects a driver owned by another transporter', async () 
   assert.match(res.body.message, /does not belong/i)
 })
 
-test('forceReassign unlinks the old vehicle before completing creation', async () => {
-  const { controller, unlinkCalls } = buildController({
+test('forceReassign unlinks the old vehicle and synchronizes the driver link', async () => {
+  const { controller, unlinkCalls, driverUpdates } = buildController({
     driver: {
       _id: 'driver-1',
       transporterId: 'transporter-1',
@@ -167,6 +193,117 @@ test('forceReassign unlinks the old vehicle before completing creation', async (
     id: 'vehicle-1',
     update: { driverId: null }
   })
+  assert.deepEqual(driverUpdates, [
+    { filter: { _id: 'driver-1', vehicleId: 'vehicle-1' }, update: { $set: { vehicleId: null } } },
+    {
+      filter: {
+        _id: 'driver-1',
+        transporterId: 'transporter-1',
+        $or: [{ vehicleId: null }, { vehicleId: 'new-vehicle' }]
+      },
+      update: { $set: { vehicleId: 'new-vehicle' } }
+    }
+  ])
+})
+
+test('vehicle creation stores the reverse driver link', async () => {
+  const { controller, driverUpdates } = buildController({
+    driver: {
+      _id: 'driver-1',
+      transporterId: 'transporter-1',
+      status: 'active'
+    }
+  })
+  const res = createMockRes()
+
+  await controller.createVehicle(createRequest(), res, error => {
+    throw error
+  })
+
+  assert.equal(res.statusCode, 201)
+  assert.deepEqual(driverUpdates, [
+    {
+      filter: {
+        _id: 'driver-1',
+        transporterId: 'transporter-1',
+        $or: [{ vehicleId: null }, { vehicleId: 'new-vehicle' }]
+      },
+      update: { $set: { vehicleId: 'new-vehicle' } }
+    }
+  ])
+})
+
+test('changing a vehicle driver links the new driver and clears the old driver', async () => {
+  const { controller, driverUpdates } = buildController({
+    driver: {
+      _id: 'driver-new',
+      transporterId: 'transporter-1',
+      status: 'active'
+    },
+    vehicleToUpdate: {
+      _id: 'vehicle-to-update',
+      transporterId: 'transporter-1',
+      driverId: 'driver-old',
+      ownerType: 'OWN'
+    }
+  })
+  const res = createMockRes()
+
+  await controller.updateVehicle(
+    {
+      params: { id: 'vehicle-to-update' },
+      body: { driverId: 'driver-new' },
+      user: { id: 'transporter-1', userType: 'transporter' }
+    },
+    res,
+    error => { throw error }
+  )
+
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(driverUpdates, [
+    {
+      filter: {
+        _id: 'driver-new',
+        transporterId: 'transporter-1',
+        $or: [{ vehicleId: null }, { vehicleId: 'vehicle-to-update' }]
+      },
+      update: { $set: { vehicleId: 'vehicle-to-update' } }
+    },
+    {
+      filter: { _id: 'driver-old', vehicleId: 'vehicle-to-update' },
+      update: { $set: { vehicleId: null } }
+    }
+  ])
+})
+
+test('removing a vehicle driver clears the reverse driver link', async () => {
+  const { controller, driverUpdates } = buildController({
+    vehicleToUpdate: {
+      _id: 'vehicle-to-update',
+      transporterId: 'transporter-1',
+      driverId: 'driver-old',
+      ownerType: 'OWN'
+    }
+  })
+  const res = createMockRes()
+
+  await controller.updateVehicle(
+    {
+      params: { id: 'vehicle-to-update' },
+      body: { driverId: null },
+      user: { id: 'transporter-1', userType: 'transporter' }
+    },
+    res,
+    error => { throw error }
+  )
+
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(driverUpdates, [
+    {
+      filter: { _id: 'driver-old', vehicleId: 'vehicle-to-update' },
+      update: { $set: { vehicleId: null } }
+    }
+  ])
 })
 
 test('vehicle creation accepts cargoWeightMt of zero', async () => {

@@ -44,6 +44,12 @@ const driverSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transporter',
     },
+    vehicleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Vehicle',
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
       enum: ['pending', 'active', 'inactive', 'blocked'],

@@ -1,4 +1,5 @@
 const Driver = require('../models/Driver')
+const Vehicle = require('../models/Vehicle')
 const Transporter = require('../models/Transporter')
 const Trip = require('../models/Trip')
 const { TRIP_STATUS, DRIVER_HISTORY_STATUSES } = require('../utils/tripState')
@@ -53,6 +54,7 @@ const formatDriverResponse = driver => ({
   mobile: driver.mobile,
   name: driver.name,
   alternateMobile: driver.alternateMobile ?? null,
+  vehicleId: driver.vehicleId?.toString?.() || driver.vehicleId || null,
   licenseNumber: driver.licenseNumber ?? null,
   licenseValidTill: driver.licenseValidTill ?? null,
   status: driver.status,
@@ -100,6 +102,7 @@ const getProfile = async (req, res, next) => {
           mobile: driver.mobile,
           name: driver.name,
           alternateMobile: driver.alternateMobile ?? null,
+          vehicleId: driver.vehicleId?.toString?.() || driver.vehicleId || null,
           licenseNumber: driver.licenseNumber ?? null,
           licenseValidTill: driver.licenseValidTill ?? null,
           transporterId: driver.transporterId,
@@ -168,6 +171,7 @@ const updateProfile = async (req, res, next) => {
           mobile: driver.mobile,
           name: driver.name,
           alternateMobile: driver.alternateMobile ?? null,
+          vehicleId: driver.vehicleId?.toString?.() || driver.vehicleId || null,
           licenseNumber: driver.licenseNumber ?? null,
           licenseValidTill: driver.licenseValidTill ?? null,
           transporterId: driver.transporterId,
@@ -675,8 +679,19 @@ const deleteDriver = async (req, res, next) => {
       })
     }
 
-    // Delete driver
+    // Remove any fleet vehicle references before deleting the driver.
+    await Vehicle.updateMany(
+      {
+        transporterId,
+        $or: [
+          { driverId: id },
+          ...(driver.vehicleId ? [{ _id: driver.vehicleId }] : [])
+        ]
+      },
+      { $set: { driverId: null } }
+    )
     await Driver.deleteOne({ _id: id })
+    await deleteCachePattern(`vehicles:${transporterId}*`)
 
     const profileCacheKey = `driver:profile:${id}`
     await deleteCache(profileCacheKey)
