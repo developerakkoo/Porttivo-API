@@ -21,6 +21,17 @@ const DEFAULT_TYPES = [
   { name: '24FT Truck', code: '24FT_TRUCK', sortOrder: 13 },
   { name: '32FT Single Axle', code: '32FT_SINGLE_AXLE', sortOrder: 14 },
   { name: '32FT Multi Axle', code: '32FT_MULTI_AXLE', sortOrder: 15 },
+  { name: '20 FT Container 2 Axle', code: '20FT_CONTAINER_2_AXLE', sortOrder: 16 },
+  { name: '20 FT Container 3 Axle', code: '20FT_CONTAINER_3_AXLE', sortOrder: 17 },
+  { name: '40 FT Container 2 Axle', code: '40FT_CONTAINER_2_AXLE', sortOrder: 18 },
+  { name: '40 FT Container 3 Axle', code: '40FT_CONTAINER_3_AXLE', sortOrder: 19 },
+  { name: '20 FT Reefer 2 Axle', code: '20FT_REEFER_2_AXLE', sortOrder: 20 },
+  { name: '20 FT Reefer 3 Axle', code: '20FT_REEFER_3_AXLE', sortOrder: 21 },
+  { name: '40 FT Reefer 2 Axle', code: '40FT_REEFER_2_AXLE', sortOrder: 22 },
+  { name: '40 FT Reefer 3 Axle', code: '40FT_REEFER_3_AXLE', sortOrder: 23 },
+  { name: '20 FT Closed Body Single Axle', code: '20FT_CLOSED_BODY_SINGLE_AXLE', sortOrder: 24 },
+  { name: '20 FT Closed Body 2 Axle', code: '20FT_CLOSED_BODY_2_AXLE', sortOrder: 25 },
+  { name: '20 FT Closed Body 3 Axle', code: '20FT_CLOSED_BODY_3_AXLE', sortOrder: 26 },
 ];
 
 async function seedVehicleTypes() {
