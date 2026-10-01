@@ -597,6 +597,13 @@ const createVehicle = async (req, res, next) => {
     let rcVerification
     try {
       rcVerification = await verifyRcFull(cleanedVehicleNumber)
+      if (!rcVerification?.ok) {
+        logger.warn('Surepass RC verification unavailable or failed during vehicle creation', {
+          vehicleNumber: cleanedVehicleNumber,
+          status: rcVerification?.status,
+          statusCode: rcVerification?.statusCode
+        })
+      }
     } catch (error) {
       // RC verification is an external enrichment step, not a prerequisite for
       // creating a valid Porttivo vehicle.
@@ -762,17 +769,56 @@ const verifyVehicleNumber = async (req, res, next) => {
       })
     }
 
-    const rcVerification = await verifyRcFull(validation.normalized)
-    const statusCode = rcVerification.statusCode || 500
-    const responseBody = {
-      success: !!rcVerification.ok,
-      status_code: statusCode,
-      message: rcVerification.message || null,
-      message_code: rcVerification.messageCode || null,
-      isVerified: !!rcVerification.verified
+    let rcVerification
+    try {
+      rcVerification = await verifyRcFull(validation.normalized)
+    } catch (error) {
+      logger.warn('Surepass RC verification exception during verifyVehicleNumber', {
+        vehicleNumber: validation.normalized,
+        error: error.message
+      })
+      rcVerification = {
+        ok: false,
+        verified: false,
+        status: 'error',
+        statusCode: null,
+        message: 'SurePass RC verification failed'
+      }
     }
 
-    return res.status(rcVerification.ok ? 200 : statusCode).json(responseBody)
+    if (!rcVerification || !rcVerification.ok) {
+      logger.warn('Surepass RC verification unavailable or failed', {
+        vehicleNumber: validation.normalized,
+        status: rcVerification?.status,
+        statusCode: rcVerification?.statusCode,
+        message: rcVerification?.message
+      })
+
+      const safeMessage = rcVerification?.status === 'timeout'
+        ? 'Vehicle verification timed out. You can still proceed to add the vehicle.'
+        : 'Vehicle verification is currently unavailable. You can still proceed to add the vehicle.'
+
+      return res.status(200).json({
+        success: false,
+        status_code: 200,
+        message: safeMessage,
+        message_code: 'verification_unavailable',
+        isVerified: false,
+        data: null
+      })
+    }
+
+    const isVerified = !!rcVerification.verified
+    const responseBody = {
+      success: true,
+      status_code: 200,
+      message: rcVerification.message || null,
+      message_code: rcVerification.messageCode || (isVerified ? 'success' : null),
+      isVerified,
+      data: isVerified ? (rcVerification.data || null) : null
+    }
+
+    return res.status(200).json(responseBody)
   } catch (error) {
     next(error)
   }
@@ -794,19 +840,44 @@ const verifyRechargeKitVehicleNumber = async (req, res, next) => {
       })
     }
 
-    const rcVerification = await verifyRechargeKitRc(validation.normalized)
+    let rcVerification
+    try {
+      rcVerification = await verifyRechargeKitRc(validation.normalized)
+    } catch (error) {
+      logger.warn('RechargeKit RC verification exception during verifyRechargeKitVehicleNumber', {
+        vehicleNumber: validation.normalized,
+        error: error.message
+      })
+      rcVerification = {
+        ok: false,
+        verified: false,
+        status: 'error',
+        statusCode: null,
+        message: 'RechargeKit RC verification failed',
+        source: 'rechargekit'
+      }
+    }
 
-    const statusCode = rcVerification.statusCode || 500
+    if (!rcVerification || !rcVerification.ok) {
+      return res.status(200).json({
+        success: false,
+        status_code: 200,
+        message: 'Vehicle verification is currently unavailable. You can still proceed to add the vehicle.',
+        message_code: 'verification_unavailable',
+        isVerified: false,
+        source: rcVerification?.source || 'rechargekit'
+      })
+    }
 
     const responseBody = {
-      success: !!rcVerification.ok,
-      status_code: statusCode,
+      success: true,
+      status_code: 200,
       message: rcVerification.message || null,
       isVerified: !!rcVerification.verified,
       source: rcVerification.source
     }
 
-    return res.status(rcVerification.ok ? 200 : statusCode).json(responseBody)
+    return res.status(200).json(responseBody)
   } catch (error) {
     next(error)
   }

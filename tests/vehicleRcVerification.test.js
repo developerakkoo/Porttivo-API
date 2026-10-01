@@ -44,6 +44,11 @@ const createVehicleWithVerification = async verifyRcFull => {
         transporterId: 'transporter-1',
         status: 'active',
       }),
+      findOneAndUpdate: async (filter, update) => ({
+        _id: filter._id,
+        ...update.$set,
+      }),
+      updateOne: async () => ({ modifiedCount: 1 }),
     },
     '../services/surepass.service': {
       verifyRcFull: async vehicleNumber => {
@@ -266,6 +271,82 @@ test('verifyVehicleNumber returns simplified SurePass verification result', asyn
   assert.equal(res.body.message, null);
   assert.equal(res.body.message_code, 'success');
   assert.equal(res.body.isVerified, true);
+});
+
+test('verifyVehicleNumber returns HTTP 200 when SurePass token is expired without returning 401', async () => {
+  const controller = loadWithMocks(vehicleControllerPath, {
+    '../services/surepass.service': {
+      verifyRcFull: async () => ({
+        ok: false,
+        verified: false,
+        status: 'error',
+        statusCode: 401,
+        message: 'Your token is expired.This was a temporary token to test the account, please consider upgrading to a paid subscription. Please contact support for help.',
+        rawResponse: { success: false, message: 'Your token is expired' },
+        source: 'surepass',
+      }),
+    },
+    '../utils/vehicleValidation': {
+      validateIndianVehicleRegistrationFormat: (raw) => ({
+        normalized: raw.replace(/\s+/g, '').toUpperCase(),
+      }),
+    },
+  });
+
+  const req = {
+    body: { vehicleNumber: 'MH 12 AB 1234' },
+    user: { id: 'transporter-1', userType: 'transporter' },
+  };
+  const res = createMockRes();
+
+  await controller.verifyVehicleNumber(req, res, (error) => {
+    throw error;
+  });
+
+  // Must be 200, never 401, so client authentication is NOT invalidated
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.status_code, 200);
+  assert.equal(res.body.isVerified, false);
+  assert.equal(res.body.message, 'Vehicle verification is currently unavailable. You can still proceed to add the vehicle.');
+  assert.equal(res.body.message_code, 'verification_unavailable');
+  assert.equal(JSON.stringify(res.body).includes('Your token is expired'), false);
+});
+
+test('verifyVehicleNumber returns HTTP 200 when SurePass times out or is down', async () => {
+  const controller = loadWithMocks(vehicleControllerPath, {
+    '../services/surepass.service': {
+      verifyRcFull: async () => ({
+        ok: false,
+        verified: false,
+        status: 'timeout',
+        statusCode: null,
+        message: 'SurePass RC verification timed out',
+        source: 'surepass',
+      }),
+    },
+    '../utils/vehicleValidation': {
+      validateIndianVehicleRegistrationFormat: (raw) => ({
+        normalized: raw.replace(/\s+/g, '').toUpperCase(),
+      }),
+    },
+  });
+
+  const req = {
+    body: { vehicleNumber: 'MH 12 AB 1234' },
+    user: { id: 'transporter-1', userType: 'transporter' },
+  };
+  const res = createMockRes();
+
+  await controller.verifyVehicleNumber(req, res, (error) => {
+    throw error;
+  });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.status_code, 200);
+  assert.equal(res.body.isVerified, false);
+  assert.equal(res.body.message, 'Vehicle verification timed out. You can still proceed to add the vehicle.');
 });
 
 test('admin vehicle details expose the stored RC payload', async () => {
